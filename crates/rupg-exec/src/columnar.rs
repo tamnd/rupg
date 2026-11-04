@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, Var};
-use rupg_column::dict::Dictionary;
+use rupg_column::dict::{Dictionary, MISSING};
 use rupg_column::segment::{Kind, Nulls, ROWS, Store};
 use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::{Error, Result, SqlState};
@@ -131,12 +131,21 @@ impl<const W: usize> WordTable<W> {
     }
 }
 
-/// The words of a key of `GROUP BY` and its mask of nulls, the last word. A map for one key keeps the word of the key alone, and the group of the null key on the side. Keys of up to 3 words and the mask are kept in place.
+/// The words of a key of `GROUP BY` and its mask of nulls, the last word. A map for one key keeps the word of the key alone, and the group of the null key on the side. Keys of up to 7 words and the mask are kept in place, and a key of 4 to 7 words has words of 0 after it, so that a new group allocates no key.
 enum KeyMap {
     One(WordTable<1>, Option<u32>),
     Two(WordTable<3>),
     Three(WordTable<4>),
+    Wide(WordTable<8>),
     Large(FxMap<Box<[u64]>, u32>),
+}
+
+/// The words of a key of 4 to 7 words and its mask, with words of 0 after them.
+#[inline]
+fn wide(word: &[u64]) -> [u64; 8] {
+    let mut key = [0; 8];
+    key[..word.len()].copy_from_slice(word);
+    key
 }
 
 impl KeyMap {
@@ -146,6 +155,7 @@ impl KeyMap {
             0..=2 => KeyMap::One(WordTable::new(groups), None),
             3 => KeyMap::Two(WordTable::new(groups)),
             4 => KeyMap::Three(WordTable::new(groups)),
+            5..=8 => KeyMap::Wide(WordTable::new(groups)),
             _ => KeyMap::Large(FxMap::with_capacity_and_hasher(groups, rupg_kernels::hash::Build)),
         }
     }
@@ -157,6 +167,7 @@ impl KeyMap {
             KeyMap::One(..) => WordTable::<1>::hash(&[word.first().copied().unwrap_or(0)]),
             KeyMap::Two(_) => WordTable::<3>::hash(&[word[0], word[1], word[2]]),
             KeyMap::Three(_) => WordTable::<4>::hash(&[word[0], word[1], word[2], word[3]]),
+            KeyMap::Wide(_) => WordTable::<8>::hash(&wide(word)),
             KeyMap::Large(_) => 0,
         }
     }
@@ -168,6 +179,7 @@ impl KeyMap {
             KeyMap::One(table, _) => table.prefetch(hash),
             KeyMap::Two(table) => table.prefetch(hash),
             KeyMap::Three(table) => table.prefetch(hash),
+            KeyMap::Wide(table) => table.prefetch(hash),
             KeyMap::Large(_) => {}
         }
     }
@@ -183,6 +195,7 @@ impl KeyMap {
             KeyMap::One(table, _) => table.id(&[word.first().copied().unwrap_or(0)], hash, next),
             KeyMap::Two(table) => table.id(&[word[0], word[1], word[2]], hash, next),
             KeyMap::Three(table) => table.id(&[word[0], word[1], word[2], word[3]], hash, next),
+            KeyMap::Wide(table) => table.id(&wide(word), hash, next),
             KeyMap::Large(map) => match map.get(word) {
                 Some(&id) => (id, false),
                 None => {
@@ -199,6 +212,7 @@ impl KeyMap {
             KeyMap::One(table, _) => table.room(),
             KeyMap::Two(table) => table.room(),
             KeyMap::Three(table) => table.room(),
+            KeyMap::Wide(table) => table.room(),
             KeyMap::Large(map) => map.capacity() - map.len(),
         }
     }
@@ -209,6 +223,7 @@ impl KeyMap {
             KeyMap::One(table, _) => table.reserve(more),
             KeyMap::Two(table) => table.reserve(more),
             KeyMap::Three(table) => table.reserve(more),
+            KeyMap::Wide(table) => table.reserve(more),
             KeyMap::Large(map) => map.reserve(more),
         }
     }
@@ -302,9 +317,7 @@ impl Dict {
 
     fn find(&self, bytes: &[u8]) -> u32 {
         match self {
-            Dict::Stored(stored) => {
-                stored.dict.as_ref().map_or(rupg_column::dict::MISSING, |d| d.find(bytes))
-            }
+            Dict::Stored(stored) => stored.dict.as_ref().map_or(MISSING, |d| d.find(bytes)),
             Dict::Own(dict) => dict.find(bytes),
         }
     }
@@ -724,9 +737,102 @@ impl<'q> Exec<'q> {
                     return Ok(col);
                 }
             }
+            ExprKind::Case(case) if case.arg.is_none() => {
+                if let Some(col) = self.case(expr, case, batch, sel)? {
+                    return Ok(col);
+                }
+            }
             _ => {}
         }
         self.generic(expr, batch, sel)
+    }
+
+    /// A `CASE` with no argument whose results are integers, or codes of one dictionary and constant texts that the dictionary has, so that equal texts have equal codes. Each condition runs on the rows that no condition before it took, and each result runs only on its rows, as the row engine evaluates the result of the first condition that is true. `None` for other results, for which the row engine evaluates the expression.
+    fn case(
+        &mut self,
+        expr: &Expr,
+        case: &rupg_analyze::Case,
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        if kind_of(expr.ty).is_none() {
+            return Ok(None);
+        }
+        let results: Vec<&Expr> =
+            case.whens.iter().map(|(_, r)| r).chain(std::iter::once(&*case.default)).collect();
+        // The result of each row, by its place in `results`.
+        let mut branch = vec![case.whens.len(); sel.len()];
+        let mut live: Vec<usize> = (0..sel.len()).collect();
+        let mut sub = Vec::new();
+        for (b, (cond, _)) in case.whens.iter().enumerate() {
+            if live.is_empty() {
+                break;
+            }
+            sub.clear();
+            sub.extend(live.iter().map(|&i| sel[i]));
+            let col = self.eval(cond, batch, &sub)?;
+            let mut next = Vec::with_capacity(live.len());
+            for (k, &i) in live.iter().enumerate() {
+                if col.truth(k) == Some(true) {
+                    branch[i] = b;
+                } else {
+                    next.push(i);
+                }
+            }
+            live = next;
+        }
+        let mut rows: Vec<Vec<usize>> = vec![Vec::new(); results.len()];
+        for (i, &b) in branch.iter().enumerate() {
+            rows[b].push(i);
+        }
+        let mut cols = Vec::with_capacity(results.len());
+        for (result, rows) in results.iter().zip(&rows) {
+            if rows.is_empty() {
+                cols.push(None);
+                continue;
+            }
+            sub.clear();
+            sub.extend(rows.iter().map(|&i| sel[i]));
+            cols.push(Some(self.eval(result, batch, &sub)?));
+        }
+        // The dictionary of the codes, from the first result that has codes.
+        let dict = cols.iter().flatten().find_map(|c| match &c.data {
+            Data::Code(_, d) => Some(*d),
+            _ => None,
+        });
+        let mut words = vec![0_i64; sel.len()];
+        let mut nulls = vec![false; sel.len()];
+        for (col, rows) in cols.iter().zip(&rows) {
+            let Some(col) = col else { continue };
+            for (k, &i) in rows.iter().enumerate() {
+                if col.null(k) {
+                    nulls[i] = true;
+                    continue;
+                }
+                words[i] = match (&col.data, dict) {
+                    (Data::Int(v), None) => v[k],
+                    (Data::Code(v, d), Some(dict)) if *d == dict => i64::from(v[k]),
+                    (Data::Const(value), None) => match int_of(value) {
+                        Some(v) => v,
+                        None => return Ok(None),
+                    },
+                    (Data::Const(Value::Text(text)), Some(dict)) if self.dicts[dict].is_text() => {
+                        let code = self.dicts[dict].find(text.as_bytes());
+                        if code == MISSING {
+                            return Ok(None);
+                        }
+                        i64::from(code)
+                    }
+                    _ => return Ok(None),
+                };
+            }
+        }
+        let nulls = nulls.contains(&true).then_some(nulls);
+        let data = match dict {
+            Some(d) => Data::Code(words.into_iter().map(|w| w as u32).collect(), d),
+            None => Data::Int(words),
+        };
+        Ok(Some(Col { data, nulls, ty: expr.ty }))
     }
 
     /// `AND`, `OR` and `NOT` with the logic of three values. Each argument runs only on the rows whose value it can change, as the row engine stops at the first argument that decides the value.

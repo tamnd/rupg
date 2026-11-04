@@ -4267,6 +4267,11 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_count_top.test")));
     }
 
+    #[test]
+    fn case_key() {
+        big_stack(|| script(include_str!("connection/case_key.test")));
+    }
+
     /// A grouped vector scan with a constant integer as a key of `GROUP BY` keeps the keys of the groups as words, with the order of Postgres for the hash table and for the sort of the groups.
     #[test]
     fn group_const_key() {
