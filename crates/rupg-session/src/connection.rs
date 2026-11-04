@@ -4006,7 +4006,51 @@ mod tests {
 
     /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. A line `>> text` or `>>` after a statement goes on the statement as a new line. After a line `!details`, an error or a notice also has its detail, its hint and its internal query. After a line `!objects`, it also has the names of its object. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
     fn script(text: &str) {
-        let (mut c, _) = connect();
+        script_on(&Arc::new(Store::new()), text);
+    }
+
+    /// The tasks of the operating system, with four tasks at the same time on each machine.
+    #[derive(Debug)]
+    struct FourTasks;
+
+    impl rupg_platform::Tasks for FourTasks {
+        fn spawn(
+            &self,
+            name: &str,
+            task: rupg_platform::Task,
+        ) -> rupg_common::Result<rupg_platform::TaskHandle> {
+            rupg_platform::os::OsTasks.spawn(name, task)
+        }
+
+        fn sleep(&self, d: std::time::Duration) {
+            rupg_platform::os::OsTasks.sleep(d);
+        }
+
+        fn yield_now(&self) {
+            rupg_platform::os::OsTasks.yield_now();
+        }
+
+        fn parallelism(&self) -> usize {
+            4
+        }
+
+        fn run_all<'a>(&self, jobs: Vec<rupg_platform::Job<'a>>) {
+            rupg_platform::os::OsTasks.run_all(jobs);
+        }
+
+        fn threads(&self) -> bool {
+            true
+        }
+    }
+
+    /// Runs the script `text` on a session with no tasks, then on a session of a server with four tasks, so the scans of both give the same rows.
+    fn script_tasks(text: &str) {
+        script(text);
+        script_on(&Arc::new(Store::with_tasks(Arc::new(FourTasks))), text);
+    }
+
+    fn script_on(store: &Arc<Store>, text: &str) {
+        let (mut c, _) = connect_to(store, 1234);
         let starts = |l: &str| {
             l == "!details"
                 || l == "!objects"
@@ -4181,6 +4225,12 @@ mod tests {
     #[test]
     fn group_const_key() {
         big_stack(|| script(include_str!("connection/group_const_key.test")));
+    }
+
+    /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
+    #[test]
+    fn group_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/group_tasks.test")));
     }
 
     /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.

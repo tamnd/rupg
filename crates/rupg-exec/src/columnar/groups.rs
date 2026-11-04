@@ -1,0 +1,644 @@
+//! The groups of a vector scan on the tasks of the server (spec/14 section 14.5), as a hash aggregate with parts of the hashes. Each task reads a run of the vectors and keeps the rows that pass the conditions. It folds the rows into a small table that stays in the cache, and when the table is full, it moves the groups of the table into [`PARTS`] buffers, one for each part of the hashes of the keys. When the table folds few rows into each group, the task puts each row into the buffers with no table. Then each task merges the buffers of some parts, from the buffers of the first run to the last, so the first row of each group is its first row in the scan. The groups then go in the order of their first rows, which is the order of the scan on one task.
+
+use std::sync::Arc;
+
+use rupg_column::segment::ROWS;
+use rupg_column::stored::{self, Stored, VECTOR};
+use rupg_common::Result;
+use rupg_platform::{Job, Tasks};
+use rupg_summary::zone::{Test, Verdict};
+
+use super::{Decoded, DecodedData, WordTable, decode, passes};
+
+/// The number of parts of the hashes of the keys.
+const PARTS: usize = 256;
+
+/// The most groups of the table of a task before the task moves the groups into the buffers of the parts. The table then fits in the cache of one core.
+const LOCAL: usize = 1 << 13;
+
+/// The rows of a vector after a merge of the buffers, by which a probe asks for its slot first.
+const PREFETCH: usize = 16;
+
+/// The least number of rows for each group, by the estimate of the plan, for the scan to find the groups at the same time. With fewer rows for each group, the table of each task keeps few rows out, and the parts, their merge and their order cost more CPU time than the scan of one task: on 2M rows of ClickBench, 1 to 7 rows for each group took 1.4 to 2 times the CPU time, and 9 rows for each group took less.
+pub(super) const GROUP_ROWS: usize = 8;
+
+/// The fewest rows for each task, so that a small table does not pay for the tasks.
+pub(super) const TASK_ROWS: usize = 1 << 16;
+
+/// A key of `GROUP BY`: a column of integers or codes by its place in the columns of the scan, or a constant word, with `None` for null.
+#[derive(Clone, Copy)]
+pub(super) enum Input {
+    Column(usize),
+    Const(Option<u64>),
+}
+
+/// How a call of an aggregate, or a base of calls, folds the rows of a group. Each column is a column of integers by its place, except the column of [`Fold::CountArg`], which can have any values.
+#[derive(Clone, Copy)]
+pub(super) enum Fold {
+    Count,
+    CountArg(usize),
+    Sum(usize),
+    Min(usize),
+    Max(usize),
+    /// A call whose states are the states of its base.
+    None,
+}
+
+/// The states of a fold for each group.
+pub(super) enum Folded {
+    Count(Vec<i64>),
+    Sum(Vec<(i64, i128)>),
+    Extreme(Vec<Option<i64>>),
+    None,
+}
+
+impl Folded {
+    fn of(fold: Fold) -> Folded {
+        match fold {
+            Fold::Count | Fold::CountArg(_) => Folded::Count(Vec::new()),
+            Fold::Sum(_) => Folded::Sum(Vec::new()),
+            Fold::Min(_) | Fold::Max(_) => Folded::Extreme(Vec::new()),
+            Fold::None => Folded::None,
+        }
+    }
+
+    fn push(&mut self) {
+        match self {
+            Folded::Count(v) => v.push(0),
+            Folded::Sum(v) => v.push((0, 0)),
+            Folded::Extreme(v) => v.push(None),
+            Folded::None => {}
+        }
+    }
+
+    /// Adds a new state, the state `from` of `other`.
+    fn take(&mut self, other: &Folded, from: usize) {
+        match (self, other) {
+            (Folded::Count(a), Folded::Count(b)) => a.push(b[from]),
+            (Folded::Sum(a), Folded::Sum(b)) => a.push(b[from]),
+            (Folded::Extreme(a), Folded::Extreme(b)) => a.push(b[from]),
+            _ => {}
+        }
+    }
+
+    /// Adds a new state of one row, whose part is `cell`.
+    #[inline]
+    fn push_cell(&mut self, cell: Cell) {
+        match (self, cell) {
+            (Folded::Count(a), Cell::Count(n)) => a.push(n),
+            (Folded::Sum(a), Cell::Sum(n, v)) => a.push((n, v)),
+            (Folded::Extreme(a), Cell::Extreme(v)) => a.push(v),
+            _ => {}
+        }
+    }
+
+    /// Adds the part `cell` of one row into the state `to`.
+    #[inline]
+    fn fold_cell(&mut self, to: usize, cell: Cell, min: bool) {
+        match (self, cell) {
+            (Folded::Count(a), Cell::Count(n)) => a[to] += n,
+            (Folded::Sum(a), Cell::Sum(n, v)) => {
+                a[to].0 += n;
+                a[to].1 += v;
+            }
+            (Folded::Extreme(a), Cell::Extreme(Some(v))) => {
+                a[to] = Some(a[to].map_or(v, |s| if min { s.min(v) } else { s.max(v) }));
+            }
+            _ => {}
+        }
+    }
+
+    fn reserve(&mut self, more: usize) {
+        match self {
+            Folded::Count(v) => v.reserve(more),
+            Folded::Sum(v) => v.reserve(more),
+            Folded::Extreme(v) => v.reserve(more),
+            Folded::None => {}
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Folded::Count(v) => v.clear(),
+            Folded::Sum(v) => v.clear(),
+            Folded::Extreme(v) => v.clear(),
+            Folded::None => {}
+        }
+    }
+
+    /// Adds the state `from` of `other` into the state `to`.
+    fn merge(&mut self, to: usize, other: &Folded, from: usize, min: bool) {
+        match (self, other) {
+            (Folded::Count(a), Folded::Count(b)) => a[to] += b[from],
+            (Folded::Sum(a), Folded::Sum(b)) => {
+                a[to].0 += b[from].0;
+                a[to].1 += b[from].1;
+            }
+            (Folded::Extreme(a), Folded::Extreme(b)) => {
+                if let Some(v) = b[from] {
+                    a[to] = Some(a[to].map_or(v, |s| if min { s.min(v) } else { s.max(v) }));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The part of the state of a fold that one row gives.
+#[derive(Clone, Copy)]
+enum Cell {
+    Count(i64),
+    Sum(i64, i128),
+    Extreme(Option<i64>),
+    None,
+}
+
+/// The keys and the folds of a scan of groups. The folds of the bases come after the folds of the calls.
+pub(super) struct Plan {
+    pub(super) keys: Vec<Input>,
+    pub(super) folds: Vec<Fold>,
+    /// The number of folds of bases at the end of `folds`, whose extremes the scan keeps.
+    pub(super) bases: usize,
+    /// The conditions of the scan, each a test of one column by its place. A test other than a null test is on a column of integers.
+    pub(super) filters: Vec<(usize, Test)>,
+}
+
+/// The groups of a scan, in the order of their first rows.
+pub(super) struct Found {
+    /// The words of the keys and the mask of nulls of each group.
+    pub(super) words: Vec<u64>,
+    /// The first row of each group, as `segment * ROWS + vector * VECTOR + row`.
+    pub(super) firsts: Vec<u64>,
+    /// The states of each fold of the plan.
+    pub(super) states: Vec<Folded>,
+    /// The smallest and the largest value of each base.
+    pub(super) extremes: Vec<Option<(i64, i64)>>,
+    /// True when the last row of the scan is not the first row of its group.
+    pub(super) trailing: bool,
+}
+
+/// Groups with the words of their keys, the hash of each key, the first row and the states of each group, in the order of their first rows.
+struct Buf {
+    keys: Vec<[u64; 4]>,
+    hashes: Vec<u64>,
+    firsts: Vec<u64>,
+    states: Vec<Folded>,
+}
+
+impl Buf {
+    fn new(folds: &[Fold]) -> Buf {
+        Buf {
+            keys: Vec::new(),
+            hashes: Vec::new(),
+            firsts: Vec::new(),
+            states: folds.iter().map(|&f| Folded::of(f)).collect(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.firsts.len()
+    }
+
+    #[inline]
+    fn push(&mut self, key: [u64; 4], hash: u64, first: u64) {
+        self.keys.push(key);
+        self.hashes.push(hash);
+        self.firsts.push(first);
+    }
+
+    fn reserve(&mut self, more: usize) {
+        self.keys.reserve(more);
+        self.hashes.reserve(more);
+        self.firsts.reserve(more);
+        for state in &mut self.states {
+            state.reserve(more);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.hashes.clear();
+        self.firsts.clear();
+        for state in &mut self.states {
+            state.clear();
+        }
+    }
+}
+
+/// The groups of one run of vectors, in the buffer of each part.
+struct Run {
+    parts: Vec<Buf>,
+    extremes: Vec<Option<(i64, i64)>>,
+    /// The last row of the run that passes the conditions.
+    last: Option<u64>,
+}
+
+fn null(decoded: &Decoded, i: usize) -> bool {
+    decoded.nulls.as_ref().is_some_and(|n| n[i])
+}
+
+fn int(decoded: &Decoded, i: usize) -> i64 {
+    match &decoded.data {
+        DecodedData::Int(v) => v[i],
+        DecodedData::Code(v) => i64::from(v[i]),
+        DecodedData::Float(v) => v[i].to_bits() as i64,
+    }
+}
+
+/// The part of the hashes of a key with the hash `hash`. The multiply makes the bits of the part other bits than the low bits that the tables read.
+#[inline]
+fn part_of(hash: u64) -> usize {
+    (hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - PARTS.trailing_zeros())) as usize
+}
+
+/// The part of the state of `fold` that the row `i` gives, from the decoded columns `decoded`.
+#[inline]
+fn cell(fold: Fold, decoded: &[Option<Decoded>], i: usize) -> Cell {
+    let value = |place: usize| decoded[place].as_ref().filter(|d| !null(d, i)).map(|d| int(d, i));
+    match fold {
+        Fold::Count => Cell::Count(1),
+        Fold::CountArg(place) => Cell::Count(i64::from(value(place).is_some())),
+        Fold::Sum(place) => value(place).map_or(Cell::Sum(0, 0), |v| Cell::Sum(1, i128::from(v))),
+        Fold::Min(place) | Fold::Max(place) => Cell::Extreme(value(place)),
+        Fold::None => Cell::None,
+    }
+}
+
+/// Moves the groups of `local` into the buffers of their parts, and empties `local` and its table.
+fn flush(local: &mut Buf, table: &mut WordTable<4>, parts: &mut [Buf]) {
+    for g in 0..local.len() {
+        let hash = local.hashes[g];
+        let part = &mut parts[part_of(hash)];
+        part.push(local.keys[g], hash, local.firsts[g]);
+        for (to, from) in part.states.iter_mut().zip(&local.states) {
+            to.take(from, g);
+        }
+    }
+    local.clear();
+    table.clear();
+}
+
+/// The groups of the vectors `units` of the columns `stored`, which have `rows` rows.
+fn scan_run(
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    places: &[usize],
+    units: &[(usize, usize)],
+    rows: usize,
+) -> Result<Run> {
+    let mut parts: Vec<Buf> = (0..PARTS).map(|_| Buf::new(&plan.folds)).collect();
+    let mut extremes: Vec<Option<(i64, i64)>> = vec![None; plan.bases];
+    let first_base = plan.folds.len() - plan.bases;
+    let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
+    let mut decoded: Vec<Option<Decoded>> = (0..stored.len()).map(|_| None).collect();
+    let width = plan.keys.len();
+    let mut last = None;
+    let mut sel: Vec<usize> = Vec::with_capacity(VECTOR);
+    let mut keys: Vec<[u64; 4]> = Vec::with_capacity(VECTOR);
+    let mut hashes: Vec<u64> = Vec::with_capacity(VECTOR);
+    let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
+    let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
+    let mut local = Buf::new(&plan.folds);
+    let mut table = WordTable::<4>::new(LOCAL);
+    // The rows that the table folded since it was last empty, and true when the rows go into the buffers with no table.
+    let mut folded = 0;
+    let mut direct = false;
+    'units: for (n, &(segment, vector)) in units.iter().enumerate() {
+        let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
+        let count = (segment_rows - vector * VECTOR).min(VECTOR);
+        // spec/12 section 12.6.1: a vector whose zones show that no row passes a condition is not read, and a condition that every row passes is not tested.
+        tests.clear();
+        for filter in &plan.filters {
+            let zones = &stored[filter.0].segments[segment].summary.vectors;
+            let verdict = if zones.len() == stored::vectors(segment_rows) {
+                zones[vector].test(&filter.1)
+            } else {
+                Verdict::Some
+            };
+            match verdict {
+                Verdict::None => continue 'units,
+                Verdict::All => {}
+                Verdict::Some => tests.push(filter),
+            }
+        }
+        sel.clear();
+        sel.extend(0..count);
+        for &&(place, ref test) in &tests {
+            let d = decode(&stored[place], segment, vector)?;
+            sel.retain(|&i| passes(test, null(&d, i), int(&d, i)));
+            decoded[place] = Some(d);
+            if sel.is_empty() {
+                continue 'units;
+            }
+        }
+        for &place in places {
+            if !tests.iter().any(|t| t.0 == place) {
+                decoded[place] = Some(decode(&stored[place], segment, vector)?);
+            }
+        }
+        let base = (segment * ROWS + vector * VECTOR) as u64;
+        last = sel.last().map(|&i| base + i as u64);
+        keys.clear();
+        keys.resize(sel.len(), [0; 4]);
+        for (k, input) in plan.keys.iter().enumerate() {
+            match *input {
+                Input::Column(place) => {
+                    let Some(d) = decoded[place].as_ref() else { continue };
+                    for (key, &i) in keys.iter_mut().zip(&sel) {
+                        if null(d, i) {
+                            key[width] |= 1 << k;
+                        } else {
+                            key[k] = int(d, i) as u64;
+                        }
+                    }
+                }
+                Input::Const(Some(word)) => keys.iter_mut().for_each(|key| key[k] = word),
+                Input::Const(None) => keys.iter_mut().for_each(|key| key[width] |= 1 << k),
+            }
+        }
+        hashes.clear();
+        hashes.extend(keys.iter().map(WordTable::<4>::hash));
+        for base_fold in first_base..plan.folds.len() {
+            if let Fold::Sum(place) = plan.folds[base_fold]
+                && let Some(d) = decoded[place].as_ref()
+            {
+                let e = &mut extremes[base_fold - first_base];
+                for &i in &sel {
+                    if !null(d, i) {
+                        let v = int(d, i);
+                        *e = Some(e.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+                    }
+                }
+            }
+        }
+        if direct {
+            for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
+                let part = &mut parts[part_of(hash)];
+                part.push(*key, hash, base + i as u64);
+                for (state, &fold) in part.states.iter_mut().zip(&plan.folds) {
+                    state.push_cell(cell(fold, &decoded, i));
+                }
+            }
+            continue;
+        }
+        if table.room() < sel.len() {
+            // A table that folds fewer than two rows into each group does not pay for its probes.
+            direct = folded < 2 * local.len();
+            flush(&mut local, &mut table, &mut parts);
+            folded = 0;
+            if direct {
+                // Each part gets about its share of the rows that are left, so its buffers do not grow many times.
+                let more = (units.len() - n) * VECTOR / PARTS;
+                for part in &mut parts {
+                    part.reserve(more + more / 8);
+                }
+                for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
+                    let part = &mut parts[part_of(hash)];
+                    part.push(*key, hash, base + i as u64);
+                    for (state, &fold) in part.states.iter_mut().zip(&plan.folds) {
+                        state.push_cell(cell(fold, &decoded, i));
+                    }
+                }
+                continue;
+            }
+        }
+        folded += sel.len();
+        ids.clear();
+        for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
+            let next = local.len() as u32;
+            let (id, new) = table.id(key, hash, next);
+            if new {
+                local.push(*key, hash, base + i as u64);
+                for state in &mut local.states {
+                    state.push();
+                }
+            }
+            ids.push(id);
+        }
+        for ((state, &fold), &min) in local.states.iter_mut().zip(&plan.folds).zip(&mins) {
+            if matches!(fold, Fold::None) {
+                continue;
+            }
+            for (&id, &i) in ids.iter().zip(&sel) {
+                state.fold_cell(id as usize, cell(fold, &decoded, i), min);
+            }
+        }
+    }
+    flush(&mut local, &mut table, &mut parts);
+    Ok(Run { parts, extremes, last })
+}
+
+/// The groups of one part from its buffers `bufs` of all the runs, which come in the order of the runs.
+fn merge(bufs: Vec<Buf>, folds: &[Fold], mins: &[bool]) -> Buf {
+    let mut merged = Buf::new(folds);
+    let size: usize = bufs.iter().map(Buf::len).sum();
+    let mut table = WordTable::<4>::new(size);
+    for from in bufs {
+        for g in 0..from.len() {
+            if let Some(&ahead) = from.hashes.get(g + PREFETCH) {
+                table.prefetch(ahead);
+            }
+            let hash = from.hashes[g];
+            let next = merged.len() as u32;
+            let (id, new) = table.id(&from.keys[g], hash, next);
+            if new {
+                merged.push(from.keys[g], hash, from.firsts[g]);
+                for (to, other) in merged.states.iter_mut().zip(&from.states) {
+                    to.take(other, g);
+                }
+            } else {
+                for ((to, other), &min) in merged.states.iter_mut().zip(&from.states).zip(mins) {
+                    to.merge(id as usize, other, g, min);
+                }
+            }
+        }
+    }
+    merged
+}
+
+/// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`.
+///
+/// # Errors
+///
+/// An error of the decode of a vector.
+pub(super) fn run(
+    tasks: &dyn Tasks,
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    rows: usize,
+    segments: usize,
+) -> Result<Found> {
+    let mut places: Vec<usize> = plan
+        .keys
+        .iter()
+        .filter_map(|k| match k {
+            Input::Column(place) => Some(*place),
+            Input::Const(_) => None,
+        })
+        .chain(plan.folds.iter().filter_map(|f| match f {
+            Fold::CountArg(p) | Fold::Sum(p) | Fold::Min(p) | Fold::Max(p) => Some(*p),
+            Fold::Count | Fold::None => None,
+        }))
+        .collect();
+    places.sort_unstable();
+    places.dedup();
+    let mut units = Vec::new();
+    for segment in 0..segments {
+        let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
+        units.extend((0..stored::vectors(segment_rows)).map(|vector| (segment, vector)));
+    }
+    if units.is_empty() {
+        return Ok(Found {
+            words: Vec::new(),
+            firsts: Vec::new(),
+            states: plan.folds.iter().map(|&f| Folded::of(f)).collect(),
+            extremes: vec![None; plan.bases],
+            trailing: false,
+        });
+    }
+    let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
+    let chunk = units.len().div_ceil(jobs);
+    let mut runs: Vec<Option<Result<Run>>> = Vec::new();
+    runs.resize_with(units.len().div_ceil(chunk), || None);
+    let work: Vec<Job<'_>> = units
+        .chunks(chunk)
+        .zip(&mut runs)
+        .map(|(units, out)| {
+            let places = &places;
+            Box::new(move || *out = Some(scan_run(stored, plan, places, units, rows))) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let runs: Vec<Run> = runs.into_iter().flatten().collect::<Result<_>>()?;
+    let mut extremes = vec![None; plan.bases];
+    let mut last = None;
+    let mut by_part: Vec<Vec<Buf>> = (0..PARTS).map(|_| Vec::with_capacity(runs.len())).collect();
+    for run in runs {
+        for (e, r) in extremes.iter_mut().zip(&run.extremes) {
+            if let Some((lo, hi)) = *r {
+                *e = Some(e.map_or((lo, hi), |(a, b): (i64, i64)| (a.min(lo), b.max(hi))));
+            }
+        }
+        last = run.last.or(last);
+        for (to, buf) in by_part.iter_mut().zip(run.parts) {
+            to.push(buf);
+        }
+    }
+    let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
+    let mut parts: Vec<Option<Buf>> = (0..PARTS).map(|_| None).collect();
+    let per = PARTS.div_ceil(jobs);
+    let work: Vec<Job<'_>> = parts
+        .chunks_mut(per)
+        .zip(by_part.chunks_mut(per))
+        .map(|(out, bufs)| {
+            let mins = &mins;
+            Box::new(move || {
+                for (slot, bufs) in out.iter_mut().zip(bufs) {
+                    *slot = Some(merge(std::mem::take(bufs), &plan.folds, mins));
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let parts: Vec<Buf> = parts.into_iter().flatten().collect();
+    // The place of each group is the number of first rows before its first row, which a map of the first rows gives.
+    let mut map = vec![0_u64; rows / 64 + 1];
+    for part in &parts {
+        for &first in &part.firsts {
+            map[(first / 64) as usize] |= 1 << (first % 64);
+        }
+    }
+    let mut before = Vec::with_capacity(map.len());
+    let mut count = 0_u32;
+    for word in &map {
+        before.push(count);
+        count += word.count_ones();
+    }
+    let groups = count as usize;
+    let mut order: Vec<(u32, u32)> = vec![(0, 0); groups];
+    for (p, part) in parts.iter().enumerate() {
+        for (g, &first) in part.firsts.iter().enumerate() {
+            let (word, bit) = ((first / 64) as usize, first % 64);
+            let place = before[word] + (map[word] & ((1 << bit) - 1)).count_ones();
+            order[place as usize] = (p as u32, g as u32);
+        }
+    }
+    drop(map);
+    drop(before);
+    // The tasks copy the keys, the first rows and the states of the groups in their order, each task a run of the groups.
+    let width = plan.keys.len() + 1;
+    let mut words = vec![0_u64; groups * width];
+    let mut firsts = vec![0_u64; groups];
+    let mut states: Vec<Folded> = plan
+        .folds
+        .iter()
+        .map(|&fold| match fold {
+            Fold::Count | Fold::CountArg(_) => Folded::Count(vec![0; groups]),
+            Fold::Sum(_) => Folded::Sum(vec![(0, 0); groups]),
+            Fold::Min(_) | Fold::Max(_) => Folded::Extreme(vec![None; groups]),
+            Fold::None => Folded::None,
+        })
+        .collect();
+    let chunk = groups.div_ceil(jobs).max(1);
+    let mut columns: Vec<Vec<Column<'_>>> =
+        (0..groups.div_ceil(chunk)).map(|_| Vec::new()).collect();
+    for state in &mut states {
+        match state {
+            Folded::Count(v) => {
+                columns
+                    .iter_mut()
+                    .zip(v.chunks_mut(chunk))
+                    .for_each(|(c, v)| c.push(Column::Count(v)));
+            }
+            Folded::Sum(v) => {
+                columns
+                    .iter_mut()
+                    .zip(v.chunks_mut(chunk))
+                    .for_each(|(c, v)| c.push(Column::Sum(v)));
+            }
+            Folded::Extreme(v) => {
+                columns
+                    .iter_mut()
+                    .zip(v.chunks_mut(chunk))
+                    .for_each(|(c, v)| c.push(Column::Extreme(v)));
+            }
+            Folded::None => columns.iter_mut().for_each(|c| c.push(Column::None)),
+        }
+    }
+    let work: Vec<Job<'_>> = order
+        .chunks(chunk)
+        .zip(words.chunks_mut(chunk * width))
+        .zip(firsts.chunks_mut(chunk))
+        .zip(columns)
+        .map(|(((order, words), firsts), mut columns)| {
+            let parts = &parts;
+            Box::new(move || {
+                for (n, &(p, g)) in order.iter().enumerate() {
+                    let (part, g) = (&parts[p as usize], g as usize);
+                    words[n * width..(n + 1) * width].copy_from_slice(&part.keys[g][..width]);
+                    firsts[n] = part.firsts[g];
+                    for (to, from) in columns.iter_mut().zip(&part.states) {
+                        match (to, from) {
+                            (Column::Count(a), Folded::Count(b)) => a[n] = b[g],
+                            (Column::Sum(a), Folded::Sum(b)) => a[n] = b[g],
+                            (Column::Extreme(a), Folded::Extreme(b)) => a[n] = b[g],
+                            _ => {}
+                        }
+                    }
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
+    let trailing = last.is_some() && firsts.last() != last.as_ref();
+    Ok(Found { words, firsts, states, extremes, trailing })
+}
+
+/// A run of the states of one fold in the order of the groups, which one task fills.
+enum Column<'a> {
+    Count(&'a mut [i64]),
+    Sum(&'a mut [(i64, i128)]),
+    Extreme(&'a mut [Option<i64>]),
+    None,
+}

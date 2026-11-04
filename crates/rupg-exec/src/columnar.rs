@@ -18,6 +18,8 @@ use rupg_types::{Numeric, Value, oid};
 use crate::agg;
 use crate::{Cache, Eval, Group, hashed, scan, sort};
 
+mod groups;
+
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
 
@@ -104,6 +106,14 @@ impl<const W: usize> WordTable<W> {
                 return (slot.id, false);
             }
             at = (at + 1) & mask;
+        }
+    }
+
+    /// Takes out every group, and keeps the size of the table.
+    fn clear(&mut self) {
+        if self.len > 0 {
+            self.slots.fill(Slot { key: [0; W], id: NO_GROUP });
+            self.len = 0;
         }
     }
 
@@ -601,6 +611,60 @@ fn unit(field: &Expr) -> Option<i64> {
     })
 }
 
+/// The values of the vector `vector` of the segment `segment` of a column, with the code 0 for a null code.
+fn decode(stored: &Stored, segment: usize, vector: usize) -> Result<Decoded> {
+    let column = &stored.segments[segment];
+    let at = vector;
+    let vector = &column.vectors[at];
+    let rows = vector.rows as usize;
+    let nulls = match &vector.nulls {
+        Nulls::None => None,
+        Nulls::All => Some(vec![true; rows]),
+        some => Some((0..rows).map(|i| some.is_null(i)).collect()),
+    };
+    let all = vector.nulls == Nulls::All;
+    let data = match column.kind.store() {
+        Store::Int => {
+            let mut out = Vec::new();
+            if all {
+                out.resize(rows, 0);
+            } else {
+                column.decode_ints(at, &mut out)?;
+            }
+            DecodedData::Int(out)
+        }
+        Store::Float => {
+            let mut out = Vec::new();
+            if all {
+                out.resize(rows, 0.0);
+            } else {
+                column.decode_floats(at, &mut out)?;
+            }
+            DecodedData::Float(out)
+        }
+        Store::Code => {
+            let mut out = Vec::new();
+            if all {
+                out.resize(rows, 0);
+            } else {
+                column.decode_codes(at, &mut out)?;
+            }
+            if let Some(nulls) = &nulls {
+                for (code, null) in out.iter_mut().zip(nulls) {
+                    if *null {
+                        *code = 0;
+                    }
+                }
+            }
+            DecodedData::Code(out)
+        }
+    };
+    if data_len(&data) != rows {
+        return Err(Error::corrupted("a vector has another number of values than its rows"));
+    }
+    Ok(Decoded { data, nulls })
+}
+
 impl<'q> Exec<'q> {
     /// The vector of the column `column` for the selection `sel`.
     fn var(&mut self, batch: &mut Batch, column: usize, ty: u32, sel: &[u32]) -> Result<Col> {
@@ -624,55 +688,7 @@ impl<'q> Exec<'q> {
         if batch.decoded[place].is_some() {
             return Ok(());
         }
-        let column = &self.stored[place].segments[batch.segment];
-        let vector = &column.vectors[batch.vector];
-        let rows = vector.rows as usize;
-        let nulls = match &vector.nulls {
-            Nulls::None => None,
-            Nulls::All => Some(vec![true; rows]),
-            some => Some((0..rows).map(|i| some.is_null(i)).collect()),
-        };
-        let all = vector.nulls == Nulls::All;
-        let data = match column.kind.store() {
-            Store::Int => {
-                let mut out = Vec::new();
-                if all {
-                    out.resize(rows, 0);
-                } else {
-                    column.decode_ints(batch.vector, &mut out)?;
-                }
-                DecodedData::Int(out)
-            }
-            Store::Float => {
-                let mut out = Vec::new();
-                if all {
-                    out.resize(rows, 0.0);
-                } else {
-                    column.decode_floats(batch.vector, &mut out)?;
-                }
-                DecodedData::Float(out)
-            }
-            Store::Code => {
-                let mut out = Vec::new();
-                if all {
-                    out.resize(rows, 0);
-                } else {
-                    column.decode_codes(batch.vector, &mut out)?;
-                }
-                if let Some(nulls) = &nulls {
-                    for (code, null) in out.iter_mut().zip(nulls) {
-                        if *null {
-                            *code = 0;
-                        }
-                    }
-                }
-                DecodedData::Code(out)
-            }
-        };
-        if data_len(&data) != rows {
-            return Err(Error::corrupted("a vector has another number of values than its rows"));
-        }
-        batch.decoded[place] = Some(Decoded { data, nulls });
+        batch.decoded[place] = Some(decode(&self.stored[place], batch.segment, batch.vector)?);
         Ok(())
     }
 
@@ -2312,299 +2328,383 @@ fn grouped(
             first_rows = 1;
         }
     }
-    scan.each(&mut |exec, batch, sel| {
-        ids.clear();
-        if keys.is_empty() {
-            ids.resize(sel.len(), 0);
-            if first_rows == 0 {
-                let mut row = Vec::with_capacity(kept_columns.len());
-                for &column in kept_columns {
-                    row.push(exec.value_at(batch, column, sel[0])?);
-                }
-                firsts.push(row);
-                first_rows = 1;
-            }
-        } else {
-            let cols = keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
-            let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
-            new_rows.clear();
-            // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
-            let width = keys.len() + 1;
-            words.clear();
-            for i in 0..sel.len() {
-                let mut mask = 0_u64;
-                for (k, col) in cols.iter().enumerate() {
-                    if col.null(i) {
-                        mask |= 1 << (k % 64);
-                        words.push(0);
-                    } else {
-                        let Some(w) = col.word(i) else {
-                            bail = true;
-                            return Ok(false);
-                        };
-                        words.push(w);
-                    }
-                }
-                words.push(mask);
-            }
-            row_hashes.clear();
-            row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
-            for (i, &row_at) in sel.iter().enumerate() {
-                if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
-                    map.prefetch(ahead);
-                }
-                let word = &words[i * width..(i + 1) * width];
-                let (id, new) = match last_id {
-                    Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
-                    _ => {
-                        let next = u32::try_from(groups)
-                            .map_err(|_| Error::internal("too many groups"))?;
-                        let found = map.id(word, row_hashes[i], next);
-                        last_word.copy_from_slice(word);
-                        last_id = Some(found.0);
-                        found
-                    }
-                };
-                trailing = !new;
-                if new {
-                    groups += 1;
-                    new_rows.push(row_at);
-                    if let Some(places) = &hashing {
-                        if hash_error.is_none() {
-                            match key_hash(places, &cols, i, &exec.dicts) {
-                                Ok(h) => hashes.push(h),
-                                // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
-                                Err(_) if hashes.is_empty() => {
-                                    hashing = None;
-                                    key_words.keep(
-                                        word,
-                                        batch_shapes.as_deref(),
-                                        &cols,
-                                        i,
-                                        &exec.dicts,
-                                        &mut key_values,
-                                    );
-                                }
-                                Err(error) => hash_error = Some(error),
-                            }
-                        }
-                    } else {
-                        key_words.keep(
-                            word,
-                            batch_shapes.as_deref(),
-                            &cols,
-                            i,
-                            &exec.dicts,
-                            &mut key_values,
-                        );
-                    }
-                }
-                ids.push(id);
-            }
-            seen += sel.len();
-            // When the next batch can fill the map, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
-            if map.room() < sel.len() {
-                let rate = (groups * rows / seen.max(1)).min(rows);
-                map.reserve((rate + rate / 8).max(groups * 2).min(rows).saturating_sub(groups));
-            }
-            if !new_rows.is_empty() {
-                if top.is_some() {
-                    let (segment, vector) = (spot(batch.segment), spot(batch.vector));
-                    spots.extend(new_rows.iter().map(|&row| [segment, vector, row]));
-                } else {
-                    let start = firsts.len();
-                    firsts.extend(
-                        std::iter::repeat_with(|| Vec::with_capacity(kept_columns.len()))
-                            .take(new_rows.len()),
-                    );
-                    for &column in kept_columns {
-                        let col = exec.var(batch, column, exec.types[column], &new_rows)?;
-                        for (i, row) in firsts[start..].iter_mut().enumerate() {
-                            row.push(col.value(i, &exec.dicts));
-                        }
-                    }
-                }
-                let room = map.room();
-                for call in &mut aggs {
-                    grow(call, groups, room, params, session, cache, &empty)?;
-                }
-                for base in &mut bases {
-                    if base.states.capacity() < groups {
-                        base.states.reserve_exact(groups + room - base.states.len());
-                    }
-                    base.states.resize(groups, (0, 0));
-                }
-            }
+    let parallel = match session.tasks() {
+        Some(tasks) if scan.open => {
+            let estimate = session_groups(session, query);
+            (estimate.saturating_mul(groups::GROUP_ROWS) <= rows)
+                .then(|| {
+                    parallel_plan(
+                        scan.exec,
+                        &keys,
+                        &aggs,
+                        &bases,
+                        scan.conds,
+                        rows,
+                        tasks.parallelism(),
+                    )
+                })
+                .flatten()
+                .map(|plan| (tasks, plan))
         }
-        for base in &mut bases {
-            let col = exec.eval(base.var, batch, sel)?;
-            let Some(ints) = col.ints() else {
-                bail = true;
-                return Ok(false);
+        _ => None,
+    };
+    let mut found = None;
+    if let Some((tasks, (plan, derived))) = parallel {
+        session.interrupted()?;
+        let mut run = groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments)?;
+        session.interrupted()?;
+        if let Some(words) = derive_words(&run.words, plan.keys.len() + 1, &derived) {
+            run.words = words;
+            found = Some(run);
+        }
+    }
+    if let Some(found) = found {
+        groups = found.firsts.len();
+        trailing = found.trailing;
+        let mut folded = found.states.into_iter();
+        for (call, state) in aggs.iter_mut().zip(&mut folded) {
+            call.states = match state {
+                groups::Folded::Count(v) => States::Count(v),
+                groups::Folded::Sum(v) => States::Sum(v),
+                groups::Folded::Extreme(v) => States::Extreme(v),
+                groups::Folded::None => States::Shift,
             };
-            let mut extremes = base.extremes;
-            let mut widen = |lo: i64, hi: i64| {
-                extremes = Some(extremes.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
-            };
-            match ints {
-                Ints::Vector(v, None) if keys.is_empty() => {
-                    if let (Some(&lo), Some(&hi)) = (v.iter().min(), v.iter().max()) {
-                        widen(lo, hi);
-                    }
-                    let state = &mut base.states[0];
-                    state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
-                    state.1 += if base.var.ty == oid::INT8 {
-                        v.iter().map(|&x| i128::from(x)).sum()
-                    } else {
-                        i128::from(v.iter().sum::<i64>())
-                    };
-                }
-                _ => {
-                    for (i, &id) in ids.iter().enumerate() {
-                        if let Some(v) = ints.get(i) {
-                            widen(v, v);
-                            let state = &mut base.states[id as usize];
-                            state.0 += 1;
-                            state.1 += i128::from(v);
-                        }
-                    }
-                }
+        }
+        for ((base, state), extremes) in bases.iter_mut().zip(folded).zip(found.extremes) {
+            if let groups::Folded::Sum(v) = state {
+                base.states = v;
             }
             base.extremes = extremes;
         }
-        for call in &mut aggs {
-            let arg = match &call.method {
-                Method::Shift { .. } => continue,
-                Method::Count => None,
-                _ => call.agg.args.first(),
-            };
-            let col = match arg {
-                Some(arg) if !matches!(call.method, Method::Row(_)) => {
-                    Some(exec.eval(arg, batch, sel)?)
+        let shapes: Vec<Shape> = keys
+            .iter()
+            .map(|key| match place_of(scan.exec, key) {
+                Some(place) if scan.exec.dict_of[place] != usize::MAX => {
+                    Shape::Code(scan.exec.dict_of[place])
                 }
-                _ => None,
-            };
-            match (&call.method, &mut call.states) {
-                (Method::Count, States::Count(states)) => {
-                    for &id in &ids {
-                        states[id as usize] += 1;
+                _ => Shape::Int(key.ty),
+            })
+            .collect();
+        if let Some(places) = &hashing {
+            hashes.reserve_exact(groups);
+            for (g, words) in found.words.chunks(keys.len() + 1).enumerate() {
+                match word_hash(places, &shapes, words, &scan.exec.dicts) {
+                    Ok(h) => hashes.push(h),
+                    Err(_) if g == 0 => {
+                        hashing = None;
+                        break;
                     }
+                    Err(error) => return Err(error),
                 }
-                (Method::CountArg, States::Count(states)) => {
-                    let col =
-                        col.as_ref().ok_or_else(|| Error::internal("count has no argument"))?;
-                    for (i, &id) in ids.iter().enumerate() {
-                        if !col.null(i) {
-                            states[id as usize] += 1;
-                        }
+            }
+        }
+        key_words.words = found.words;
+        key_words.shapes = Some(shapes);
+        spots = found.firsts.iter().map(|&first| first_spot(first)).collect();
+        if top.is_none() {
+            let wanted: Vec<usize> = (0..groups).collect();
+            firsts = vec![Vec::with_capacity(kept_columns.len()); groups];
+            read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+            spots = Vec::new();
+        }
+    } else {
+        scan.each(&mut |exec, batch, sel| {
+            ids.clear();
+            if keys.is_empty() {
+                ids.resize(sel.len(), 0);
+                if first_rows == 0 {
+                    let mut row = Vec::with_capacity(kept_columns.len());
+                    for &column in kept_columns {
+                        row.push(exec.value_at(batch, column, sel[0])?);
                     }
+                    firsts.push(row);
+                    first_rows = 1;
                 }
-                (Method::Distinct, States::Distinct(states)) => {
-                    let col =
-                        col.as_ref().ok_or_else(|| Error::internal("count has no argument"))?;
-                    for (i, &id) in ids.iter().enumerate() {
+            } else {
+                let cols =
+                    keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
+                let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
+                new_rows.clear();
+                // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
+                let width = keys.len() + 1;
+                words.clear();
+                for i in 0..sel.len() {
+                    let mut mask = 0_u64;
+                    for (k, col) in cols.iter().enumerate() {
                         if col.null(i) {
-                            continue;
+                            mask |= 1 << (k % 64);
+                            words.push(0);
+                        } else {
+                            let Some(w) = col.word(i) else {
+                                bail = true;
+                                return Ok(false);
+                            };
+                            words.push(w);
                         }
-                        let Some(w) = col.word(i) else {
-                            bail = true;
-                            return Ok(false);
-                        };
-                        states[id as usize].insert(w);
                     }
+                    words.push(mask);
                 }
-                (Method::SumInt | Method::Int128 { .. }, States::Sum(states)) => {
-                    let col = col.as_ref().ok_or_else(|| Error::internal("sum has no argument"))?;
-                    let Some(ints) = col.ints() else {
-                        bail = true;
-                        return Ok(false);
-                    };
-                    match ints {
-                        Ints::Vector(v, None) if keys.is_empty() => {
-                            let state = &mut states[0];
-                            state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
-                            state.1 += v.iter().map(|&x| i128::from(x)).sum::<i128>();
-                        }
+                row_hashes.clear();
+                row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
+                for (i, &row_at) in sel.iter().enumerate() {
+                    if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
+                        map.prefetch(ahead);
+                    }
+                    let word = &words[i * width..(i + 1) * width];
+                    let (id, new) = match last_id {
+                        Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
                         _ => {
-                            for (i, &id) in ids.iter().enumerate() {
-                                if let Some(v) = ints.get(i) {
-                                    let state = &mut states[id as usize];
-                                    state.0 += 1;
-                                    state.1 += i128::from(v);
-                                }
-                            }
+                            let next = u32::try_from(groups)
+                                .map_err(|_| Error::internal("too many groups"))?;
+                            let found = map.id(word, row_hashes[i], next);
+                            last_word.copy_from_slice(word);
+                            last_id = Some(found.0);
+                            found
                         }
-                    }
-                }
-                (Method::Min | Method::Max, States::Extreme(states)) => {
-                    let col = col.as_ref().ok_or_else(|| Error::internal("min has no argument"))?;
-                    let Some(ints) = col.ints() else {
-                        bail = true;
-                        return Ok(false);
                     };
-                    let min = matches!(call.method, Method::Min);
-                    for (i, &id) in ids.iter().enumerate() {
-                        if let Some(v) = ints.get(i) {
-                            let state = &mut states[id as usize];
-                            *state = Some(match *state {
-                                None => v,
-                                Some(s) if min => s.min(v),
-                                Some(s) => s.max(v),
-                            });
-                        }
-                    }
-                }
-                (Method::Row(agg), States::Row(states)) => {
-                    let cols = agg.agg.args[..agg.agg.nargs]
-                        .iter()
-                        .map(|a| exec.eval(a, batch, sel))
-                        .collect::<Result<Vec<_>>>()?;
-                    if let (Some(keep), [col]) = (&mut call.codes, cols.as_slice())
-                        && let Data::Code(codes, d) = &col.data
-                        && (keep.dict == usize::MAX || keep.dict == *d)
-                    {
-                        keep.dict = *d;
-                        let dict = &exec.dicts[*d];
-                        if let Some(max) = keep.max
-                            && dict.is_text()
-                        {
-                            keep.best.resize(states.len(), u32::MAX);
-                            for (i, &id) in ids.iter().enumerate() {
-                                if col.null(i) {
-                                    continue;
-                                }
-                                let (code, best) = (codes[i], &mut keep.best[id as usize]);
-                                if *best == u32::MAX {
-                                    *best = code;
-                                } else if code != *best {
-                                    let (a, b) = (dict.text(code), dict.text(*best));
-                                    if a != b && (a > b) == max {
-                                        *best = code;
+                    trailing = !new;
+                    if new {
+                        groups += 1;
+                        new_rows.push(row_at);
+                        if let Some(places) = &hashing {
+                            if hash_error.is_none() {
+                                match key_hash(places, &cols, i, &exec.dicts) {
+                                    Ok(h) => hashes.push(h),
+                                    // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                                    Err(_) if hashes.is_empty() => {
+                                        hashing = None;
+                                        key_words.keep(
+                                            word,
+                                            batch_shapes.as_deref(),
+                                            &cols,
+                                            i,
+                                            &exec.dicts,
+                                            &mut key_values,
+                                        );
                                     }
+                                    Err(error) => hash_error = Some(error),
                                 }
                             }
                         } else {
-                            keep.seen.resize_with(states.len(), FxSet::default);
-                            for (i, &id) in ids.iter().enumerate() {
-                                if !col.null(i) {
-                                    keep.seen[id as usize].insert(codes[i]);
+                            key_words.keep(
+                                word,
+                                batch_shapes.as_deref(),
+                                &cols,
+                                i,
+                                &exec.dicts,
+                                &mut key_values,
+                            );
+                        }
+                    }
+                    ids.push(id);
+                }
+                seen += sel.len();
+                // When the next batch can fill the map, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
+                if map.room() < sel.len() {
+                    let rate = (groups * rows / seen.max(1)).min(rows);
+                    map.reserve((rate + rate / 8).max(groups * 2).min(rows).saturating_sub(groups));
+                }
+                if !new_rows.is_empty() {
+                    if top.is_some() {
+                        let (segment, vector) = (spot(batch.segment), spot(batch.vector));
+                        spots.extend(new_rows.iter().map(|&row| [segment, vector, row]));
+                    } else {
+                        let start = firsts.len();
+                        firsts.extend(
+                            std::iter::repeat_with(|| Vec::with_capacity(kept_columns.len()))
+                                .take(new_rows.len()),
+                        );
+                        for &column in kept_columns {
+                            let col = exec.var(batch, column, exec.types[column], &new_rows)?;
+                            for (i, row) in firsts[start..].iter_mut().enumerate() {
+                                row.push(col.value(i, &exec.dicts));
+                            }
+                        }
+                    }
+                    let room = map.room();
+                    for call in &mut aggs {
+                        grow(call, groups, room, params, session, cache, &empty)?;
+                    }
+                    for base in &mut bases {
+                        if base.states.capacity() < groups {
+                            base.states.reserve_exact(groups + room - base.states.len());
+                        }
+                        base.states.resize(groups, (0, 0));
+                    }
+                }
+            }
+            for base in &mut bases {
+                let col = exec.eval(base.var, batch, sel)?;
+                let Some(ints) = col.ints() else {
+                    bail = true;
+                    return Ok(false);
+                };
+                let mut extremes = base.extremes;
+                let mut widen = |lo: i64, hi: i64| {
+                    extremes = Some(extremes.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))));
+                };
+                match ints {
+                    Ints::Vector(v, None) if keys.is_empty() => {
+                        if let (Some(&lo), Some(&hi)) = (v.iter().min(), v.iter().max()) {
+                            widen(lo, hi);
+                        }
+                        let state = &mut base.states[0];
+                        state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
+                        state.1 += if base.var.ty == oid::INT8 {
+                            v.iter().map(|&x| i128::from(x)).sum()
+                        } else {
+                            i128::from(v.iter().sum::<i64>())
+                        };
+                    }
+                    _ => {
+                        for (i, &id) in ids.iter().enumerate() {
+                            if let Some(v) = ints.get(i) {
+                                widen(v, v);
+                                let state = &mut base.states[id as usize];
+                                state.0 += 1;
+                                state.1 += i128::from(v);
+                            }
+                        }
+                    }
+                }
+                base.extremes = extremes;
+            }
+            for call in &mut aggs {
+                let arg = match &call.method {
+                    Method::Shift { .. } => continue,
+                    Method::Count => None,
+                    _ => call.agg.args.first(),
+                };
+                let col = match arg {
+                    Some(arg) if !matches!(call.method, Method::Row(_)) => {
+                        Some(exec.eval(arg, batch, sel)?)
+                    }
+                    _ => None,
+                };
+                match (&call.method, &mut call.states) {
+                    (Method::Count, States::Count(states)) => {
+                        for &id in &ids {
+                            states[id as usize] += 1;
+                        }
+                    }
+                    (Method::CountArg, States::Count(states)) => {
+                        let col =
+                            col.as_ref().ok_or_else(|| Error::internal("count has no argument"))?;
+                        for (i, &id) in ids.iter().enumerate() {
+                            if !col.null(i) {
+                                states[id as usize] += 1;
+                            }
+                        }
+                    }
+                    (Method::Distinct, States::Distinct(states)) => {
+                        let col =
+                            col.as_ref().ok_or_else(|| Error::internal("count has no argument"))?;
+                        for (i, &id) in ids.iter().enumerate() {
+                            if col.null(i) {
+                                continue;
+                            }
+                            let Some(w) = col.word(i) else {
+                                bail = true;
+                                return Ok(false);
+                            };
+                            states[id as usize].insert(w);
+                        }
+                    }
+                    (Method::SumInt | Method::Int128 { .. }, States::Sum(states)) => {
+                        let col =
+                            col.as_ref().ok_or_else(|| Error::internal("sum has no argument"))?;
+                        let Some(ints) = col.ints() else {
+                            bail = true;
+                            return Ok(false);
+                        };
+                        match ints {
+                            Ints::Vector(v, None) if keys.is_empty() => {
+                                let state = &mut states[0];
+                                state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
+                                state.1 += v.iter().map(|&x| i128::from(x)).sum::<i128>();
+                            }
+                            _ => {
+                                for (i, &id) in ids.iter().enumerate() {
+                                    if let Some(v) = ints.get(i) {
+                                        let state = &mut states[id as usize];
+                                        state.0 += 1;
+                                        state.1 += i128::from(v);
+                                    }
                                 }
                             }
                         }
-                        continue;
                     }
-                    let eval = Eval::new(params, session, &empty, cache, &[]);
-                    for (i, &id) in ids.iter().enumerate() {
-                        args.clear();
-                        args.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
-                        agg.advance(&mut states[id as usize], &args, &eval)?;
+                    (Method::Min | Method::Max, States::Extreme(states)) => {
+                        let col =
+                            col.as_ref().ok_or_else(|| Error::internal("min has no argument"))?;
+                        let Some(ints) = col.ints() else {
+                            bail = true;
+                            return Ok(false);
+                        };
+                        let min = matches!(call.method, Method::Min);
+                        for (i, &id) in ids.iter().enumerate() {
+                            if let Some(v) = ints.get(i) {
+                                let state = &mut states[id as usize];
+                                *state = Some(match *state {
+                                    None => v,
+                                    Some(s) if min => s.min(v),
+                                    Some(s) => s.max(v),
+                                });
+                            }
+                        }
                     }
+                    (Method::Row(agg), States::Row(states)) => {
+                        let cols = agg.agg.args[..agg.agg.nargs]
+                            .iter()
+                            .map(|a| exec.eval(a, batch, sel))
+                            .collect::<Result<Vec<_>>>()?;
+                        if let (Some(keep), [col]) = (&mut call.codes, cols.as_slice())
+                            && let Data::Code(codes, d) = &col.data
+                            && (keep.dict == usize::MAX || keep.dict == *d)
+                        {
+                            keep.dict = *d;
+                            let dict = &exec.dicts[*d];
+                            if let Some(max) = keep.max
+                                && dict.is_text()
+                            {
+                                keep.best.resize(states.len(), u32::MAX);
+                                for (i, &id) in ids.iter().enumerate() {
+                                    if col.null(i) {
+                                        continue;
+                                    }
+                                    let (code, best) = (codes[i], &mut keep.best[id as usize]);
+                                    if *best == u32::MAX {
+                                        *best = code;
+                                    } else if code != *best {
+                                        let (a, b) = (dict.text(code), dict.text(*best));
+                                        if a != b && (a > b) == max {
+                                            *best = code;
+                                        }
+                                    }
+                                }
+                            } else {
+                                keep.seen.resize_with(states.len(), FxSet::default);
+                                for (i, &id) in ids.iter().enumerate() {
+                                    if !col.null(i) {
+                                        keep.seen[id as usize].insert(codes[i]);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        let eval = Eval::new(params, session, &empty, cache, &[]);
+                        for (i, &id) in ids.iter().enumerate() {
+                            args.clear();
+                            args.extend(cols.iter().map(|c| c.value(i, &exec.dicts)));
+                            agg.advance(&mut states[id as usize], &args, &eval)?;
+                        }
+                    }
+                    _ => return Err(Error::internal("an aggregate has another state")),
                 }
-                _ => return Err(Error::internal("an aggregate has another state")),
             }
-        }
-        Ok(true)
-    })?;
+            Ok(true)
+        })?;
+    }
     if bail {
         return Ok(None);
     }
@@ -2861,6 +2961,167 @@ fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) ->
         }
     }
     answered
+}
+
+/// The plan of [`groups::run`] for the keys `keys`, the calls `aggs` and the bases `bases` of a scan of `rows` rows with the conditions `conds`, or `None` when a key, a call, a condition or the table does not let the tasks find the groups. Each key is a column of integers or codes, or a constant integer or null, and each call is a count or an aggregate of a column of integers. Each condition is a test that the zones read (see [`Exec::zone_test`]).
+fn parallel_plan(
+    exec: &Exec<'_>,
+    keys: &[&Expr],
+    aggs: &[Call<'_>],
+    bases: &[Base<'_>],
+    conds: &[&Expr],
+    rows: usize,
+    parallelism: usize,
+) -> Option<(groups::Plan, Vec<Option<Derived>>)> {
+    if parallelism < 2 || rows < 2 * groups::TASK_ROWS || keys.is_empty() {
+        return None;
+    }
+    let place = |expr: &Expr| place_of(exec, expr);
+    let int_place =
+        |expr: &Expr| place(expr).filter(|&p| matches!(exec.stored[p].kind.store(), Store::Int));
+    // A key that is a column of an other key plus a constant gets its words from the words of that key after the scan, so that the groups have fewer words.
+    let derived: Vec<Option<Derived>> = keys
+        .iter()
+        .map(|key| {
+            let (var, by, range) = shifted(key)?;
+            let from = keys.iter().position(|k| k.kind == var.kind)?;
+            place_of(exec, var).filter(|&p| matches!(exec.stored[p].kind.store(), Store::Int))?;
+            Some(Derived { from, by, range })
+        })
+        .collect();
+    let mut at = 0;
+    let base_at: Vec<usize> = derived
+        .iter()
+        .map(|d| {
+            let here = at;
+            at += usize::from(d.is_none());
+            here
+        })
+        .collect();
+    let derived: Vec<Option<Derived>> =
+        derived.into_iter().map(|d| d.map(|d| Derived { from: base_at[d.from], ..d })).collect();
+    if at > 3 {
+        return None;
+    }
+    let keys = keys
+        .iter()
+        .zip(&derived)
+        .filter(|(_, d)| d.is_none())
+        .map(|(key, _)| match &key.kind {
+            ExprKind::Const(v) if v.is_null() => Some(groups::Input::Const(None)),
+            ExprKind::Const(v) => int_of(v).map(|v| groups::Input::Const(Some(v as u64))),
+            _ => place(key)
+                .filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))
+                .map(groups::Input::Column),
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let mut folds = aggs
+        .iter()
+        .map(|call| {
+            let arg = call.agg.args.first();
+            Some(match call.method {
+                Method::Count => groups::Fold::Count,
+                Method::CountArg => groups::Fold::CountArg(place(arg?)?),
+                Method::SumInt | Method::Int128 { .. } => groups::Fold::Sum(int_place(arg?)?),
+                Method::Min => groups::Fold::Min(int_place(arg?)?),
+                Method::Max => groups::Fold::Max(int_place(arg?)?),
+                Method::Shift { .. } => groups::Fold::None,
+                Method::Distinct | Method::Row(_) => return None,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    for base in bases {
+        folds.push(groups::Fold::Sum(int_place(base.var)?));
+    }
+    let filters = conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()?;
+    Some((groups::Plan { keys, folds, bases: bases.len(), filters }, derived))
+}
+
+/// The place of the stored column of `expr` when it is a column that the scan reads.
+fn place_of(exec: &Exec<'_>, expr: &Expr) -> Option<usize> {
+    let ExprKind::Var(var) = &expr.kind else { return None };
+    let column = usize::try_from(var.attnum - 1).ok()?;
+    let place = *exec.places.get(column)?;
+    (place != usize::MAX).then_some(place)
+}
+
+/// A key of a group whose value is the value of the key `from` of the plan plus `by`, with the range `range` of its type.
+#[derive(Clone, Copy)]
+struct Derived {
+    from: usize,
+    by: i64,
+    range: (i64, i64),
+}
+
+/// Gives the words of all the keys `derived` of each group from the words `words` of the keys of the plan, with `width` words for each group. It gives `None` when a value is out of the range of its type, so that the scan of each row gives the error.
+fn derive_words(words: &[u64], width: usize, derived: &[Option<Derived>]) -> Option<Vec<u64>> {
+    if derived.iter().all(Option::is_none) {
+        return Some(words.to_vec());
+    }
+    let mut out = Vec::with_capacity(words.len() / width * (derived.len() + 1));
+    for group in words.chunks_exact(width) {
+        let mask = group[width - 1];
+        let mut new_mask = 0_u64;
+        let mut base = 0;
+        for (k, d) in derived.iter().enumerate() {
+            let (word, null) = match d {
+                None => {
+                    base += 1;
+                    (group[base - 1], mask >> (base - 1) & 1 == 1)
+                }
+                Some(d) if mask >> d.from & 1 == 1 => (0, true),
+                Some(d) => {
+                    let v = (group[d.from] as i64).checked_add(d.by)?;
+                    if v < d.range.0 || v > d.range.1 {
+                        return None;
+                    }
+                    (v as u64, false)
+                }
+            };
+            out.push(word);
+            new_mask |= u64::from(null) << (k % 64);
+        }
+        out.push(new_mask);
+    }
+    Some(out)
+}
+
+/// The hash of the keys `places` of a group from its words `words` with the shapes `shapes`, as [`key_hash`] gives it from the first row of the group.
+fn word_hash(
+    places: &[(usize, u32)],
+    shapes: &[Shape],
+    words: &[u64],
+    dicts: &[Dict],
+) -> Result<u32> {
+    let mask = words[shapes.len()];
+    let mut hash: u32 = 0;
+    for &(p, ty) in places {
+        hash = hash.rotate_left(1);
+        if mask >> p & 1 == 1 {
+            continue;
+        }
+        let one = match shapes[p] {
+            Shape::Int(t) if t == ty => rupg_func::extended_hash_int(ty, words[p] as i64, 0),
+            Shape::Code(d) => {
+                dicts[d].text(words[p] as u32).and_then(|b| rupg_func::extended_hash_text(ty, b, 0))
+            }
+            Shape::Int(_) => None,
+        };
+        let one = match one {
+            Some(one) => one,
+            None => rupg_func::extended_hash(ty, &shapes[p].value(words[p], dicts), 0)?,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let one = one as u32;
+        hash ^= one;
+    }
+    Ok(hashed::murmurhash32(hash))
+}
+
+/// The spot of [`read_spots`] of the row `first` of the table, as `segment * ROWS + vector * VECTOR + row`.
+fn first_spot(first: u64) -> [u32; 3] {
+    let first = usize::try_from(first).unwrap_or(usize::MAX);
+    [spot(first / ROWS), spot(first % ROWS / VECTOR), spot(first % VECTOR)]
 }
 
 /// A place in the table as a part of a spot of [`read_spots`].
