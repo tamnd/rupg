@@ -2015,6 +2015,11 @@ fn first_groups(query: &Query, offset: usize, count: Option<usize>) -> Option<us
     .flatten()
 }
 
+/// The counts of the groups for the call `agg` of [`top_key`], or `None` for a call that is not a count.
+fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i64]> {
+    results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
+}
+
 /// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. A bounded heap compares the counts as integers, with the same steps as the sort of the rows. `None` for few groups or for a call that is not a count.
 fn count_top(
     session: &dyn Session,
@@ -2026,9 +2031,7 @@ fn count_top(
     if order.len() <= bound.saturating_mul(4) {
         return Ok(None);
     }
-    let Some(counts) =
-        results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
-    else {
+    let Some(counts) = top_counts(results, agg) else {
         return Ok(None);
     };
     let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
@@ -2052,9 +2055,7 @@ fn distinct_top(
     if results.groups <= bound.saturating_mul(4) {
         return Ok(None);
     }
-    let Some(counts) =
-        results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
-    else {
+    let Some(counts) = top_counts(results, agg) else {
         return Ok(None);
     };
     // The first `bound + 1` counts in the order of the sort, with the last of them at the top of the heap. A larger rank is first in the sort.
@@ -2837,15 +2838,19 @@ fn grouped(
     let order = if quick.is_some() {
         Vec::new()
     } else {
-        group_order(
-            query,
-            session,
-            &keys_of_groups,
-            hashes.as_deref(),
-            groups,
-            trailing,
-            first_groups,
-        )?
+        // With `ORDER BY` of a count, the order has only the groups that change the heap of [`count_top`], which keeps the same groups as with the full order.
+        let want = match (top, first_groups) {
+            (Some((agg, descending, bound)), _) if groups > bound.saturating_mul(4) => {
+                top_counts(&results, agg).map_or(Want::All, |counts| Want::Top {
+                    counts,
+                    descending,
+                    bound,
+                })
+            }
+            (_, Some(first)) => Want::First(first),
+            _ => Want::All,
+        };
+        group_order(query, session, &keys_of_groups, hashes.as_deref(), groups, trailing, want)?
     };
     let mut chosen = None;
     if let Some(key) = top {
@@ -3433,7 +3438,7 @@ fn word_order(
     dicts: &[Dict],
     natives: &[(usize, bool, bool)],
     groups: usize,
-    limit: Option<usize>,
+    want: Want<'_>,
 ) -> Option<Vec<usize>> {
     let width = shapes.len() + 1;
     let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
@@ -3476,16 +3481,22 @@ fn word_order(
         [one] => {
             let numbers: Vec<(u128, u32)> =
                 (0..groups).map(|g| (number(g, one), g as u32)).collect();
-            first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, g)| g as usize).collect()
+            first_of(numbers, want, |n| n.1 as usize, Ord::cmp)
+                .into_iter()
+                .map(|(_, g)| g as usize)
+                .collect()
         }
         [one, two] => {
             let numbers: Vec<(u128, u128, u32)> =
                 (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
-            first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, _, g)| g as usize).collect()
+            first_of(numbers, want, |n| n.2 as usize, Ord::cmp)
+                .into_iter()
+                .map(|(_, _, g)| g as usize)
+                .collect()
         }
         _ => {
             if let Some(order) =
-                packed_order(groups, places.len(), limit, |g, p| number(g, &places[p]))
+                packed_order(groups, places.len(), want, |g, p| number(g, &places[p]))
             {
                 return Some(order);
             }
@@ -3494,9 +3505,14 @@ fn word_order(
                 .flat_map(|g| places.iter().map(move |p| (g, p)))
                 .map(|(g, p)| number(g, p))
                 .collect();
-            first_of((0..groups).collect(), limit, |&a: &usize, &b: &usize| {
-                numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
-            })
+            first_of(
+                (0..groups).collect(),
+                want,
+                |&g| g,
+                |&a: &usize, &b: &usize| {
+                    numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
+                },
+            )
         }
     };
     Some(order)
@@ -3506,7 +3522,7 @@ fn word_order(
 fn packed_order(
     groups: usize,
     keys: usize,
-    limit: Option<usize>,
+    want: Want<'_>,
     number: impl Fn(usize, usize) -> u128,
 ) -> Option<Vec<usize>> {
     let mut least = vec![u128::MAX; keys];
@@ -3536,21 +3552,64 @@ fn packed_order(
             (packed, g as u32)
         })
         .collect();
-    Some(first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, g)| g as usize).collect())
+    Some(
+        first_of(numbers, want, |n| n.1 as usize, Ord::cmp)
+            .into_iter()
+            .map(|(_, g)| g as usize)
+            .collect(),
+    )
 }
 
-/// The items of `items` in the order of `cmp`, or only the first `limit` of them. A selection puts the first items before the others with no sort of the others, so a small `limit` of many items costs one pass and a sort of the first items. `cmp` gives no two items equal, so the first items are the items of a sort of all.
+/// The groups of the order of the groups that a query reads.
+#[derive(Clone, Copy, Debug)]
+enum Want<'a> {
+    /// Each group.
+    All,
+    /// The first groups of the order.
+    First(usize),
+    /// The groups that change the bounded heap of [`count_top`] of `bound` groups by `counts`, in their order. The heap takes each group of the order, and keeps a group only when its count comes before the count at its top. The count at the top only moves forward, so after the first groups of the order, a group whose count does not come before the top of the heap of these first groups changes nothing, and the order does not have it.
+    Top { counts: &'a [i64], descending: bool, bound: usize },
+}
+
+/// The part of the groups before [`Want::Top`] removes the groups that do not change the heap: one in 64, and at least 4 times the bound.
+const TOP_PREFIX: usize = 64;
+
+/// The items of `items` in the order of `cmp`, or only the items of `want`. `group` gives the group of an item. A selection puts the first items before the others with no sort of the others, so a small `want` of many items costs one pass and a sort of the first items. `cmp` gives no two items equal, so the first items are the items of a sort of all.
 fn first_of<T>(
     mut items: Vec<T>,
-    limit: Option<usize>,
+    want: Want<'_>,
+    group: impl Fn(&T) -> usize,
     mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering,
 ) -> Vec<T> {
-    if let Some(limit) = limit.filter(|&l| l < items.len()) {
-        if limit == 0 {
-            return Vec::new();
+    match want {
+        Want::All => {}
+        Want::First(limit) if limit < items.len() => {
+            if limit == 0 {
+                return Vec::new();
+            }
+            items.select_nth_unstable_by(limit - 1, &mut cmp);
+            items.truncate(limit);
         }
-        items.select_nth_unstable_by(limit - 1, &mut cmp);
-        items.truncate(limit);
+        Want::First(_) => {}
+        Want::Top { counts, descending, bound } => {
+            let prefix = (items.len() / TOP_PREFIX).max(bound.saturating_mul(4));
+            if bound > 0 && prefix < items.len() {
+                // A larger rank comes first in the sort.
+                let rank = |item: &T| {
+                    let c = i128::from(counts[group(item)]);
+                    if descending { c } else { -c }
+                };
+                items.select_nth_unstable_by(prefix - 1, &mut cmp);
+                let mut rest = items.split_off(prefix);
+                let mut ranks: Vec<i128> = items.iter().map(rank).collect();
+                let (_, &mut top, _) = ranks.select_nth_unstable_by(bound - 1, |a, b| b.cmp(a));
+                rest.retain(|item| rank(item) > top);
+                items.sort_unstable_by(&mut cmp);
+                rest.sort_unstable_by(&mut cmp);
+                items.append(&mut rest);
+                return items;
+            }
+        }
     }
     items.sort_unstable_by(cmp);
     items
@@ -3594,9 +3653,8 @@ fn group_order(
     hashes: Option<&[u32]>,
     groups: usize,
     trailing: bool,
-    first: Option<usize>,
+    want: Want<'_>,
 ) -> Result<Vec<usize>> {
-    let limit = first;
     let first: Vec<usize> = (0..groups).collect();
     if query.group.is_empty() {
         return Ok(first);
@@ -3619,7 +3677,7 @@ fn group_order(
             .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
             .collect();
         if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
-            && let Some(order) = word_order(words, shapes, dicts, &natives, groups, limit)
+            && let Some(order) = word_order(words, shapes, dicts, &natives, groups, want)
         {
             return Ok(order);
         }
@@ -3699,15 +3757,50 @@ mod tests {
                     .cmp(&numbers[b * keys..(b + 1) * keys])
                     .then(a.cmp(&b))
             });
-            match packed_order(groups, keys, None, number) {
+            match packed_order(groups, keys, Want::All, number) {
                 Some(order) => assert_eq!(order, sorted, "round {round}"),
                 None => assert_eq!(range, 1 << 40, "round {round}"),
             }
             // With a limit, the order is the first groups of the order of all.
             let limit = round as usize % 7 * groups / 5;
-            if let Some(order) = packed_order(groups, keys, Some(limit), number) {
+            if let Some(order) = packed_order(groups, keys, Want::First(limit), number) {
                 assert_eq!(order, sorted[..limit.min(groups)], "round {round} limit {limit}");
             }
+        }
+    }
+
+    /// The heap of a top of counts keeps the same groups in the same order from the order of [`Want::Top`] as from the order of all the groups, also with many equal counts, for both directions.
+    #[test]
+    fn a_top_order_gives_the_heap_of_all_the_groups() {
+        let mut seed = 11_u64;
+        for round in 0..300_u32 {
+            let groups = 50 + (round as usize * 977) % 9000;
+            let bound = 1 + round as usize % 12;
+            let descending = round % 2 == 0;
+            let spread = [2_u64, 5, 40, 1000][round as usize % 4];
+            let mut next = || {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                seed >> 20
+            };
+            let counts: Vec<i64> =
+                (0..groups).map(|_| i64::try_from(next() % spread).unwrap() + 1).collect();
+            let numbers: Vec<u128> = (0..groups).map(|_| u128::from(next() % 100_000)).collect();
+            let number = |g: usize, _: usize| numbers[g];
+            let heap = |order: Vec<usize>| {
+                let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
+                    Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
+                };
+                let mut heap = sort::Bounded::new(bound);
+                for g in order {
+                    heap.push((counts[g], g), &mut cmp).unwrap();
+                }
+                heap.finish(&mut cmp).unwrap()
+            };
+            let all = packed_order(groups, 1, Want::All, number).unwrap();
+            let want = Want::Top { counts: &counts, descending, bound };
+            let top = packed_order(groups, 1, want, number).unwrap();
+            assert!(top.len() <= all.len(), "round {round}");
+            assert_eq!(heap(top), heap(all), "round {round}");
         }
     }
 
