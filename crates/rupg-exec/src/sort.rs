@@ -41,7 +41,7 @@ fn native(func: u32) -> Option<bool> {
 }
 
 /// The integer of a value of an integer, date or time type.
-fn int(v: &Value) -> Option<i64> {
+pub(crate) fn int(v: &Value) -> Option<i64> {
     match v {
         Value::Int2(v) => Some(i64::from(*v)),
         Value::Int4(v) | Value::Date(v) => Some(i64::from(*v)),
@@ -82,6 +82,12 @@ impl<'a> Keys<'a> {
             [key] if key.sort.is_some() => key.descending,
             _ => None,
         }
+    }
+
+    /// For the first key with a sort function, when the function compares integers or bytes with no call: its column, true for a descending order, and true for nulls first.
+    pub(crate) fn lead(&self) -> Option<(usize, bool, bool)> {
+        let key = self.keys.iter().find(|key| key.sort.is_some())?;
+        Some((key.column, key.descending?, key.nulls_first))
     }
 
     /// For keys whose sort functions all compare integers or bytes with no call: the column, true for a descending order, and true for nulls first, of each key with a sort function.
@@ -249,6 +255,11 @@ impl<T> Bounded<T> {
         F: FnMut(&T, &T) -> Result<Ordering>,
     {
         Ok(self.heap.len() < self.bound || cmp(item, &self.heap[0])?.is_lt())
+    }
+
+    /// The top of a full heap: an item goes in only when it comes before the top.
+    pub(crate) fn top(&self) -> Option<&T> {
+        self.heap.first().filter(|_| self.heap.len() >= self.bound)
     }
 
     /// `sort_bounded_heap`: the items of the heap in order.

@@ -21,24 +21,52 @@ use crate::{Cache, Eval, Group, hashed, scan, sort};
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
 
+/// The most groups that the map of `GROUP BY` has room for before the scan sees the rate of new groups: four vectors.
+const START_GROUPS: usize = 4 * VECTOR;
+
 /// The hash tables of the engine, with its one hash (spec/22 section 22.6).
 type FxMap<K, V> = rupg_kernels::hash::HashMap<K, V>;
 type FxSet<K> = rupg_kernels::hash::HashSet<K>;
 
-/// The words of a key of `GROUP BY` and its mask of nulls, kept in place for a key of up to 3 words.
+/// The words of a key of `GROUP BY` of a fixed number of words, which hash one word at a time with no length.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Words<const N: usize>([u64; N]);
+
+impl<const N: usize> std::hash::Hash for Words<N> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for word in self.0 {
+            state.write_u64(word);
+        }
+    }
+}
+
+/// The group of `key` in `map`, and true for a new group, which gets the ID `next`.
+#[inline]
+fn probe<K: std::hash::Hash + Eq>(map: &mut FxMap<K, u32>, key: K, next: u32) -> (u32, bool) {
+    match map.entry(key) {
+        std::collections::hash_map::Entry::Occupied(e) => (*e.get(), false),
+        std::collections::hash_map::Entry::Vacant(e) => (*e.insert(next), true),
+    }
+}
+
+/// The words of a key of `GROUP BY` and its mask of nulls, the last word. A map for one key keeps the word of the key alone, and the group of the null key on the side. Keys of up to 3 words and the mask are kept in place.
 enum KeyMap {
-    Small(FxMap<[u64; 4], u32>),
+    One(FxMap<u64, u32>, Option<u32>),
+    Two(FxMap<Words<3>, u32>),
+    Three(FxMap<Words<4>, u32>),
     Large(FxMap<Box<[u64]>, u32>),
 }
 
 impl KeyMap {
-    /// A map for keys of `words` words, with room for `groups` groups.
+    /// A map for keys of `words` words with the mask, with room for `groups` groups.
     fn new(words: usize, groups: usize) -> KeyMap {
         let hasher = rupg_kernels::hash::Build;
-        if words <= 4 {
-            KeyMap::Small(FxMap::with_capacity_and_hasher(groups, hasher))
-        } else {
-            KeyMap::Large(FxMap::with_capacity_and_hasher(groups, hasher))
+        match words {
+            0..=2 => KeyMap::One(FxMap::with_capacity_and_hasher(groups, hasher), None),
+            3 => KeyMap::Two(FxMap::with_capacity_and_hasher(groups, hasher)),
+            4 => KeyMap::Three(FxMap::with_capacity_and_hasher(groups, hasher)),
+            _ => KeyMap::Large(FxMap::with_capacity_and_hasher(groups, hasher)),
         }
     }
 
@@ -46,14 +74,13 @@ impl KeyMap {
     #[inline]
     fn id(&mut self, word: &[u64], next: u32) -> (u32, bool) {
         match self {
-            KeyMap::Small(map) => {
-                let mut key = [0_u64; 4];
-                key[..word.len()].copy_from_slice(word);
-                match map.entry(key) {
-                    std::collections::hash_map::Entry::Occupied(e) => (*e.get(), false),
-                    std::collections::hash_map::Entry::Vacant(e) => (*e.insert(next), true),
-                }
-            }
+            KeyMap::One(_, null) if word.get(1).is_some_and(|&mask| mask != 0) => match null {
+                Some(id) => (*id, false),
+                None => (*null.insert(next), true),
+            },
+            KeyMap::One(map, _) => probe(map, word.first().copied().unwrap_or(0), next),
+            KeyMap::Two(map) => probe(map, Words([word[0], word[1], word[2]]), next),
+            KeyMap::Three(map) => probe(map, Words([word[0], word[1], word[2], word[3]]), next),
             KeyMap::Large(map) => match map.get(word) {
                 Some(&id) => (id, false),
                 None => {
@@ -67,7 +94,9 @@ impl KeyMap {
     /// The number of groups that can go in with no growth of the map.
     fn room(&self) -> usize {
         match self {
-            KeyMap::Small(map) => map.capacity() - map.len(),
+            KeyMap::One(map, _) => map.capacity() - map.len(),
+            KeyMap::Two(map) => map.capacity() - map.len(),
+            KeyMap::Three(map) => map.capacity() - map.len(),
             KeyMap::Large(map) => map.capacity() - map.len(),
         }
     }
@@ -75,7 +104,9 @@ impl KeyMap {
     /// Makes room for `more` more groups.
     fn reserve(&mut self, more: usize) {
         match self {
-            KeyMap::Small(map) => map.reserve(more),
+            KeyMap::One(map, _) => map.reserve(more),
+            KeyMap::Two(map) => map.reserve(more),
+            KeyMap::Three(map) => map.reserve(more),
             KeyMap::Large(map) => map.reserve(more),
         }
     }
@@ -1549,11 +1580,19 @@ fn top(
     let mut heap = sort::Bounded::new(bound);
     let mut streaming = false;
     let mut spare: Option<Vec<Value>> = None;
+    // The first key of `ORDER BY` when it compares integers, and its integer in the top of the full heap. A row whose first key comes after it cannot go in the heap, so the scan reads no other value of the row.
+    let lead = keys.lead();
+    let lead_of = |heap: &sort::Bounded<Vec<Value>>| {
+        let (target, ..) = lead?;
+        sort::int(&heap.top()?[target])
+    };
+    let mut cut: Option<i64> = None;
     scan.each(&mut |exec, batch, sel| {
         let cols = columns
             .iter()
             .map(|&c| exec.var(batch, c, exec.types[c], sel))
             .collect::<Result<Vec<_>>>()?;
+        let lead_ints = lead.and_then(|(target, ..)| cols[target].ints());
         for i in 0..sel.len() {
             if !streaming {
                 first.push(cols.iter().map(|c| c.value(i, &exec.dicts)).collect());
@@ -1562,8 +1601,21 @@ fn top(
                         heap.push(row, &mut cmp)?;
                     }
                     streaming = true;
+                    cut = lead_of(&heap);
                 }
                 continue;
+            }
+            if let (Some((_, descending, nulls_first)), Some(ints), Some(top)) =
+                (lead, lead_ints, cut)
+            {
+                let after = match ints.get(i) {
+                    Some(v) if descending => v < top,
+                    Some(v) => v > top,
+                    None => !nulls_first,
+                };
+                if after {
+                    continue;
+                }
             }
             let mut row = spare.take().unwrap_or_default();
             row.clear();
@@ -1581,6 +1633,7 @@ fn top(
                     }
                 }
                 spare = heap.push(row, &mut cmp)?;
+                cut = lead_of(&heap);
             } else {
                 spare = Some(row);
             }
@@ -1871,6 +1924,24 @@ fn count_top(
     Ok(Some(heap.finish(&mut cmp)?.into_iter().skip(offset).map(|(_, g)| g).collect()))
 }
 
+/// True when a value passes the test of the zones: a comparison or `IN` is false for a null value, as in SQL.
+#[inline]
+fn passes(test: &Test, null: bool, value: i64) -> bool {
+    let key = rupg_summary::key::int(value);
+    match test {
+        Test::IsNull => null,
+        Test::IsNotNull => !null,
+        _ if null => false,
+        Test::Eq(c) => key == *c,
+        Test::Ne(c) => key != *c,
+        Test::Lt(c) => key < *c,
+        Test::Le(c) => key <= *c,
+        Test::Gt(c) => key > *c,
+        Test::Ge(c) => key >= *c,
+        Test::In(cs) => cs.contains(&key),
+    }
+}
+
 /// A call with the rows of a vector that pass the conditions, which gives false to stop the scan.
 type Each<'a> = dyn FnMut(&mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + 'a;
 
@@ -1932,12 +2003,29 @@ impl Scan<'_, '_> {
                 };
                 sel.clear();
                 sel.extend(0..batch.rows as u32);
-                for (cond, verdict) in self.conds.iter().zip(&verdicts) {
+                for ((cond, verdict), test) in self.conds.iter().zip(&verdicts).zip(&tests) {
                     if sel.is_empty() {
                         break;
                     }
                     if *verdict == Verdict::All {
                         continue;
+                    }
+                    // A condition that the zones test runs on the decoded integers of its column, with no copy of the values of the rows.
+                    if let Some((place, test)) = test {
+                        self.exec.decode(&mut batch, *place)?;
+                        if let Some(Decoded { data: DecodedData::Int(values), nulls }) =
+                            &batch.decoded[*place]
+                        {
+                            next.clear();
+                            let null = |i: u32| nulls.as_ref().is_some_and(|n| n[i as usize]);
+                            next.extend(
+                                sel.iter()
+                                    .copied()
+                                    .filter(|&i| passes(test, null(i), values[i as usize])),
+                            );
+                            std::mem::swap(&mut sel, &mut next);
+                            continue;
+                        }
                     }
                     let col = self.exec.eval(cond, &mut batch, &sel)?;
                     next.clear();
@@ -2083,9 +2171,12 @@ fn grouped(
         aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
-    // The map has room for the groups that the plan expects, so it does not grow while the scan finds them.
-    let expected = session_groups(scan.exec.session, query).min(scan.rows);
+    // The map starts with room for the groups of a few batches at most. The estimate of the plan can be many times the real number of groups, and a map that is larger than the cache makes each row a miss. After each batch the map grows to the rate of new groups that the scan sees.
+    let expected = session_groups(scan.exec.session, query).min(scan.rows).min(START_GROUPS);
     let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
+    // The key of the last row and its group. Rows in the order of a key come in runs of one key, and a run needs one probe of the map.
+    let mut last_word = vec![0_u64; keys.len() + 1];
+    let mut last_id: Option<u32> = None;
     let mut new_rows: Vec<u32> = Vec::new();
     let mut firsts: Vec<Vec<Value>> = Vec::new();
     // For `ORDER BY` of a count with `LIMIT`, the scan keeps the place of the first row of each group, and reads the values only for the groups of the result.
@@ -2159,8 +2250,17 @@ fn grouped(
                     }
                 }
                 word[keys.len()] = mask;
-                let next = u32::try_from(groups).map_err(|_| Error::internal("too many groups"))?;
-                let (id, new) = map.id(&word, next);
+                let (id, new) = match last_id {
+                    Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
+                    _ => {
+                        let next = u32::try_from(groups)
+                            .map_err(|_| Error::internal("too many groups"))?;
+                        let found = map.id(&word, next);
+                        last_word.copy_from_slice(&word);
+                        last_id = Some(found.0);
+                        found
+                    }
+                };
                 trailing = !new;
                 if new {
                     groups += 1;

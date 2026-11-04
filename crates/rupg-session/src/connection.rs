@@ -7367,6 +7367,52 @@ mod tests {
         });
     }
 
+    /// The scan of `ORDER BY` with `LIMIT` skips the rows whose first key comes after the top of the full heap, and gives the rows that a sort of all the rows gives, also for ties, a descending order and nulls. The groups of `GROUP BY` come right when the keys come in runs and when there are many more groups than the first room of the map.
+    #[test]
+    fn a_top_and_groups_of_a_vector_scan_are_the_rows_of_the_row_engine() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
+            };
+            send(&mut a, &query("CREATE TABLE t (a int, b bigint, c smallint, e text)"));
+            send(
+                &mut a,
+                &query(
+                    "INSERT INTO t SELECT CASE WHEN i % 11 <> 0 THEN (i * 7919) % 30011 END, \
+                     i / 7, i % 3, 'v' || (i % 13) FROM generate_series(1, 70000) i",
+                ),
+            );
+            for sql in [
+                "SELECT e FROM t WHERE e <> 'v1' ORDER BY a, e LIMIT 10",
+                "SELECT e, a FROM t ORDER BY a DESC, e LIMIT 7 OFFSET 30",
+                "SELECT a, e FROM t ORDER BY a NULLS FIRST, e DESC LIMIT 15",
+                "SELECT a, e FROM t ORDER BY a DESC NULLS LAST, e LIMIT 5",
+                "SELECT b, e FROM t ORDER BY b, e LIMIT 12",
+                "SELECT e, a FROM t ORDER BY e, a LIMIT 9",
+                "SELECT c, a FROM t ORDER BY c, a LIMIT 10",
+                "SELECT c, a, e FROM t ORDER BY c DESC, a DESC NULLS LAST, e LIMIT 6",
+            ] {
+                let row_engine = if sql.contains("WHERE") { " AND" } else { " WHERE" };
+                let want = rows(
+                    &mut a,
+                    &sql.replace(" ORDER", &format!("{row_engine} random() >= 0 ORDER")),
+                );
+                assert_eq!(rows(&mut a, sql), want, "{sql}");
+            }
+            for sql in [
+                "SELECT b, count(*) FROM t GROUP BY b ORDER BY b LIMIT 5 OFFSET 9990",
+                "SELECT a, count(*), sum(b) FROM t GROUP BY a ORDER BY 2 DESC, 1 LIMIT 8",
+                "SELECT count(*) FROM (SELECT a, e FROM t GROUP BY a, e) s",
+            ] {
+                let want = rows(&mut a, &sql.replace(" FROM t", " FROM t WHERE random() >= 0"));
+                assert_eq!(rows(&mut a, sql), want, "{sql}");
+            }
+            assert_eq!(rows(&mut a, "SELECT count(DISTINCT b) FROM t"), ["row 10001"]);
+        });
+    }
+
     /// The encoded columns and the cold headers of a frozen table go to the image as they are, and a store that loads the image has the same columns and headers with no new encode. The insert of a transaction in progress is not in the image, and the table changes as before after the load.
     #[test]
     fn frozen_columns_come_back_from_the_image() {
