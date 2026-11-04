@@ -2005,6 +2005,16 @@ fn top_key(
     Some((std::ptr::from_ref(&**agg), descending, bound))
 }
 
+/// The number of groups at the start of the order of the groups that make the rows of a query with `LIMIT` and no sort, which [`project`] reads before it stops: `OFFSET` and `LIMIT` together. `None` when a group can make no row or many rows, with `HAVING` or a set-returning function, and with `DISTINCT` or `ORDER BY`, which read each group.
+fn first_groups(query: &Query, offset: usize, count: Option<usize>) -> Option<usize> {
+    (query.sort.is_empty()
+        && query.distinct.is_empty()
+        && query.having.is_none()
+        && crate::set_levels(&query.targets).is_empty())
+    .then(|| offset.checked_add(count?))
+    .flatten()
+}
+
 /// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. A bounded heap compares the counts as integers, with the same steps as the sort of the rows. `None` for few groups or for a call that is not a count.
 fn count_top(
     session: &dyn Session,
@@ -2289,6 +2299,10 @@ fn grouped(
     let mut firsts: Vec<Vec<Value>> = Vec::new();
     // For `ORDER BY` of a count with `LIMIT`, the scan keeps the place of the first row of each group, and reads the values only for the groups of the result.
     let top = if keys.is_empty() { None } else { top_key(query, scan.exec.session, offset, count) };
+    // With `LIMIT` and no sort, the result has the first groups of the order, so the scan also keeps the place of the first row of each group, and reads the values only for those groups.
+    let first_groups =
+        if keys.is_empty() || top.is_some() { None } else { first_groups(query, offset, count) };
+    let lazy = top.is_some() || first_groups.is_some();
     let mut spots: Vec<[u32; 3]> = Vec::new();
     // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
     let mut hashing = plan_keys(scan.exec.session, query);
@@ -2401,7 +2415,7 @@ fn grouped(
         key_words.words = found.words;
         key_words.shapes = Some(shapes);
         spots = found.firsts.iter().map(|&first| first_spot(first)).collect();
-        if top.is_none() {
+        if !lazy {
             let wanted: Vec<usize> = (0..groups).collect();
             firsts = vec![Vec::with_capacity(kept_columns.len()); groups];
             read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
@@ -2505,7 +2519,7 @@ fn grouped(
                     map.reserve((rate + rate / 8).max(groups * 2).min(rows).saturating_sub(groups));
                 }
                 if !new_rows.is_empty() {
-                    if top.is_some() {
+                    if lazy {
                         let (segment, vector) = (spot(batch.segment), spot(batch.vector));
                         spots.extend(new_rows.iter().map(|&row| [segment, vector, row]));
                     } else {
@@ -2778,7 +2792,15 @@ fn grouped(
         }
         _ => GroupKeys::Values(&key_values),
     };
-    let order = group_order(query, session, &keys_of_groups, hashes.as_deref(), groups, trailing)?;
+    let order = group_order(
+        query,
+        session,
+        &keys_of_groups,
+        hashes.as_deref(),
+        groups,
+        trailing,
+        first_groups,
+    )?;
     let mut chosen = None;
     if let Some(key) = top {
         chosen = count_top(session, &results, &order, key, offset)?;
@@ -2787,6 +2809,11 @@ fn grouped(
             Some(chosen) => chosen.clone(),
             None => (0..spots.len()).collect(),
         };
+        wanted.sort_unstable();
+        firsts = vec![Vec::new(); spots.len()];
+        read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+    } else if let Some(first) = first_groups {
+        let mut wanted: Vec<usize> = order.iter().take(first).copied().collect();
         wanted.sort_unstable();
         firsts = vec![Vec::new(); spots.len()];
         read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
@@ -3357,6 +3384,7 @@ fn word_order(
     dicts: &[Dict],
     natives: &[(usize, bool, bool)],
     groups: usize,
+    limit: Option<usize>,
 ) -> Option<Vec<usize>> {
     let width = shapes.len() + 1;
     let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
@@ -3397,19 +3425,19 @@ fn word_order(
     };
     let order = match places.as_slice() {
         [one] => {
-            let mut numbers: Vec<(u128, u32)> =
+            let numbers: Vec<(u128, u32)> =
                 (0..groups).map(|g| (number(g, one), g as u32)).collect();
-            numbers.sort_unstable();
-            numbers.into_iter().map(|(_, g)| g as usize).collect()
+            first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, g)| g as usize).collect()
         }
         [one, two] => {
-            let mut numbers: Vec<(u128, u128, u32)> =
+            let numbers: Vec<(u128, u128, u32)> =
                 (0..groups).map(|g| (number(g, one), number(g, two), g as u32)).collect();
-            numbers.sort_unstable();
-            numbers.into_iter().map(|(_, _, g)| g as usize).collect()
+            first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, _, g)| g as usize).collect()
         }
         _ => {
-            if let Some(order) = packed_order(groups, places.len(), |g, p| number(g, &places[p])) {
+            if let Some(order) =
+                packed_order(groups, places.len(), limit, |g, p| number(g, &places[p]))
+            {
                 return Some(order);
             }
             let n = places.len();
@@ -3417,11 +3445,9 @@ fn word_order(
                 .flat_map(|g| places.iter().map(move |p| (g, p)))
                 .map(|(g, p)| number(g, p))
                 .collect();
-            let mut order: Vec<usize> = (0..groups).collect();
-            order.sort_unstable_by(|&a, &b| {
+            first_of((0..groups).collect(), limit, |&a: &usize, &b: &usize| {
                 numbers[a * n..(a + 1) * n].cmp(&numbers[b * n..(b + 1) * n]).then(a.cmp(&b))
-            });
-            order
+            })
         }
     };
     Some(order)
@@ -3431,6 +3457,7 @@ fn word_order(
 fn packed_order(
     groups: usize,
     keys: usize,
+    limit: Option<usize>,
     number: impl Fn(usize, usize) -> u128,
 ) -> Option<Vec<usize>> {
     let mut least = vec![u128::MAX; keys];
@@ -3447,7 +3474,7 @@ fn packed_order(
     if bits.iter().sum::<u32>() > 128 {
         return None;
     }
-    let mut numbers: Vec<(u128, u32)> = (0..groups)
+    let numbers: Vec<(u128, u32)> = (0..groups)
         .map(|g| {
             let packed = (0..keys).fold(0_u128, |packed, k| {
                 // A key of no bits has one value and adds nothing.
@@ -3460,8 +3487,24 @@ fn packed_order(
             (packed, g as u32)
         })
         .collect();
-    numbers.sort_unstable();
-    Some(numbers.into_iter().map(|(_, g)| g as usize).collect())
+    Some(first_of(numbers, limit, Ord::cmp).into_iter().map(|(_, g)| g as usize).collect())
+}
+
+/// The items of `items` in the order of `cmp`, or only the first `limit` of them. A selection puts the first items before the others with no sort of the others, so a small `limit` of many items costs one pass and a sort of the first items. `cmp` gives no two items equal, so the first items are the items of a sort of all.
+fn first_of<T>(
+    mut items: Vec<T>,
+    limit: Option<usize>,
+    mut cmp: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) -> Vec<T> {
+    if let Some(limit) = limit.filter(|&l| l < items.len()) {
+        if limit == 0 {
+            return Vec::new();
+        }
+        items.select_nth_unstable_by(limit - 1, &mut cmp);
+        items.truncate(limit);
+    }
+    items.sort_unstable_by(cmp);
+    items
 }
 
 /// The place of the code of each group in the order of the bytes of the codes of the groups, from a sort of each code once. Codes with the same bytes have the same place. A null group, for which `null` is true, has the place 0.
@@ -3502,7 +3545,9 @@ fn group_order(
     hashes: Option<&[u32]>,
     groups: usize,
     trailing: bool,
+    first: Option<usize>,
 ) -> Result<Vec<usize>> {
+    let limit = first;
     let first: Vec<usize> = (0..groups).collect();
     if query.group.is_empty() {
         return Ok(first);
@@ -3525,7 +3570,7 @@ fn group_order(
             .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
             .collect();
         if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
-            && let Some(order) = word_order(words, shapes, dicts, &natives, groups)
+            && let Some(order) = word_order(words, shapes, dicts, &natives, groups, limit)
         {
             return Ok(order);
         }
@@ -3605,9 +3650,14 @@ mod tests {
                     .cmp(&numbers[b * keys..(b + 1) * keys])
                     .then(a.cmp(&b))
             });
-            match packed_order(groups, keys, number) {
+            match packed_order(groups, keys, None, number) {
                 Some(order) => assert_eq!(order, sorted, "round {round}"),
                 None => assert_eq!(range, 1 << 40, "round {round}"),
+            }
+            // With a limit, the order is the first groups of the order of all.
+            let limit = round as usize % 7 * groups / 5;
+            if let Some(order) = packed_order(groups, keys, Some(limit), number) {
+                assert_eq!(order, sorted[..limit.min(groups)], "round {round} limit {limit}");
             }
         }
     }
