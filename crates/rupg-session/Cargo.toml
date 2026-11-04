@@ -31,5 +31,9 @@ rupg-sql.workspace = true
 rupg-types.workspace = true
 rupg-wire.workspace = true
 
+[dev-dependencies]
+# mimalloc for the example `ycsb`, the allocator of the rupg binary.
+rupg-platform = { workspace = true, features = ["mimalloc"] }
+
 [lints]
 workspace = true

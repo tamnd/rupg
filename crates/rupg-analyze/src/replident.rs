@@ -30,7 +30,7 @@ fn replica_identity(rel: &Relation) -> u8 {
 /// `RelationGetReplicaIndex` with `RelationGetIndexAttrBitmap` for `INDEX_ATTR_BITMAP_IDENTITY_KEY`: the key columns of the replica identity index of the table, or `None` when the table has no such index. The index is the primary key for `REPLICA IDENTITY DEFAULT` and the chosen index for `REPLICA IDENTITY USING INDEX`. `RelationGetIndexList` skips an index that is not valid, not unique, not immediate or partial.
 fn identity_key(catalog: &Catalog, rel: &Relation) -> Option<Vec<i16>> {
     let code = replica_identity(rel);
-    catalog.relations().find_map(|r| {
+    catalog.indexes_of(rel.oid).find_map(|r| {
         let info = r.index.as_ref()?;
         let usable = info.table == rel.oid
             && info.valid
@@ -278,6 +278,10 @@ fn publication_desc(catalog: &Catalog, rel: &Relation) -> PublicationDesc {
 pub fn check_cmd_replica_identity(catalog: &Catalog, table: u32, kind: WriteKind) -> Result<()> {
     let Some(rel) = catalog.relation(table) else { return Ok(()) };
     if rel.kind != RelKind::Table || !matches!(kind, WriteKind::Update | WriteKind::Delete) {
+        return Ok(());
+    }
+    // With no publication, no publication puts a condition on the table, as `RelationBuildPublicationDesc` finds no publication.
+    if catalog.publications().next().is_none() {
         return Ok(());
     }
     let desc = publication_desc(catalog, rel);

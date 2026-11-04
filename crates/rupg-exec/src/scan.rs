@@ -1154,14 +1154,23 @@ pub(crate) fn point_rows(
     };
     session.count_scan(lookup.relation);
     let mut rows = Vec::with_capacity(found.len());
-    for row in found {
+    let targets: Vec<Option<usize>> = query.targets.iter().map(|t| point_column(&t.expr)).collect();
+    for mut row in found {
         if !lookup.columns.iter().zip(key).all(|(&c, value)| row.get(c) == Some(value)) {
             continue;
         }
-        let values = query
-            .targets
+        // A column that one target reads moves into the row of the result, and a column that more targets read is copied.
+        let values = targets
             .iter()
-            .map(|t| point_column(&t.expr).and_then(|c| row.get(c)).cloned().unwrap_or(Value::Null))
+            .enumerate()
+            .map(|(i, &column)| {
+                let Some(value) = column.and_then(|c| row.get_mut(c)) else { return Value::Null };
+                if targets[i + 1..].contains(&column) {
+                    value.clone()
+                } else {
+                    std::mem::replace(value, Value::Null)
+                }
+            })
             .collect();
         rows.push(values);
     }

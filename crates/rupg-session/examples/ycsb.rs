@@ -18,6 +18,10 @@ use rupg_session::connection::{Client, Connection, Next, Start, base_settings, s
 use rupg_session::store::Store;
 use rupg_wire::{CANCEL_KEY_LEN, CancelKey, OutBuf};
 
+/// mimalloc, the allocator of the rupg binary, so that the run measures what a server does.
+#[global_allocator]
+static ALLOCATOR: rupg_platform::alloc::Counting = rupg_platform::alloc::Counting;
+
 const FIELDS: usize = 10;
 const FIELD_LENGTH: usize = 100;
 const PROTOCOL_3_0: u32 = 3 << 16;
@@ -364,6 +368,7 @@ fn main() {
     let threads: Vec<u32> =
         value("--threads", "1,6").split(',').map(|t| t.parse().expect("--threads N,M")).collect();
     let workloads = value("--workloads", "c,a");
+    rupg_platform::alloc::tune();
     let store = Arc::new(Store::new());
     let started = Instant::now();
     std::thread::Builder::new()
