@@ -759,10 +759,10 @@ impl Connection {
                     heap.hold(self.pid, snapshot);
                     snapshot.clone()
                 }
-                None => kept.insert(heap.held_snapshot(self.pid)).clone(),
+                None => kept.insert(heap.held_snapshot_in(&self.xmin_slot())).clone(),
             }
         } else {
-            heap.held_snapshot(self.pid)
+            heap.held_snapshot_in(&self.xmin_slot())
         };
         View {
             database: self.database_oid,
@@ -1353,10 +1353,14 @@ impl Connection {
     /// `SnapshotResetXmin`: the session holds no snapshot in the heap.
     pub(crate) fn release_xmin(&self) {
         if self.holds_xmin.replace(false) {
-            let mut xmin = self.xmin.borrow_mut();
-            xmin.get_or_insert_with(|| self.store.heap().xmin(self.pid))
-                .store(0, Ordering::Release);
+            self.xmin_slot().store(0, Ordering::Release);
         }
+    }
+
+    /// The `xmin` of the session in the heap, as `Heap::xmin` gives it.
+    fn xmin_slot(&self) -> Arc<AtomicU32> {
+        let mut xmin = self.xmin.borrow_mut();
+        Arc::clone(xmin.get_or_insert_with(|| self.store.heap().xmin(self.pid)))
     }
 
     /// The rows of the tables and the transactions in progress.
