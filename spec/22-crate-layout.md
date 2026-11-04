@@ -155,7 +155,7 @@ With the features of section 22.9 off, the `rupg` facade depends on `libc` and t
 | `libm` | 0.2 | MIT | `rupg-func` | `wasm32` only | the math functions where no C library exists |
 | `libmimalloc-sys` | 0.1, features `v2` and `no_thp` | MIT | `rupg-platform`, for the `rupg` binary only | `mimalloc`, which only `rupg-cli` turns on | rudb measured mimalloc 3 at twice the time of mimalloc 2 on its load, and transparent huge pages turned a 0.44 s load into 0.85 s (`rudb/Cargo.toml` at `cd9f9676`) |
 
-The `rupg` binary forbids `unsafe` code, so the calls into mimalloc are in `rupg-platform` under `Counting`, and the binary turns on the feature through the facade. A program that links the library keeps its own allocator. With mimalloc, each thread has its own heap, so the sessions do not wait on the two arenas that `tune()` gives the allocator of the C library.
+The `rupg` binary forbids `unsafe` code, so the calls into mimalloc are in `rupg-platform` under `Counting`, and the binary turns on the feature through the facade. A program that links the library keeps its own allocator. With mimalloc, each thread has its own heap, so the sessions do not wait on the two arenas that `tune()` gives the allocator of the C library. With mimalloc, `tune()` sets the purge delay to 1000 ms in place of 10 ms, so that a query uses its free pages again before the kernel clears new pages. On ClickBench Q33 with 2M rows, this decreases the CPU time from 1633 ms to 1421 ms.
 
 The table has `sha2` and the others as always on, because SCRAM is part of every server build and the library needs `md5()` and `sha256()`. They are small and pure Rust.
 
