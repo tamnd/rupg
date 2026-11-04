@@ -662,9 +662,9 @@ impl<'a> Reader<'a> {
             Request::Deadlock(cycle) => return Err(deadlock(&cycle)),
             Request::Queued => {}
         }
-        activity.report_wait(store, Some(event));
+        activity.report_wait(Some(event));
         let result = self.wait_lock(store, tag, mode, session);
-        activity.report_wait(store, None);
+        activity.report_wait(None);
         if result.is_err() {
             locks.leave_queue(tag, self.pid);
         }
@@ -691,7 +691,7 @@ impl<'a> Reader<'a> {
         let (activity, store) = self.server()?;
         let heap = store.heap();
         heap.wait(xid, holder);
-        activity.report_wait(store, Some(TRANSACTION_ID));
+        activity.report_wait(Some(TRANSACTION_ID));
         let start = now(self.clock);
         let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
         let limit = match self.timeout("lock_timeout") {
@@ -725,7 +725,7 @@ impl<'a> Reader<'a> {
             }
             store.nap(slice);
         }
-        activity.report_wait(store, None);
+        activity.report_wait(None);
         heap.waited(xid);
         result
     }
@@ -1012,7 +1012,7 @@ impl rupg_func::Session for Reader<'_> {
                 "a wait in a session with no server is not supported yet",
             ));
         };
-        activity.report_wait(store, Some(PG_SLEEP));
+        activity.report_wait(Some(PG_SLEEP));
         let end = now(self.clock).saturating_add(micros);
         while !self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             let time = now(self.clock);
@@ -1025,7 +1025,7 @@ impl rupg_func::Session for Reader<'_> {
             }
             store.nap(Duration::from_micros(left.min(SLEEP_SLICE_US).cast_unsigned()));
         }
-        activity.report_wait(store, None);
+        activity.report_wait(None);
         Ok(())
     }
 

@@ -253,9 +253,7 @@ fn not_supported(what: String) -> Error {
 impl Connection {
     /// Takes the lock of the catalog of the database for the transaction. PostgreSQL has no such lock, so the wait shows as the wait for the lock of an object, and the holder is in `pg_blocking_pids`.
     pub(super) fn lease_catalog(&self) -> Result<Lease, Error> {
-        let report = |waits: bool| {
-            self.activity.report_wait(&self.store, waits.then_some(("Lock", "object")))
-        };
+        let report = |waits: bool| self.activity.report_wait(waits.then_some(("Lock", "object")));
         self.store.lease(self.database_oid, self.pid, &self.cancel, &report)
     }
 

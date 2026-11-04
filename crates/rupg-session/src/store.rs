@@ -1,7 +1,7 @@
 //! The catalogs that the sessions of a server share, one for each database, the lock of the statements that change a catalog, the rows of `pg_database`, and the table of the sessions.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -39,6 +39,8 @@ const BUSY_TRIES: u32 = 50;
 #[derive(Debug, Default)]
 pub struct Store {
     state: Mutex<State>,
+    /// The count of the changes of the catalog of the last commit of a database, of the rows of `pg_database` and of the roles. A session keeps what it read of them while the count stays, so a statement does not lock [`Store::state`].
+    generation: AtomicU64,
     free: Condvar,
     /// The tasks of the server. A session that waits for the lock lets the other tasks run, because the simulated scheduler runs all the tasks on one thread.
     tasks: Option<Arc<dyn Tasks>>,
@@ -68,10 +70,17 @@ pub struct Store {
     listeners: Listeners,
 }
 
+/// What [`Store::committed_view`] gives: the count of [`Store::generation`], the catalog of the last commit of a database, the roles and the owner of the database.
+pub(crate) type CommittedView = (u64, Arc<Catalog>, Arc<Roles>, u32);
+
+/// The row of a session in the table of the sessions.
+pub(crate) type Row = Arc<Mutex<Backend>>;
+
 /// A slot of the table of the sessions.
 #[derive(Debug)]
 struct Slot {
-    backend: Backend,
+    /// The row of the session. The session keeps its own handle of the row, so that a change of the row takes no lock of the table.
+    backend: Row,
     /// The flag that tells the session to end, as `SIGTERM` does. A session with the flag does not count as a session of its database.
     end: Arc<AtomicBool>,
 }
@@ -182,9 +191,25 @@ impl Store {
             .collect()
     }
 
-    /// The roles and the memberships of the last commit.
-    pub(crate) fn roles(&self) -> Arc<Roles> {
-        Arc::clone(&self.state().roles)
+    /// The count of the changes of [`Store::committed`], of the roles and of the owners of the databases. A change adds one to the count while the state is locked.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// The catalog of the last commit of a database, the roles and the owner of the database, under one lock of the state, with the count of [`Store::generation`] that they have.
+    pub(crate) fn committed_view(&self, database: u32) -> CommittedView {
+        let state = self.state();
+        let generation = self.generation.load(Ordering::Acquire);
+        let (catalog, owner) = match state.databases.get(&database) {
+            Some(db) => (Arc::clone(&db.committed), db.row.owner),
+            None => (crate::system::catalog(), 10),
+        };
+        (generation, catalog, Arc::clone(&state.roles), owner)
+    }
+
+    /// Notes a change of the state that [`Store::committed_view`] reads. The caller holds the lock of the state.
+    fn changed(&self) {
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -245,11 +270,6 @@ impl Store {
             ));
         }
         Ok(())
-    }
-
-    /// `datdba` of a database at the last commit, or the bootstrap superuser for a database that does not exist.
-    pub(crate) fn database_owner(&self, oid: u32) -> u32 {
-        self.state().databases.get(&oid).map_or(10, |db| db.row.owner)
     }
 
     /// `dathasloginevt` of a database.
@@ -508,6 +528,7 @@ impl Store {
         state.next_oid = next;
         let oid = row.oid;
         state.databases.insert(oid, Db { row, committed, locked: None });
+        self.changed();
         drop(state);
         self.log_catalog(true);
         Ok(oid)
@@ -521,7 +542,8 @@ impl Store {
     pub(crate) fn drop_database(&self, row: &Database, force: bool, me: Option<i32>) -> Result<()> {
         if force {
             for slot in self.backends_mut().iter().flatten() {
-                if slot.backend.database == row.oid && Some(slot.backend.number) != me {
+                let backend = lock(&slot.backend);
+                if backend.database == row.oid && Some(backend.number) != me {
                     slot.end.store(true, Ordering::Relaxed);
                 }
             }
@@ -535,6 +557,7 @@ impl Store {
         }
         let mut state = self.state();
         state.databases.remove(&row.oid);
+        self.changed();
         // `DropSetting`.
         state.settings.retain(|&(database, _), _| database != row.oid);
         drop(state);
@@ -550,8 +573,9 @@ impl Store {
                 .iter()
                 .flatten()
                 .filter(|slot| {
-                    slot.backend.database == database
-                        && Some(slot.backend.number) != me
+                    let backend = lock(&slot.backend);
+                    backend.database == database
+                        && Some(backend.number) != me
                         && !slot.end.load(Ordering::Relaxed)
                 })
                 .count()
@@ -648,8 +672,8 @@ impl Store {
         self.backends.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `pgstat_bestart`: puts a session in the first free slot of the table, and gives the number of the slot. The session ends when another session sets `end`.
-    pub(crate) fn join(&self, mut backend: Backend, end: Arc<AtomicBool>) -> i32 {
+    /// `pgstat_bestart`: puts a session in the first free slot of the table, and gives the number of the slot and the row. The session ends when another session sets `end`.
+    pub(crate) fn join_row(&self, mut backend: Backend, end: Arc<AtomicBool>) -> (i32, Row) {
         let _ = self.stats_reset.compare_exchange(
             0,
             backend.backend_start,
@@ -660,13 +684,20 @@ impl Store {
         let slot = backends.iter().position(Option::is_none).unwrap_or(backends.len());
         let number = i32::try_from(slot).unwrap_or(i32::MAX);
         backend.number = number;
-        let entry = Some(Slot { backend, end });
+        let row = Arc::new(Mutex::new(backend));
+        let entry = Some(Slot { backend: Arc::clone(&row), end });
         if slot == backends.len() {
             backends.push(entry);
         } else {
             backends[slot] = entry;
         }
-        number
+        (number, row)
+    }
+
+    /// [`Store::join_row`], with the number of the slot only.
+    #[cfg(test)]
+    pub(crate) fn join(&self, backend: Backend, end: Arc<AtomicBool>) -> i32 {
+        self.join_row(backend, end).0
     }
 
     /// The end of a session, which frees its slot.
@@ -680,10 +711,14 @@ impl Store {
     }
 
     /// Changes the row of the session with this number.
+    #[cfg(test)]
     pub(crate) fn report(&self, number: i32, change: impl FnOnce(&mut Backend)) {
-        let mut backends = self.backends_mut();
-        if let Some(Some(slot)) = usize::try_from(number).ok().and_then(|at| backends.get_mut(at)) {
-            change(&mut slot.backend);
+        let row = self
+            .backends_mut()
+            .get(usize::try_from(number).unwrap_or(usize::MAX))
+            .and_then(|slot| slot.as_ref().map(|slot| Arc::clone(&slot.backend)));
+        if let Some(row) = row {
+            change(&mut lock(&row));
         }
     }
 
@@ -789,11 +824,17 @@ impl Store {
             .iter()
             .flatten()
             .map(|slot| {
-                let (xid, xmin) = heap.transaction_ids(slot.backend.pid);
-                Backend { xid, xmin, ..slot.backend.clone() }
+                let backend = lock(&slot.backend).clone();
+                let (xid, xmin) = heap.transaction_ids(backend.pid);
+                Backend { xid, xmin, ..backend }
             })
             .collect()
     }
+}
+
+/// Locks the row of a session.
+pub(crate) fn lock(row: &Row) -> MutexGuard<'_, Backend> {
+    row.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The error of a database that other sessions use, with `errdetail_busy_db`.
@@ -860,6 +901,7 @@ impl Lease {
                 Arc::new(rebase(&state.roles, &self.base, &self.roles))
             };
         }
+        self.store.changed();
         drop(state);
         self.store.log_catalog(false);
     }
@@ -925,6 +967,7 @@ impl Drop for Lease {
         if let Some(db) = state.databases.get_mut(&self.database) {
             if db.committed.next_oid() < next {
                 Arc::make_mut(&mut db.committed).advance_oid(next);
+                self.store.changed();
             }
             db.locked = None;
         }

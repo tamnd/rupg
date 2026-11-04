@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A statement of one session takes fewer locks that all the sessions share: each session changes its own row of `pg_stat_activity`, keeps the catalog until a commit changes it, clears its `xmin` with no lock of the heap, and skips the table of the heavyweight locks at the end of a transaction when no session holds a lock (#1326).
 - A read of one unique key finds the key map of the table with no new `Unique` and no list of places, hashes the key with no row around it, and copies the list of versions only when the key has more than one version (#1321).
 - A plain `UPDATE` or `DELETE` of one table whose `WHERE` is only `=` of each key column of a unique index finds the versions of the key with no plan of a scan. The values of `SET` can be columns, parameters and constants (#1319).
 - The versions of more than one key of `= ANY` on a unique index come in the order of the heap, as a scan of the table and a bitmap scan give them in PostgreSQL. Before, they came in the order of the keys (#1318).
