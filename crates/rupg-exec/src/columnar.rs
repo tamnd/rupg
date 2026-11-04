@@ -3044,6 +3044,9 @@ fn word_order(
             numbers.into_iter().map(|(_, _, g)| g as usize).collect()
         }
         _ => {
+            if let Some(order) = packed_order(groups, places.len(), |g, p| number(g, &places[p])) {
+                return Some(order);
+            }
             let n = places.len();
             let numbers: Vec<u128> = (0..groups)
                 .flat_map(|g| places.iter().map(move |p| (g, p)))
@@ -3057,6 +3060,43 @@ fn word_order(
         }
     };
     Some(order)
+}
+
+/// The order of `groups` groups by `keys` numbers of each, when the numbers less their least value fit together in 128 bits. `number` gives the number of a key of a group. A sort of one number for each group compares no memory, and groups with equal numbers stay in their order.
+fn packed_order(
+    groups: usize,
+    keys: usize,
+    number: impl Fn(usize, usize) -> u128,
+) -> Option<Vec<usize>> {
+    let mut least = vec![u128::MAX; keys];
+    let mut most = vec![0_u128; keys];
+    for g in 0..groups {
+        for k in 0..keys {
+            let n = number(g, k);
+            least[k] = least[k].min(n);
+            most[k] = most[k].max(n);
+        }
+    }
+    let bits: Vec<u32> =
+        (0..keys).map(|k| 128 - (most[k].saturating_sub(least[k])).leading_zeros()).collect();
+    if bits.iter().sum::<u32>() > 128 {
+        return None;
+    }
+    let mut numbers: Vec<(u128, u32)> = (0..groups)
+        .map(|g| {
+            let packed = (0..keys).fold(0_u128, |packed, k| {
+                // A key of no bits has one value and adds nothing.
+                if bits[k] == 0 {
+                    packed
+                } else {
+                    packed.checked_shl(bits[k]).unwrap_or(0) | (number(g, k) - least[k])
+                }
+            });
+            (packed, g as u32)
+        })
+        .collect();
+    numbers.sort_unstable();
+    Some(numbers.into_iter().map(|(_, g)| g as usize).collect())
 }
 
 /// The place of the code of each group in the order of the bytes of the codes of the groups, from a sort of each code once. Codes with the same bytes have the same place. A null group, for which `null` is true, has the place 0.
@@ -3179,6 +3219,34 @@ mod tests {
     use super::*;
 
     /// Floats whose low bits are zero go into many buckets of a small table.
+    /// A packed sort gives the order of a sort of the keys one after another, with equal keys in the order of their groups.
+    #[test]
+    fn a_packed_order_is_the_order_of_the_keys() {
+        let mut seed = 7_u64;
+        for round in 0..200_u32 {
+            let keys = 3 + round as usize % 3;
+            let groups = 1 + (round as usize * 13) % 400;
+            let range = [2_u128, 50, 1 << 20, 1 << 40][round as usize % 4];
+            let numbers: Vec<u128> = (0..groups * keys)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    u128::from(seed >> 20) % range + (1 << 64)
+                })
+                .collect();
+            let number = |g: usize, k: usize| numbers[g * keys + k];
+            let mut sorted: Vec<usize> = (0..groups).collect();
+            sorted.sort_by(|&a, &b| {
+                numbers[a * keys..(a + 1) * keys]
+                    .cmp(&numbers[b * keys..(b + 1) * keys])
+                    .then(a.cmp(&b))
+            });
+            match packed_order(groups, keys, number) {
+                Some(order) => assert_eq!(order, sorted, "round {round}"),
+                None => assert_eq!(range, 1 << 40, "round {round}"),
+            }
+        }
+    }
+
     #[test]
     fn words_with_zero_low_bits_spread_over_the_buckets() {
         let build = rupg_kernels::hash::Build;

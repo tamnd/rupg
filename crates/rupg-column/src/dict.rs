@@ -180,7 +180,7 @@ impl Dictionary {
     pub fn order(&self) -> &[u32] {
         self.order.get_or_init(|| {
             let mut codes: Vec<u32> = (1..=self.ends.len() as u32).collect();
-            codes.sort_unstable_by(|&a, &b| self.get(a).cmp(self.get(b)));
+            sort_bytes(&mut codes, |c| self.get(c));
             let mut places = vec![0; self.ends.len() + 1];
             for (place, &code) in codes.iter().enumerate() {
                 places[code as usize] = place as u32 + 1;
@@ -202,9 +202,72 @@ impl Dictionary {
     }
 }
 
+/// A run of codes shorter than this is sorted by a compare of the bytes after the digits that it has in common.
+const SMALL_RUN: usize = 32;
+
+/// Sorts `codes` by the bytes that `get` gives for each, as a sort of the bytes does. The sort takes eight bytes at a time as one number, so that most compares are of numbers. The codes of a run with the same eight bytes are sorted by the next eight bytes. Texts with a long common start, such as URLs, need no compare of the common start for each pair.
+fn sort_bytes<'a>(codes: &mut [u32], get: impl Fn(u32) -> &'a [u8]) {
+    let mut runs = vec![(0, codes.len(), 0)];
+    let mut keys: Vec<(u64, u8, u32)> = Vec::new();
+    while let Some((start, end, depth)) = runs.pop() {
+        let run = &mut codes[start..end];
+        if run.len() < SMALL_RUN {
+            run.sort_unstable_by(|&a, &b| get(a)[depth..].cmp(&get(b)[depth..]));
+            continue;
+        }
+        keys.clear();
+        keys.extend(run.iter().map(|&c| {
+            let rest = &get(c)[depth..];
+            let mut digit = [0_u8; 8];
+            let n = rest.len().min(8);
+            digit[..n].copy_from_slice(&rest[..n]);
+            // A text that ends in the digit comes before a longer text with the same digit, and one with more bytes after the digit gets 9.
+            (u64::from_be_bytes(digit), rest.len().min(9) as u8, c)
+        }));
+        keys.sort_unstable();
+        for (to, &(_, _, c)) in run.iter_mut().zip(&keys) {
+            *to = c;
+        }
+        let mut at = 0;
+        while at < keys.len() {
+            let (digit, tag, _) = keys[at];
+            let same = keys[at..].iter().take_while(|k| k.0 == digit && k.1 == tag).count();
+            if tag == 9 && same > 1 {
+                runs.push((start + at, start + at + same, depth + 8));
+            }
+            at += same;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The order of the codes is the order of a sort of their bytes, for texts with long common starts, texts that are the start of others, and zero bytes.
+    #[test]
+    fn a_sort_by_eight_bytes_is_the_sort_of_the_bytes() {
+        let mut dict = Dictionary::new();
+        let mut seed = 1_u64;
+        for i in 0..20_000_u32 {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let mut text = format!("http://example.com/path/{}", seed % 977).into_bytes();
+            text.truncate((seed >> 40) as usize % 40);
+            if i % 7 == 0 {
+                text.push(0);
+            }
+            if i % 11 == 0 {
+                text.extend(std::iter::repeat_n(b'a', i as usize % 30));
+            }
+            dict.intern(&text);
+        }
+        let mut sorted: Vec<u32> = (1..=dict.len() as u32).collect();
+        sorted.sort_by(|&a, &b| dict.get(a).cmp(dict.get(b)));
+        let order = dict.order();
+        for (place, &code) in sorted.iter().enumerate() {
+            assert_eq!(order[code as usize], place as u32 + 1, "{:?}", dict.get(code));
+        }
+    }
 
     #[test]
     fn codes_are_stable_and_start_at_one() {
