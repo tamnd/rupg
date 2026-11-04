@@ -1,0 +1,108 @@
+> create table pw (k varchar(24) primary key, a int, b text)
+CREATE TABLE
+> insert into pw select 'user' || i, i, 'v' || i from generate_series(1, 50) i
+INSERT 0 50
+> update pw set b = 'x1' where k = 'user1'
+UPDATE 1
+> select * from pw where k = 'user1'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user1,1,x1
+SELECT 1
+> update pw set a = 7, b = 'x2' where k = 'user2'
+UPDATE 1
+> select * from pw where k = 'user2'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user2,7,x2
+SELECT 1
+> update pw set b = 'none' where k = 'user99'
+UPDATE 0
+> update pw set b = null where k = null
+UPDATE 0
+> update pw set k = 'user100' where k = 'user3'
+UPDATE 1
+> select * from pw where k = 'user3'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+SELECT 0
+> select * from pw where k = 'user100'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user100,3,v3
+SELECT 1
+> update pw set k = 'user5' where k = 'user4'
+ERROR 23505 duplicate key value violates unique constraint "pw_pkey"
+> begin
+BEGIN
+> update pw set b = 't1' where k = 'user6'
+UPDATE 1
+> update pw set b = 't2' where k = 'user6'
+UPDATE 1
+> select * from pw where k = 'user6'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user6,6,t2
+SELECT 1
+> rollback
+ROLLBACK
+> select * from pw where k = 'user6'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user6,6,v6
+SELECT 1
+> begin
+BEGIN
+> delete from pw where k = 'user7'
+DELETE 1
+> update pw set b = 'gone' where k = 'user7'
+UPDATE 0
+> rollback
+ROLLBACK
+> select * from pw where k = 'user7'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user7,7,v7
+SELECT 1
+> delete from pw where k = 'user8'
+DELETE 1
+> delete from pw where k = 'user8'
+DELETE 0
+> select * from pw where k = 'user8'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+SELECT 0
+> prepare up(text, varchar) as update pw set b = $1 where k = $2
+PREPARE
+> execute up('p1', 'user9')
+UPDATE 1
+> execute up('p2', 'user9')
+UPDATE 1
+> select * from pw where k = 'user9'
+fields k@pw.1:1043:-1:28,a@pw.2:23:4:-1,b@pw.3:25:-1:-1
+row user9,9,p2
+SELECT 1
+> prepare dl(varchar) as delete from pw where k = $1
+PREPARE
+> execute dl('user10')
+DELETE 1
+> execute dl('user10')
+DELETE 0
+> select count(*) from pw
+fields count:20:8:-1
+row 48
+SELECT 1
+> create table pc (k int primary key, n int check (n > 0))
+CREATE TABLE
+> insert into pc values (1, 1)
+INSERT 0 1
+> update pc set n = 0 where k = 1
+ERROR 23514 new row for relation "pc" violates check constraint "pc_n_check"
+> create table pr (k int primary key, n int)
+CREATE TABLE
+> insert into pr values (1, 1), (2, 2)
+INSERT 0 2
+> update pr set n = 5 where k = 1 returning *
+fields k@pr.1:23:4:-1,n@pr.2:23:4:-1
+row 1,5
+UPDATE 1
+> delete from pr where k = 2 returning k
+fields k@pr.1:23:4:-1
+row 2
+DELETE 1
+> select * from pr order by k
+fields k@pr.1:23:4:-1,n@pr.2:23:4:-1
+row 1,5
+SELECT 1

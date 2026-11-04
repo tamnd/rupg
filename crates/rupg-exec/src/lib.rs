@@ -2095,7 +2095,14 @@ impl Plan {
         if let Some(row) = self.given_row(params) {
             return Ok(vec![row]);
         }
-        run_query(self.runnable(), params, session, &self.cache(), &[], false)
+        let query = self.runnable();
+        if self.row_security.is_none()
+            && scan::point_shape(query)
+            && let Some(rows) = scan::point_rows(query, params, session)?
+        {
+            return Ok(rows);
+        }
+        run_query(query, params, session, &self.cache(), &[], false)
     }
 
     /// The one row of an `INSERT ... VALUES` of one row whose targets are all parameters and constants, with no `FROM`, or `None` for another query. The run of such a query evaluates only these targets, so the row is their values, and the plan does not need to run.

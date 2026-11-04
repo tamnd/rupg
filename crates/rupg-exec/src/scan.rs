@@ -1090,10 +1090,29 @@ pub(crate) fn unique_key(query: &Query, params: &[Value], session: &dyn Session)
     key_lookup(query, (&conds, params), session).is_some()
 }
 
-/// True when a query has the form of a point read, which [`point_rows`] can run: a `SELECT` of one relation whose targets are plain columns of it, with a `WHERE` and no other clause.
+/// True when a query has the form of a point read, which [`point_rows`] can run: a query of one relation whose targets are each a plain column, with a `WHERE` and no other clause. It is a `SELECT`, or a plain `UPDATE` or `DELETE` of the table, whose targets can also be a parameter, a constant and the ID of the version.
 pub(crate) fn point_shape(query: &Query) -> bool {
-    query.write.is_none()
-        && matches!(query.from.as_slice(), [FromItem::Relation(0)])
+    let write = match &query.write {
+        None => false,
+        Some(w) => {
+            if !matches!(w.kind, rupg_analyze::WriteKind::Update | rupg_analyze::WriteKind::Delete)
+                || !w.checks.is_empty()
+                || w.returning.is_some()
+                || w.on_conflict.is_some()
+                || w.merge.is_some()
+                || w.recheck.is_some()
+                || w.instead
+                || w.inherit
+                || w.view_check.is_some()
+                || w.policy_check.is_some()
+                || w.views > 0
+            {
+                return false;
+            }
+            true
+        }
+    };
+    matches!(query.from.as_slice(), [FromItem::Relation(0)])
         && query.relations.len() == 1
         && query.filter.is_some()
         && !query.grouped
@@ -1110,15 +1129,38 @@ pub(crate) fn point_shape(query: &Query) -> bool {
         && query.security.is_empty()
         && query.barrier.is_empty()
         && query.out_args.is_empty()
-        && query.targets.iter().all(|t| !t.junk && point_column(&t.expr).is_some())
+        && query.targets.iter().all(|t| {
+            !t.junk && point_target(&t.expr).is_some_and(|p| write || matches!(p, Point::Column(_)))
+        })
 }
 
-/// The column of the table of a point read that a target reads: a column of the user, with no cast.
-fn point_column(expr: &Expr) -> Option<usize> {
+/// What a target of a point read gives.
+#[derive(Clone, Copy, PartialEq)]
+enum Point<'q> {
+    /// A column of the user, from 0, with no cast.
+    Column(usize),
+    /// The ID of the version, as the `ctid` of type `bigint` that an `UPDATE` and a `DELETE` carry.
+    Tid,
+    /// The parameter, from 1.
+    Param(usize),
+    Const(&'q Value),
+}
+
+fn point_target(expr: &Expr) -> Option<Point<'_>> {
     match &expr.kind {
         ExprKind::Var(var) if var.levels_up == 0 && var.relation == 0 && var.attnum > 0 => {
-            usize::try_from(var.attnum - 1).ok()
+            usize::try_from(var.attnum - 1).ok().map(Point::Column)
         }
+        ExprKind::Var(var)
+            if var.levels_up == 0
+                && var.relation == 0
+                && var.attnum == CTID_ATTNUM
+                && expr.ty == oid::INT8 =>
+        {
+            Some(Point::Tid)
+        }
+        ExprKind::Param(n) if *n > 0 => Some(Point::Param(*n)),
+        ExprKind::Const(value) => Some(Point::Const(value)),
         _ => None,
     }
 }
@@ -1161,22 +1203,31 @@ pub(crate) fn point_rows(
     };
     session.count_scan(lookup.relation);
     let mut rows = Vec::with_capacity(found.len());
-    let targets: Vec<Option<usize>> = query.targets.iter().map(|t| point_column(&t.expr)).collect();
+    let targets: Vec<Option<Point<'_>>> =
+        query.targets.iter().map(|t| point_target(&t.expr)).collect();
     for mut row in found {
         if !lookup.columns.iter().zip(key).all(|(&c, value)| row.get(c) == Some(value)) {
             continue;
         }
+        // The ID of the version is the last value of the row.
+        let tid = row.pop().unwrap_or(Value::Null);
         // A column that one target reads moves into the row of the result, and a column that more targets read is copied.
         let values = targets
             .iter()
             .enumerate()
-            .map(|(i, &column)| {
-                let Some(value) = column.and_then(|c| row.get_mut(c)) else { return Value::Null };
-                if targets[i + 1..].contains(&column) {
-                    value.clone()
-                } else {
-                    std::mem::replace(value, Value::Null)
+            .map(|(i, target)| match *target {
+                Some(Point::Column(c)) => {
+                    let Some(value) = row.get_mut(c) else { return Value::Null };
+                    if targets[i + 1..].contains(target) {
+                        value.clone()
+                    } else {
+                        std::mem::replace(value, Value::Null)
+                    }
                 }
+                Some(Point::Tid) => tid.clone(),
+                Some(Point::Param(n)) => params.get(n - 1).cloned().unwrap_or(Value::Null),
+                Some(Point::Const(value)) => value.clone(),
+                None => Value::Null,
             })
             .collect();
         rows.push(values);

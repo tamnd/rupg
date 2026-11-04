@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A plain `UPDATE` or `DELETE` of one table whose `WHERE` is only `=` of each key column of a unique index finds the versions of the key with no plan of a scan. The values of `SET` can be columns, parameters and constants (#1319).
 - The versions of more than one key of `= ANY` on a unique index come in the order of the heap, as a scan of the table and a bitmap scan give them in PostgreSQL. Before, they came in the order of the keys (#1318).
 - A check of the replica identity of an `UPDATE` or a `DELETE` stops when the database has no publication, and the point read moves the values of the row into the result with no copy. The example `ycsb` of rupg-session uses mimalloc, the allocator of the server (#1315).
 - A `SELECT` of plain columns of one table whose `WHERE` is only `=` of each key column of a unique index reads the versions of the key with no plan of a scan, and the example `ycsb` of rupg-session runs the YCSB workloads on sessions in the process (#1312).
