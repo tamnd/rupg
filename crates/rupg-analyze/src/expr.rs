@@ -1087,10 +1087,8 @@ impl Expr {
         if let Some(found) = f(self, depth) {
             return Some(found);
         }
-        for child in self.children() {
-            if let Some(found) = child.find(depth, f) {
-                return Some(found);
-            }
+        if let Some(found) = self.find_child(&mut |child| child.find(depth, &mut *f)) {
+            return Some(found);
         }
         if let ExprKind::SubLink(sub) = &self.kind {
             for (expr, depth) in sub.query.all_exprs(depth + 1) {
@@ -1100,6 +1098,37 @@ impl Expr {
             }
         }
         None
+    }
+
+    /// The first `Some` that `f` gives for an argument of the expression, in the order of [`Expr::children`]. The common kinds of expressions give their arguments with no list, so that a search of a large expression does not allocate a list at each node.
+    fn find_child<'a, T>(&'a self, f: &mut impl FnMut(&'a Expr) -> Option<T>) -> Option<T> {
+        let args: &'a [Expr] = match &self.kind {
+            ExprKind::Const(_)
+            | ExprKind::Param(_)
+            | ExprKind::CaseTest
+            | ExprKind::DomainValue
+            | ExprKind::SqlValue(_)
+            | ExprKind::Var(_)
+            | ExprKind::SubColumn(_) => return None,
+            ExprKind::Func(func) => &func.args,
+            ExprKind::Bool(_, args)
+            | ExprKind::Coalesce(args)
+            | ExprKind::Row(args, _)
+            | ExprKind::MinMax { args, .. }
+            | ExprKind::NullIf { args, .. }
+            | ExprKind::Distinct { args, .. }
+            | ExprKind::ScalarArrayOp { args, .. }
+            | ExprKind::Array { elements: args, .. } => args,
+            ExprKind::Relabel(arg, _)
+            | ExprKind::Collate(arg, _)
+            | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::CoerceToDomain(arg, _)
+            | ExprKind::NullTest(arg, _)
+            | ExprKind::BooleanTest(arg, _)
+            | ExprKind::FieldSelect(arg, _) => return f(arg),
+            _ => return self.children().into_iter().find_map(f),
+        };
+        args.iter().find_map(f)
     }
 
     /// The first column of the query of the expression that the expression reads, also in a subquery, as `locate_var_of_level` finds it with level 0.
