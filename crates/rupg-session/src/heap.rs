@@ -1404,7 +1404,7 @@ impl Table {
 
     /// The place of the version `tid`.
     fn find(&self, tid: u64) -> Option<usize> {
-        self.versions.binary_search_by_key(&tid, |version| version.tid).ok()
+        place_of(&self.versions, tid)
     }
 
     /// `heap_page_prune_opt` for one key: the IDs of the versions that went, and of the versions that are dead to each snapshot, leave the list of the hash `hash` in the map `place`. So a read of a key that changed many times does not test each old version again until `VACUUM`. A version is dead when a transaction before `horizon` that is not in `running` deleted it, as in [`Heap::vacuum`].
@@ -1412,12 +1412,12 @@ impl Table {
         let Table { keys, versions, .. } = self;
         let Some(map) = keys.get_mut(place) else { return };
         let Some(tids) = map.hashes.get_mut(&hash).filter(|tids| tids.len() > 1) else { return };
-        let dead = |tid: u64| match versions.binary_search_by_key(&tid, |version| version.tid) {
-            Ok(at) => {
+        let dead = |tid: u64| match place_of(versions, tid) {
+            Some(at) => {
                 let xmax = versions[at].xmax;
                 xmax != 0 && !running.contains(&xmax) && xmax < horizon
             }
-            Err(_) => true,
+            None => true,
         };
         tids.retain(|&tid| !dead(tid));
     }
@@ -2032,7 +2032,8 @@ impl Heap {
         let mut guard = self.state();
         let state = &mut *guard;
         let horizon = state.horizon().min(view.snapshot.xmin());
-        let running = Arc::clone(&state.running);
+        // A borrow of the set and not a clone of the `Arc`, as the count of the `Arc` is on a line of the cache that the other connections also write.
+        let running = &*state.running;
         let Some(table) = state.tables.0.get_mut(&(view.database, relation)) else {
             return Some(Vec::new());
         };
@@ -2063,7 +2064,7 @@ impl Heap {
         let Some(hash) = table.keys[place].hash_key(key) else {
             return Some(Vec::new());
         };
-        table.prune_key(place, hash, (horizon, &*running));
+        table.prune_key(place, hash, (horizon, running));
         let found = table.keys[place].hashes.get(&hash).map_or(&[][..], Vec::as_slice);
         // A key has one version in most cases, so only more than one version needs a sorted copy of the list.
         let mut sorted = Vec::new();
@@ -3136,6 +3137,30 @@ fn version_row(
     }
     row.push(Value::Int8(version.tid.cast_signed()));
     row
+}
+
+/// The place of the version `tid` in `versions`, which come in the order of their IDs. The item pointers of a heap grow at about the same rate as the places of the versions, so a guess from the IDs at the two ends of the range is near the version. A few guesses make the range small, then a binary search of the range finds the version. A binary search of a large table reads many versions that are not in the cache.
+fn place_of(versions: &[Version], tid: u64) -> Option<usize> {
+    let (mut low, mut high) = (0, versions.len());
+    for _ in 0..4 {
+        if high - low <= 8 {
+            break;
+        }
+        let (first, last) = (versions[low].tid, versions[high - 1].tid);
+        if tid < first || tid > last {
+            return None;
+        }
+        let span = u128::from(last - first).max(1);
+        let width = u128::try_from(high - 1 - low).unwrap_or(u128::MAX);
+        let guess = u128::from(tid - first) * width / span;
+        let at = low + usize::try_from(guess).unwrap_or(high - 1 - low);
+        match versions[at].tid.cmp(&tid) {
+            Ordering::Equal => return Some(at),
+            Ordering::Less => low = at + 1,
+            Ordering::Greater => high = at,
+        }
+    }
+    versions[low..high].binary_search_by_key(&tid, |version| version.tid).ok().map(|at| low + at)
 }
 
 /// `HeapTupleSatisfiesMVCC`: true if the view sees the version.
