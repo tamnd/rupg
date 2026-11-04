@@ -1467,7 +1467,9 @@ impl Results<'_> {
     fn counts(&self, c: usize) -> Option<&[i64]> {
         let call = &self.calls[c];
         match (&call.method, &call.states) {
-            (Method::Count | Method::CountArg, States::Count(states)) => Some(states),
+            (Method::Count | Method::CountArg | Method::Distinct, States::Count(states)) => {
+                Some(states)
+            }
             _ => None,
         }
     }
@@ -1477,9 +1479,7 @@ impl Results<'_> {
         let call = &self.calls[c];
         Ok(match (&call.method, &call.states) {
             (Method::Count | Method::CountArg, States::Count(states)) => Value::Int8(states[g]),
-            (Method::Distinct, States::Distinct(states)) => {
-                Value::Int8(i64::try_from(states[g].len()).unwrap_or(i64::MAX))
-            }
+            (Method::Distinct, States::Count(states)) => Value::Int8(states[g]),
             (Method::SumInt, States::Sum(states)) => match states[g] {
                 (0, _) => Value::Null,
                 (_, sum) => Value::Int8(i64::try_from(sum).map_err(|_| {
@@ -2974,6 +2974,12 @@ fn grouped(
                     .map(|state| agg.finish(state, &eval))
                     .collect::<Result<Vec<_>>>()?;
                 call.states = States::Done(done);
+            }
+            // The count of the values of each group, so that `ORDER BY` of the count reads the counts as for `count(*)`, and the sets go.
+            (Method::Distinct, States::Distinct(states)) => {
+                call.states = States::Count(
+                    states.iter().map(|s| i64::try_from(s.len()).unwrap_or(i64::MAX)).collect(),
+                );
             }
             // `int8_sum` gives the error of a sum out of the range of `bigint` for each group, also for a group that `LIMIT` does not keep.
             (Method::SumInt, States::Sum(states))
