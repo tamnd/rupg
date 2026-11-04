@@ -85,6 +85,24 @@ impl Hasher for Fold {
     }
 }
 
+/// Asks the processor to bring the cache line of `data` into the first level cache, so that a later read of it waits less. A probe of a hash table that is larger than the cache starts the read of its bucket some rows before the probe. It has no other effect, and does nothing on other processors.
+#[inline]
+pub fn prefetch<T>(data: &T) {
+    let at = std::ptr::from_ref(data);
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: a prefetch only gives a hint to the cache. It changes no memory and cannot fault, and `at` comes from a reference.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(at.cast::<i8>());
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: a prefetch only gives a hint to the cache. It changes no memory and cannot fault, and `at` comes from a reference.
+    unsafe {
+        std::arch::asm!("prfm pldl1keep, [{0}]", in(reg) at, options(nostack, readonly, preserves_flags));
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    let _ = at;
+}
+
 /// The [`BuildHasher`] of every hash table of the engine.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Build;
