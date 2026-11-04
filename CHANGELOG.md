@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A check of the replica identity of an `UPDATE` or a `DELETE` stops when the database has no publication, and the point read moves the values of the row into the result with no copy. The example `ycsb` of rupg-session uses mimalloc, the allocator of the server (#1315).
 - A `SELECT` of plain columns of one table whose `WHERE` is only `=` of each key column of a unique index reads the versions of the key with no plan of a scan, and the example `ycsb` of rupg-session runs the YCSB workloads on sessions in the process (#1312).
 - A search of an expression goes through the arguments of the common kinds of expressions with no list. Before, each node of the search allocated a list of its arguments. The CPU of the server for a point read went down by 11% (#1310).
 - A read through a unique key finds the indexes and the children of its table in the maps of the catalog. Before, each read scanned all the relations of the catalog two times (#1309).
