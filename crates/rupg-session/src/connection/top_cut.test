@@ -1,0 +1,68 @@
+> CREATE TABLE tc (t int, u bigint, s text, n int, g int, h int)
+CREATE TABLE
+> INSERT INTO tc SELECT CASE WHEN i % 97 = 0 THEN NULL ELSE 70000 - i / 3 END, (i::bigint * 7919) % 70001, CASE WHEN i % 5 = 0 THEN '' ELSE 's' || (i % 13) END, i, i / 20000, CASE WHEN i > 60000 AND i % 97 = 0 THEN NULL ELSE i % 1000 END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT t, s, n FROM tc WHERE s <> '' ORDER BY t, s, n LIMIT 7
+fields t@tc.1:23:4:-1,s@tc.3:25:-1:-1,n@tc.4:23:4:-1
+row 46667,s7,69999
+row 46668,s4,69996
+row 46668,s5,69997
+row 46668,s6,69998
+row 46669,s1,69993
+row 46669,s2,69994
+row 46670,s0,69992
+SELECT 7
+> SELECT t, n FROM tc ORDER BY t DESC NULLS LAST, n LIMIT 5 OFFSET 2
+fields t@tc.1:23:4:-1,n@tc.4:23:4:-1
+row 69999,3
+row 69999,4
+row 69999,5
+row 69998,6
+row 69998,7
+SELECT 5
+> SELECT t, n FROM tc ORDER BY t DESC, n LIMIT 4
+fields t@tc.1:23:4:-1,n@tc.4:23:4:-1
+row NULL,97
+row NULL,194
+row NULL,291
+row NULL,388
+SELECT 4
+> SELECT u, s FROM tc WHERE s <> '' ORDER BY u DESC, s LIMIT 5
+fields u@tc.2:20:8:-1,s@tc.3:25:-1:-1
+row 70000,s12
+row 69999,s11
+row 69998,s1
+row 69997,s0
+row 69996,s12
+SELECT 5
+> SELECT t, u FROM tc WHERE n > 60000 ORDER BY t, u LIMIT 3 OFFSET 4
+fields t@tc.1:23:4:-1,u@tc.2:20:8:-1
+row 46668,46244
+row 46669,6649
+row 46669,14568
+SELECT 3
+> SELECT g, n FROM tc ORDER BY g, n DESC LIMIT 3
+fields g@tc.5:23:4:-1,n@tc.4:23:4:-1
+row 0,19999
+row 0,19998
+row 0,19997
+SELECT 3
+> SELECT g, n FROM tc WHERE s <> '' ORDER BY g DESC, n DESC LIMIT 3 OFFSET 1
+fields g@tc.5:23:4:-1,n@tc.4:23:4:-1
+row 3,69998
+row 3,69997
+row 3,69996
+SELECT 3
+> SELECT t, n FROM tc ORDER BY t DESC, n DESC LIMIT 4
+fields t@tc.1:23:4:-1,n@tc.4:23:4:-1
+row NULL,69937
+row NULL,69840
+row NULL,69743
+row NULL,69646
+SELECT 4
+> SELECT h, n FROM tc ORDER BY h DESC, n LIMIT 3
+fields h@tc.6:23:4:-1,n@tc.4:23:4:-1
+row NULL,60043
+row NULL,60140
+row NULL,60237
+SELECT 3
