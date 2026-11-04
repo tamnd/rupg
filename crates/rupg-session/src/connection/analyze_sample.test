@@ -1,0 +1,16 @@
+> CREATE TABLE ps (a int, b int, s text, w bigint)
+CREATE TABLE
+> INSERT INTO ps SELECT i % 7, i % 1000, 'k' || (i % 5), i % 50021 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE ps
+ANALYZE
+> SELECT attname, n_distinct FROM pg_stats WHERE tablename = 'ps' AND attname IN ('a', 'b', 's') ORDER BY 1
+fields attname@pg_stats.4:19:64:-1,n_distinct@pg_stats.9:700:4:-1
+row a,7
+row b,1000
+row s,5
+SELECT 3
+> SELECT n_distinct < 0 AND n_distinct > -0.5 FROM pg_stats WHERE tablename = 'ps' AND attname = 'w'
+fields ?column?:16:1:-1
+row t
+SELECT 1

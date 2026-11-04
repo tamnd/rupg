@@ -6581,6 +6581,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_inherit_sort.test")));
     }
 
+    /// `ANALYZE` of a table with more rows than its sample takes a random sample, so that a column whose values repeat with a period has the number of distinct values of PostgreSQL, where a sample at equal distances saw 100 of 1000 values and 1 of 5. `connection/analyze_sample.test` has the values of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn analyze_sample() {
+        big_stack(|| script(include_str!("connection/analyze_sample.test")));
+    }
+
     /// A join with a table with members reads the ordered rows of the members in a merge join, as a semi join or as an outer join, and the inner side of a nested loop is an `Append` of the scans of the members with the parameters of the outer side, as `get_appendrel_parampathinfo`, where a member with no such scan tests the conditions of the join in the filter of its sequential scan. `connection/plan_inherit_join.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_inherit_join() {

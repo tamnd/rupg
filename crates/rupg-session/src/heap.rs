@@ -1,7 +1,7 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -2503,7 +2503,7 @@ impl Heap {
         count
     }
 
-    /// `acquire_sample_rows` of `ANALYZE` for the transaction `xid`: the values of the live versions of a table, as [`Heap::live_count`] counts them, in the order of their places in the heap, and the number of the live versions. A table with more than `target` live versions gives `target` of them at equal distances, where PostgreSQL takes a random sample.
+    /// `acquire_sample_rows` of `ANALYZE` for the transaction `xid`: the values of the live versions of a table, as [`Heap::live_count`] counts them, in the order of their places in the heap, and the number of the live versions. A table with more than `target` live versions gives a random sample of `target` of them, as PostgreSQL does, with a seed from the table so that each `ANALYZE` of the same rows gives the same sample.
     pub(crate) fn sample(
         &self,
         database: u32,
@@ -2523,8 +2523,8 @@ impl Heap {
         let mut total = 0;
         table.each_version(|v| total += usize::from(live(v)));
         // The places among the live versions of the versions in the sample, in order.
-        let picks =
-            || (0..total.min(target)).map(|i| if total <= target { i } else { i * total / target });
+        let chosen = sample_places(total, target, relation);
+        let picks = || chosen.iter().copied();
         // The places of the versions of the sample among all the versions, for a read of only their rows.
         let mut places = Vec::with_capacity(total.min(target));
         let (mut wanted, mut at, mut place) = (picks(), 0, 0);
@@ -3447,6 +3447,24 @@ fn changes<'t>(
         }
     }
     (inserted, deleted)
+}
+
+/// The places of a random sample of `target` of `total` versions, in order, with the seed `seed`, by the algorithm of Floyd. Places at equal distances, as an earlier `ANALYZE` took them, see one value of a column whose values repeat with a period that the distance divides. All the places come when `total` is at most `target`.
+fn sample_places(total: usize, target: usize, seed: u32) -> Vec<usize> {
+    if total <= target {
+        return (0..total).collect();
+    }
+    let mut prng = rupg_types::prng::Prng::seed(u64::from(seed) ^ 0x5eed_a11a_1e5e_ed00);
+    let mut chosen: HashSet<usize> = HashSet::with_capacity(target);
+    for j in total - target..total {
+        let t = prng.uint64_range(0, j as u64) as usize;
+        if !chosen.insert(t) {
+            chosen.insert(j);
+        }
+    }
+    let mut places: Vec<usize> = chosen.into_iter().collect();
+    places.sort_unstable();
+    places
 }
 
 #[cfg(test)]

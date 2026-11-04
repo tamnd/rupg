@@ -142,7 +142,7 @@ row               Filter: (b = 3)
 EXPLAIN
 > EXPLAIN SELECT * FROM t JOIN p ON p.id = t.a WHERE t.b = 3 AND p.v <> 'x';
 fields QUERY PLAN:25:-1:-1
-row Merge Join  (cost=1.79..3.32 rows=1 width=18)
+row Merge Join  (cost=1.79..3.27 rows=1 width=18)
 row   Merge Cond: (p.id = t.a)
 row   ->  Merge Append  (cost=0.72..1430.47 rows=29999 width=10)
 row         Sort Key: p.id
