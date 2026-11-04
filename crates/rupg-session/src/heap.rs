@@ -126,6 +126,8 @@ const LOG_BUFFER: usize = 1 << 20;
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
     state: Mutex<State>,
+    /// The snapshot of the state, which each change of `nextXid`, of the transactions in progress or of `latestCompletedXid` writes while the state is locked, or `None` until the first change. [`Heap::held_snapshot_in`] takes it and sets the `xmin` of a session under this lock only, so that a statement does not wait for the state. A horizon reads the `xmin` of the sessions under this lock too, so it sees each `xmin` that a snapshot before it set, and a later snapshot is newer than the horizon.
+    published: Mutex<Option<Snapshot>>,
     /// The tasks of the server, which encode the columns of a load at the same time, or `None` to encode them on the thread of the session.
     tasks: Option<Arc<dyn Tasks>>,
 }
@@ -1813,6 +1815,16 @@ impl Heap {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The lock of [`Heap::published`]. A thread that holds the state takes it after the state.
+    fn published(&self) -> MutexGuard<'_, Option<Snapshot>> {
+        self.published.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Writes the snapshot of `state` to [`Heap::published`], after a change of the state that a snapshot reads.
+    fn publish(&self, state: &State) {
+        *self.published() = Some(Self::snapshot_of(state));
+    }
+
     /// Locks the heap when the table `table` has the map of each unique key of `unique`, and gives the place of each map. The map of an index with an expression or a predicate gets the keys of the versions while the heap is not locked, as a function in an expression can read and change the heap. The versions that other writes add meanwhile get their keys in the next round.
     ///
     /// # Errors
@@ -1888,6 +1900,7 @@ impl Heap {
         state.next_xid = xid + 1;
         Arc::make_mut(&mut state.running).insert(xid);
         state.owners.insert(xid, pid);
+        self.publish(&state);
         xid
     }
 
@@ -1937,10 +1950,30 @@ impl Heap {
     }
 
     /// [`Heap::snapshot`] for the session `pid`, which then holds its `xmin` as [`Heap::hold`] does. The snapshot and the hold are under one lock, as `GetSnapshotData` sets `MyProc->xmin` under `ProcArrayLock`, so a prune does not remove a version that the snapshot sees before the session holds it.
+    #[cfg(test)]
     pub(crate) fn held_snapshot(&self, pid: i32) -> Snapshot {
         let mut state = self.state();
         let snapshot = Self::snapshot_of(&state);
         hold(&mut state, pid, &snapshot);
+        snapshot
+    }
+
+    /// [`Heap::held_snapshot`] for the session whose `xmin` is `xmin`, as [`Heap::xmin`] gives it. It locks only [`Heap::published`] after the first change of the state.
+    pub(crate) fn held_snapshot_in(&self, xmin: &AtomicU32) -> Snapshot {
+        let mut published = self.published();
+        let snapshot = match &*published {
+            Some(snapshot) => snapshot.clone(),
+            None => {
+                drop(published);
+                let state = self.state();
+                published = self.published();
+                published.get_or_insert_with(|| Self::snapshot_of(&state)).clone()
+            }
+        };
+        if xmin.load(atomic::Ordering::Acquire) == 0 {
+            xmin.store(snapshot.xmin(), atomic::Ordering::Release);
+        }
+        drop(published);
         snapshot
     }
 
@@ -2095,7 +2128,10 @@ impl Heap {
     ) -> Option<Vec<Vec<Value>>> {
         let mut guard = self.state();
         let state = &mut *guard;
-        let horizon = state.horizon().min(view.snapshot.xmin());
+        let horizon = {
+            let _published = self.published();
+            state.horizon().min(view.snapshot.xmin())
+        };
         // A borrow of the set and not a clone of the `Arc`, as the count of the `Arc` is on a line of the cache that the other connections also write.
         let running = &*state.running;
         let Some(table) = state.tables.0.get_mut(&(view.database, relation)) else {
@@ -2672,14 +2708,11 @@ impl Heap {
     ) -> Option<(Value, Value)> {
         let mut guard = self.state();
         let state = &mut *guard;
+        let horizon = {
+            let _published = self.published();
+            state.horizon()
+        };
         let table = state.tables.get(&(database, relation))?;
-        let horizon = state
-            .running
-            .first()
-            .copied()
-            .into_iter()
-            .chain(held(&state.xmins, None))
-            .fold((state.latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         let dead =
             |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
         let mut range: Option<(&Value, &Value)> = None;
@@ -2792,12 +2825,14 @@ impl Heap {
         let mut state = self.state();
         let State { tables, running, xmins, latest_completed, .. } = &mut *state;
         // `GetOldestNonRemovableTransactionId`, without the snapshot of `VACUUM`, as `PROC_IN_VACUUM` leaves it out.
+        let published = self.published();
         let horizon = running
             .first()
             .copied()
             .into_iter()
             .chain(held(xmins, Some(pid)))
             .fold((*latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
+        drop(published);
         let Some(table) = tables.get_mut(&(database, relation)) else {
             return Vacuumed { reltuples: 0.0, pages: 0, dead_pages: 0 };
         };
@@ -2955,6 +2990,7 @@ impl Heap {
         }
         Arc::make_mut(&mut state.running).remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
+        self.publish(&state);
         state.combos.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
@@ -2984,6 +3020,7 @@ impl Heap {
         Arc::make_mut(&mut state.running).remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         state.aborted.insert(xid);
+        self.publish(&state);
         state.combos.remove(&xid);
         state.touched.remove(&xid);
         state.loading.remove(&xid);
@@ -3405,7 +3442,7 @@ impl Heap {
             }
             state.tables.0.insert(key, table);
         }
-        Ok(Heap { state: Mutex::new(state), tasks: None })
+        Ok(Heap { state: Mutex::new(state), published: Mutex::default(), tasks: None })
     }
 
     /// The versions of a table whose values are in encoded columns.
@@ -3448,6 +3485,7 @@ impl Heap {
     pub(crate) fn advance_xid(&self, next: u32) {
         let mut state = self.state();
         state.next_xid = state.next_xid.max(next);
+        self.publish(&state);
     }
 
     /// The OIDs of the databases whose tables have rows.
@@ -3470,6 +3508,7 @@ impl Heap {
         let xid = u32::take(input)?;
         state.next_xid = state.next_xid.max(xid.wrapping_add(1));
         state.latest_completed = state.latest_completed.max(xid);
+        self.publish(&state);
         for _ in 0..input.count()? {
             let key = Persist::take(input)?;
             let generation: Option<u16> = Persist::take(input)?;
@@ -3975,6 +4014,54 @@ mod tests {
         heap.release(2);
         assert_eq!(read(&view(heap.held_snapshot(1), 0, 0)).0, Value::Int4(5));
         assert_eq!(bucket(), 1);
+    }
+
+    #[test]
+    fn a_published_snapshot_keeps_the_versions_that_it_sees() {
+        let heap = Heap::default();
+        let key = (&[0][..], &[oid::INT4][..], false);
+        let read = |view: &View| {
+            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap();
+            assert_eq!(rows.len(), 1);
+            let Some(&Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
+            (rows[0][1].clone(), tid.cast_unsigned())
+        };
+        let (one, two) = (heap.xmin(1), heap.xmin(2));
+        // Before the first change, the snapshot comes from the state.
+        let empty = heap.held_snapshot_in(&two);
+        assert_eq!(empty.xmin(), heap.snapshot().xmin());
+        two.store(0, atomic::Ordering::Release);
+        let first = heap.begin(1);
+        let row = |b: i32| vec![Value::Int4(1), Value::Int4(b)];
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![row(0)], (&[], &none), &[]).unwrap();
+        heap.commit(first);
+        // The published snapshot sees the commit.
+        let old = view(heap.held_snapshot_in(&two), 0, 0);
+        assert_eq!(read(&old).0, Value::Int4(0));
+        for b in 1..=3 {
+            let xid = heap.begin(1);
+            let (_, tid) = read(&view(heap.held_snapshot_in(&one), xid, 0));
+            let change = vec![(tid, Some(row(b)))];
+            heap.change(
+                7,
+                &view(heap.snapshot(), xid, 0),
+                change,
+                (&[], &none),
+                &[],
+                &mut Vec::new(),
+            )
+            .unwrap();
+            heap.commit(xid);
+            one.store(0, atomic::Ordering::Release);
+        }
+        // The session 2 still holds its snapshot, so a prune keeps the version that it sees.
+        assert_eq!(read(&old).0, Value::Int4(0));
+        assert_eq!(read(&view(heap.held_snapshot_in(&one), 0, 0)).0, Value::Int4(3));
+        let aborted = heap.begin(1);
+        heap.abort(aborted);
+        let after = heap.held_snapshot_in(&one);
+        assert!(!after.running.contains(&aborted));
+        assert_eq!(after.xmin(), heap.snapshot().xmin());
     }
 
     #[test]
