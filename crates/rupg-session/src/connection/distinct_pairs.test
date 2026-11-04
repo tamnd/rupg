@@ -1,0 +1,46 @@
+> CREATE TABLE dp (g int, v int, s text)
+CREATE TABLE
+> INSERT INTO dp SELECT i % 7, CASE WHEN i % 11 = 0 THEN NULL ELSE (i * 37) % (200 + 100 * (i % 7)) END, 's' || (i % (3 + i % 7) * 13) FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT g, count(DISTINCT v), count(*) FROM dp GROUP BY g ORDER BY g
+fields g@dp.1:23:4:-1,count:20:8:-1,count:20:8:-1
+row 0,200,10000
+row 1,300,10000
+row 2,400,10000
+row 3,500,10000
+row 4,600,10000
+row 5,100,10000
+row 6,800,10000
+SELECT 7
+> SELECT g, count(DISTINCT s) AS ds, count(DISTINCT v) FROM dp GROUP BY g ORDER BY ds DESC, g LIMIT 3
+fields g@dp.1:23:4:-1,ds:20:8:-1,count:20:8:-1
+row 6,9,800
+row 5,8,100
+row 3,6,500
+SELECT 3
+> SELECT count(DISTINCT v) FROM dp WHERE g = 3
+fields count:20:8:-1
+row 500
+SELECT 1
+> SELECT v % 5 AS k, count(DISTINCT g) FROM dp GROUP BY 1 ORDER BY 1
+fields k:23:4:-1,count:20:8:-1
+row 0,7
+row 1,7
+row 2,7
+row 3,7
+row 4,7
+row NULL,7
+SELECT 6
+> CREATE TABLE dr (g int, v int)
+CREATE TABLE
+> INSERT INTO dr SELECT i % 2, CASE WHEN i % 1000 = 7 THEN NULL ELSE i / 4 END FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT g, count(DISTINCT v), count(v) FROM dr GROUP BY g ORDER BY g
+fields g@dr.1:23:4:-1,count:20:8:-1,count:20:8:-1
+row 0,17501,35000
+row 1,17500,34930
+SELECT 2
+> SELECT count(DISTINCT v) FROM dr
+fields count:20:8:-1
+row 17501
+SELECT 1

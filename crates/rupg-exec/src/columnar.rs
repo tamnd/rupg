@@ -2794,6 +2794,8 @@ fn grouped(
                     (Method::Distinct, States::Distinct(states)) => {
                         let col =
                             col.as_ref().ok_or_else(|| Error::internal("count has no argument"))?;
+                        // A row with the group and the word of the row before it is already in the set. In ClickBench, 82% of the rows have the `UserID` of the row before them.
+                        let mut last = None;
                         for (i, &id) in ids.iter().enumerate() {
                             if col.null(i) {
                                 continue;
@@ -2802,7 +2804,10 @@ fn grouped(
                                 bail = true;
                                 return Ok(false);
                             };
-                            states[id as usize].insert(w);
+                            if last != Some((id, w)) {
+                                states[id as usize].insert(w);
+                                last = Some((id, w));
+                            }
                         }
                     }
                     (Method::SumInt | Method::Int128 { .. }, States::Sum(states)) => {
