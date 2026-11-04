@@ -4283,7 +4283,7 @@ mod tests {
 
     #[test]
     fn distinct_pairs() {
-        big_stack(|| script(include_str!("connection/distinct_pairs.test")));
+        big_stack(|| script_tasks(include_str!("connection/distinct_pairs.test")));
     }
 
     /// A grouped vector scan with a constant integer as a key of `GROUP BY` keeps the keys of the groups as words, with the order of Postgres for the hash table and for the sort of the groups.

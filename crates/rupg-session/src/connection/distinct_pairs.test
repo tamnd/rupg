@@ -44,3 +44,31 @@ SELECT 2
 fields count:20:8:-1
 row 17501
 SELECT 1
+> SELECT count(DISTINCT v), count(v), count(*) FROM dp
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 800,63637,70000
+SELECT 1
+> SELECT v % 3 AS k, count(DISTINCT g), min(g), max(v), sum(g) FROM dp GROUP BY 1 ORDER BY 1
+fields k:23:4:-1,count:20:8:-1,min:23:4:-1,max:23:4:-1,sum:20:8:-1
+row 0,7,0,798,64018
+row 1,7,0,799,63522
+row 2,7,0,797,63371
+row NULL,7,0,NULL,19089
+SELECT 4
+> SELECT count(DISTINCT v) FROM dp WHERE g > 100
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT g, count(DISTINCT v) FROM dp WHERE g > 100 GROUP BY g
+fields g@dp.1:23:4:-1,count:20:8:-1
+SELECT 0
+> SELECT g, count(DISTINCT v), avg(v)::int FROM dp WHERE v < 150 GROUP BY g ORDER BY 2 DESC, 1
+fields g@dp.1:23:4:-1,count:20:8:-1,avg:23:4:-1
+row 0,150,74
+row 1,150,74
+row 2,150,75
+row 3,150,74
+row 4,150,74
+row 6,150,75
+row 5,21,73
+SELECT 7
