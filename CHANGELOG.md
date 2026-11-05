@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE COLLATION` with `provider = icu` makes a collation of ICU, with the standard form of the locale, the checks of `icu_validation_level` and the collator version, as in PostgreSQL (#1357).
 - `ORDER BY x COLLATE "xx-x-icu"`, and the `ORDER BY` of an aggregate, order strings as ICU does for a deterministic collation of the ICU provider, with ICU4X (#1356).
 - `SELECT ... FOR UPDATE SKIP LOCKED` with `LIMIT` and `OFFSET` counts only the rows that it locks, as the `LockRows` node of PostgreSQL runs below `Limit` (#1354).
 - `SELECT ... FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE` lock the rows of their tables, and `UPDATE`, `DELETE` and `INSERT ... ON CONFLICT DO UPDATE` wait for these locks. `NOWAIT` and `SKIP LOCKED` work (#1352).

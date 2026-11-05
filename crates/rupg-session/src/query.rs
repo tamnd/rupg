@@ -2012,6 +2012,12 @@ impl Env for Reader<'_> {
         self.settings().get_of(guc::known!("check_function_bodies")).as_deref() != Some("off")
     }
 
+    fn icu_validation_level(&self) -> String {
+        self.settings()
+            .get_of(guc::known!("icu_validation_level"))
+            .unwrap_or_else(|| "warning".into())
+    }
+
     fn default_table_access_method(&self) -> String {
         self.settings()
             .get_of(guc::known!("default_table_access_method"))

@@ -13,6 +13,7 @@ categories.workspace = true
 readme.workspace = true
 
 [dependencies]
+icu_locale_core.workspace = true
 rupg-catalog.workspace = true
 rupg-common.workspace = true
 rupg-pgcatalog.workspace = true

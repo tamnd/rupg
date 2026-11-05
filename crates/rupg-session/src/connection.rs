@@ -7814,6 +7814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/spgist_prefix.test")));
     }
 
+    /// `CREATE COLLATION` with the provider ICU: the standard form of the locale with a notice, the checks of the locale at each level of `icu_validation_level`, the collator version, the warning for a recorded version that is not the version of ICU, and the order of a sort in the new collations, with the keywords `co`, `kn`, `kf`, `ks` and `ka`. `connection/icu_create.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_create() {
+        big_stack(|| script(include_str!("connection/icu_create.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {
