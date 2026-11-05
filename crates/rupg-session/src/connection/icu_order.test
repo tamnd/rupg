@@ -1,0 +1,160 @@
+> create table w (s text)
+CREATE TABLE
+> insert into w values ('a'), ('A'), ('b'), ('B'), ('ä'), ('Ä'), ('z'), ('Z'), ('å'), ('ö'), ('ab'), ('a b'), ('a-b'), ('a_b'), ('1'), ('10'), ('2'), ('résumé'), ('resume'), ('Resume'), ('cote'), ('côte'), ('coté'), ('côté'), ('ß'), ('ss'), (''), ('Æ'), ('ae'), ('x10'), ('x9'), ('é'), ('e'), ('ch'), ('cz'), ('h'), ('ñ'), ('n'), ('o'), (null)
+INSERT 0 40
+> select string_agg(coalesce(s, 'NULL'), '|' order by s collate "C") from w
+fields string_agg:25:-1:-1
+row |1|10|2|A|B|Resume|Z|a|a b|a-b|a_b|ab|ae|b|ch|cote|coté|cz|côte|côté|e|h|n|o|resume|résumé|ss|x10|x9|z|Ä|Æ|ß|ä|å|é|ñ|ö|NULL
+SELECT 1
+> select string_agg(coalesce(s, 'NULL'), '|' order by s collate "und-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|n|ñ|o|ö|resume|Resume|résumé|ss|ß|x10|x9|z|Z|NULL
+SELECT 1
+> select string_agg(coalesce(s, 'NULL'), '|' order by s collate "unicode") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|n|ñ|o|ö|resume|Resume|résumé|ss|ß|x10|x9|z|Z|NULL
+SELECT 1
+> select s from w order by s collate "en-x-icu" desc nulls last
+fields s@w.1:25:-1:-1
+row Z
+row z
+row x9
+row x10
+row ß
+row ss
+row résumé
+row Resume
+row resume
+row ö
+row o
+row ñ
+row n
+row h
+row é
+row e
+row cz
+row côté
+row côte
+row coté
+row cote
+row ch
+row B
+row b
+row Æ
+row ae
+row ab
+row a-b
+row a_b
+row a b
+row Ä
+row ä
+row å
+row A
+row a
+row 2
+row 10
+row 1
+row 
+row NULL
+SELECT 40
+> select s from w order by s collate "de-x-icu"
+fields s@w.1:25:-1:-1
+row 
+row 1
+row 10
+row 2
+row a
+row A
+row å
+row ä
+row Ä
+row a b
+row a_b
+row a-b
+row ab
+row ae
+row Æ
+row b
+row B
+row ch
+row cote
+row coté
+row côte
+row côté
+row cz
+row e
+row é
+row h
+row n
+row ñ
+row o
+row ö
+row resume
+row Resume
+row résumé
+row ss
+row ß
+row x10
+row x9
+row z
+row Z
+row NULL
+SELECT 40
+> select string_agg(s, '|' order by s collate "sv-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|a b|a_b|a-b|ab|ae|b|B|ch|cote|coté|cz|côte|côté|e|é|h|n|ñ|o|resume|Resume|résumé|ss|ß|x10|x9|z|Z|å|ä|Ä|Æ|ö
+SELECT 1
+> select string_agg(s, '|' order by s collate "da-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|A|a|a b|a_b|a-b|ab|ae|B|b|ch|cote|coté|côte|côté|cz|e|é|h|n|ñ|o|Resume|resume|résumé|ss|ß|x10|x9|Z|z|Æ|Ä|ä|ö|å
+SELECT 1
+> select string_agg(s, '|' order by s collate "es-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|n|ñ|o|ö|resume|Resume|résumé|ss|ß|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate "cs-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|cote|coté|côte|côté|cz|e|é|h|ch|n|ñ|o|ö|resume|Resume|résumé|ss|ß|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate "fr-CA-x-icu") from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|côte|coté|côté|cz|e|é|h|n|ñ|o|ö|resume|Resume|résumé|ss|ß|x10|x9|z|Z
+SELECT 1
+> create index wi on w (s)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> select s from w where s >= 'x' collate "C" order by s collate "en-x-icu"
+fields s@w.1:25:-1:-1
+row å
+row ä
+row Ä
+row Æ
+row é
+row ñ
+row ö
+row ß
+row x10
+row x9
+row z
+SELECT 11
+> select s from w where s >= 'x' collate "C" order by s collate "en-x-icu" desc limit 3
+fields s@w.1:25:-1:-1
+row z
+row x9
+row x10
+SELECT 3
+> select s, rank() over (order by s collate "C") from w where s >= 'x' collate "C" order by s collate "unicode"
+fields s@w.1:25:-1:-1,rank:20:8:-1
+row å,8
+row ä,7
+row Ä,4
+row Æ,5
+row é,9
+row ñ,10
+row ö,11
+row ß,6
+row x10,1
+row x9,2
+row z,3
+SELECT 11

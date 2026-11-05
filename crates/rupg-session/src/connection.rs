@@ -7814,6 +7814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/spgist_prefix.test")));
     }
 
+    /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn icu_order() {
+        big_stack(|| script(include_str!("connection/icu_order.test")));
+    }
+
     /// `EXPLAIN` shows the collation of a key of a sort after the key when it is not the collation of the type of the key, as `show_sortorder_options` writes it: a column of `COLLATE "C"`, a `COLLATE` in `ORDER BY`, and a `name` as `text`. `connection/sort_collation.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sort_collation() {

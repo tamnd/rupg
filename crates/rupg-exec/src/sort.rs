@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use rupg_analyze::SortGroup;
 use rupg_common::Result;
-use rupg_func::{Call, Kernel, Session};
+use rupg_func::{Call, Collator, Kernel, Session};
 use rupg_types::{Value, oid};
 
 use crate::kernel;
@@ -26,6 +26,8 @@ struct Key {
     nulls_first: bool,
     /// For a sort function that is `<` or `>` of an integer, date, time or text type: true for `>`. The keys then compare the integers or the bytes with no call.
     descending: Option<bool>,
+    /// For `<` or `>` of `text` in a collation of ICU: the collator, and true for `>`.
+    collated: Option<(Collator, bool)>,
 }
 
 /// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz`, `numeric` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here. A `numeric` compares as an integer only in a column of integers, and a value of `numeric` calls the function.
@@ -63,13 +65,19 @@ impl<'a> Keys<'a> {
         let keys = list
             .iter()
             .map(|g| {
+                let ty = types[g.target];
+                let text = matches!(ty, oid::TEXT | oid::VARCHAR);
+                let collated = native(g.sort)
+                    .filter(|_| text)
+                    .and_then(|desc| Some((rupg_func::collator(session, g.collation)?, desc)));
                 Ok(Key {
                     column: g.target,
-                    ty: types[g.target],
+                    ty,
                     sort: find(g.sort)?,
                     equal: find(g.equal)?,
                     nulls_first: g.nulls_first,
-                    descending: native(g.sort),
+                    descending: if collated.is_some() { None } else { native(g.sort) },
+                    collated,
                 })
             })
             .collect::<Result<_>>()?;
@@ -136,7 +144,12 @@ impl<'a> Keys<'a> {
                 (false, true) if key.nulls_first => Ordering::Greater,
                 (false, true) => Ordering::Less,
                 (false, false) => {
-                    if self.test(sort, key.ty, x, y)? {
+                    if let (Some((collator, desc)), Value::Text(x), Value::Text(y)) =
+                        (key.collated, x, y)
+                    {
+                        let order = collator.compare(x, y);
+                        if desc { order.reverse() } else { order }
+                    } else if self.test(sort, key.ty, x, y)? {
                         Ordering::Less
                     } else if self.test(sort, key.ty, y, x)? {
                         Ordering::Greater
