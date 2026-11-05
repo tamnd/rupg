@@ -4,7 +4,7 @@ use rupg_common::bytes::Bytes;
 use rupg_common::{Error, Result};
 use rupg_encode::integer;
 use rupg_summary::column::{ColumnSummary, VECTOR};
-use rupg_types::Value;
+use rupg_types::{Numeric, Value};
 
 use crate::dict::Dictionary;
 
@@ -64,6 +64,8 @@ pub enum Kind {
     Text,
     /// `bytea`, with codes into the dictionary of the column.
     Bytea,
+    /// `numeric` whose values all show this count of digits after the point, stored as the integer count of `10^-scale` of each value.
+    Numeric(u8),
 }
 
 /// How a kind is stored.
@@ -97,6 +99,9 @@ impl Kind {
             (Kind::Int4, Value::Int4(v)) => i64::from(*v),
             (Kind::Int8, Value::Int8(v)) => *v,
             (Kind::Date, Value::Date(v)) => i64::from(*v),
+            (Kind::Numeric(scale), Value::Numeric(v)) if v.dscale() == u16::from(scale) => {
+                i64::try_from(v.to_decimal(u32::from(scale))?).ok()?
+            }
             (Kind::Time, Value::Time(v))
             | (Kind::Timestamp, Value::Timestamp(v))
             | (Kind::TimestampTz, Value::TimestampTz(v)) => *v,
@@ -134,6 +139,9 @@ impl Kind {
             Kind::Time => Value::Time(v),
             Kind::Timestamp => Value::Timestamp(v),
             Kind::TimestampTz => Value::TimestampTz(v),
+            Kind::Numeric(scale) => {
+                Value::Numeric(Numeric::from_decimal(i128::from(v), u32::from(scale)))
+            }
             _ => Value::Int8(v),
         }
     }

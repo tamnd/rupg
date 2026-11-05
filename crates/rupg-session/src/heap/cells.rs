@@ -83,7 +83,7 @@ fn width(kind: Kind) -> Width {
         Kind::Int8 | Kind::Float8 | Kind::Time | Kind::Timestamp | Kind::TimestampTz => {
             Width::Fixed(8, 8)
         }
-        Kind::Text | Kind::Bytea => Width::Varlena,
+        Kind::Text | Kind::Bytea | Kind::Numeric(_) => Width::Varlena,
     }
 }
 

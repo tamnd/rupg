@@ -4306,6 +4306,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_const_key.test")));
     }
 
+    /// The columns of `numeric` and of `character` give the same sums, averages and groups as the rows.
+    #[test]
+    fn columnar_numeric() {
+        big_stack(|| script_tasks(include_str!("connection/columnar_numeric.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {

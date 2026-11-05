@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A vector scan keeps `numeric` columns of one scale as integers and computes their comparisons, `+`, `-`, `*`, `sum` and `avg` with no `numeric` value for each row. A `GROUP BY` of a `character(n)` column groups on the bytes (#1372).
 - Comparisons of arrays in a collation of ICU (`<`, `<=`, `>`, `>=`, `btarraycmp`, `array_larger`, `array_smaller`, `max`, `min`, `GREATEST`, `LEAST` and a sort) and `array_sort` order the strings of the elements as the ICU collator does, as in PostgreSQL (#1371).
 - A scan of the column store tests a text column against a constant text or a parameter with `=` and `<>` on the codes of the dictionary, in the tasks of the server and in the vector scan. A `GROUP BY` finds its groups in the tasks only when the plan estimates at least two rows that pass the conditions for each group (#1370).
 - A `GROUP BY` with a sort puts the rows in a hash table and sorts only one row of each group, and the keys of a sort compare `character` values and the `=` of the integer, date, time and text types with no call (#1369).

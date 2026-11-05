@@ -336,6 +336,8 @@ enum Data {
     Values(Vec<Value>),
     /// The same value for each row.
     Const(Value),
+    /// `numeric` values that all show the scale, as integer counts of `10^-scale`.
+    Dec(Vec<i64>, u8),
 }
 
 /// The integers of a column for a loop on the rows: a vector with its null rows, or one value for each row.
@@ -451,6 +453,9 @@ impl Col {
             Data::Code(v, d) => dicts[*d].value(v[i]),
             Data::Values(v) => v[i].clone(),
             Data::Const(v) => v.clone(),
+            Data::Dec(v, scale) => {
+                Value::Numeric(Numeric::from_decimal(i128::from(v[i]), u32::from(*scale)))
+            }
         }
     }
 
@@ -462,7 +467,7 @@ impl Col {
             Data::Float(v) => float_word(v[i]),
             Data::Code(v, _) => u64::from(v[i]),
             Data::Const(v) => int_of(v).map_or(0, |v| v as u64),
-            Data::Values(_) => return None,
+            Data::Values(_) | Data::Dec(..) => return None,
         })
     }
 }
@@ -541,6 +546,48 @@ struct Exec<'q> {
 }
 
 /// The number of characters of the bytes of a `String`: the bytes less the bytes that continue a character, with the form `10xxxxxx`. Eight bytes are tested at a time.
+/// The kind of a `numeric` column whose type has a scale up to 18, which keeps each value as an integer count of `10^-scale`.
+fn numeric_kind(ty: u32, typmod: i32) -> Option<Kind> {
+    let scale = u8::try_from(typmod.checked_sub(4)? & 0xffff).ok()?;
+    (ty == oid::NUMERIC && typmod >= 4 && scale <= 18).then_some(Kind::Numeric(scale))
+}
+
+/// True for a stored column whose integers are the values of its type, which is not true of a `numeric` column.
+fn int_column(stored: &Stored) -> bool {
+    stored.kind.store() == Store::Int && !matches!(stored.kind, Kind::Numeric(_))
+}
+
+/// The display scale of the `numeric` values of an expression that [`Exec::decimal`] evaluates: the scale of the type of a column, the scale of a constant, the larger scale of the arguments of `+` and `-`, and the sum of the scales of the arguments of `*`, as `add_var` and `mul_var` give them.
+fn dec_scale(expr: &Expr) -> Option<u8> {
+    let scale = match &expr.kind {
+        ExprKind::Var(_) if expr.ty == oid::NUMERIC && expr.typmod >= 4 => {
+            u8::try_from((expr.typmod - 4) & 0xffff).ok()?
+        }
+        ExprKind::Const(Value::Numeric(n)) => u8::try_from(n.dscale()).ok()?,
+        ExprKind::Func(func) => match (src(func.oid), func.args.as_slice()) {
+            ("numeric_add" | "numeric_sub", [a, b]) => dec_scale(a)?.max(dec_scale(b)?),
+            ("numeric_mul", [a, b]) => dec_scale(a)?.checked_add(dec_scale(b)?)?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    (scale <= 18).then_some(scale)
+}
+
+/// The integers and the scale of a column of [`Data::Dec`] or of a `numeric` constant, or `None` for other data and for a constant that does not fit.
+fn decs(col: &Col) -> Option<(Ints<'_>, u8)> {
+    match &col.data {
+        Data::Dec(v, scale) => Some((Ints::Vector(v, col.nulls.as_deref()), *scale)),
+        Data::Const(Value::Null) => Some((Ints::Const(None), 0)),
+        Data::Const(Value::Numeric(n)) => {
+            let scale = u8::try_from(n.dscale()).ok().filter(|&s| s <= 18)?;
+            let v = i64::try_from(n.to_decimal(u32::from(scale))?).ok()?;
+            Some((Ints::Const(Some(v)), scale))
+        }
+        _ => None,
+    }
+}
+
 fn chars(text: &[u8]) -> usize {
     const HIGH: u64 = 0x8080_8080_8080_8080;
     let (words, rest) = text.as_chunks::<8>();
@@ -697,6 +744,10 @@ impl<'q> Exec<'q> {
             DecodedData::Code(v) => {
                 Data::Code(sel.iter().map(|&i| v[i as usize]).collect(), self.dict_of[place])
             }
+        };
+        let data = match (data, self.stored[place].kind) {
+            (Data::Int(v), Kind::Numeric(scale)) => Data::Dec(v, scale),
+            (data, _) => data,
         };
         Ok(Col { data, nulls, ty })
     }
@@ -889,6 +940,9 @@ impl<'q> Exec<'q> {
         batch: &mut Batch,
         sel: &[u32],
     ) -> Result<Option<Col>> {
+        if let Some(col) = self.decimal(src, args, batch, sel)? {
+            return Ok(Some(col));
+        }
         if let (Some(compare), [a, b]) = (int_compare(src), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             if let (Some(a), Some(b)) = (a.ints(), b.ints()) {
@@ -998,6 +1052,70 @@ impl<'q> Exec<'q> {
             return Ok(Some(Col { data: Data::Int(values), nulls, ty: expr.ty }));
         }
         Ok(None)
+    }
+
+    /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression.
+    fn decimal(
+        &mut self,
+        src: &str,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let compare: Option<fn(i128, i128) -> bool> = match src {
+            "numeric_eq" => Some(|a, b| a == b),
+            "numeric_ne" => Some(|a, b| a != b),
+            "numeric_lt" => Some(|a, b| a < b),
+            "numeric_le" => Some(|a, b| a <= b),
+            "numeric_gt" => Some(|a, b| a > b),
+            "numeric_ge" => Some(|a, b| a >= b),
+            "numeric_add" | "numeric_sub" | "numeric_mul" => None,
+            _ => return Ok(None),
+        };
+        let [a, b] = args else { return Ok(None) };
+        let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
+        let (Some((x, sx)), Some((y, sy))) = (decs(&a), decs(&b)) else { return Ok(None) };
+        if let Some(compare) = compare {
+            let scale = sx.max(sy);
+            let (mx, my) = (10i128.pow(u32::from(scale - sx)), 10i128.pow(u32::from(scale - sy)));
+            let out: Vec<Option<bool>> = (0..sel.len())
+                .map(|i| Some(compare(i128::from(x.get(i)?) * mx, i128::from(y.get(i)?) * my)))
+                .collect();
+            return Ok(Some(Col::bools(&out)));
+        }
+        let (scale, mx, my) = if src == "numeric_mul" {
+            (sx + sy, 1, 1)
+        } else {
+            let scale = sx.max(sy);
+            (scale, 10i128.pow(u32::from(scale - sx)), 10i128.pow(u32::from(scale - sy)))
+        };
+        if scale > 18 {
+            return Ok(None);
+        }
+        let op: fn(i128, i128) -> i128 = match src {
+            "numeric_add" => |a, b| a + b,
+            "numeric_sub" => |a, b| a - b,
+            _ => |a, b| a * b,
+        };
+        let mut values = Vec::with_capacity(sel.len());
+        let mut nulls = Vec::with_capacity(sel.len());
+        for i in 0..sel.len() {
+            match (x.get(i), y.get(i)) {
+                (Some(a), Some(b)) => {
+                    let Ok(v) = i64::try_from(op(i128::from(a) * mx, i128::from(b) * my)) else {
+                        return Ok(None);
+                    };
+                    values.push(v);
+                    nulls.push(false);
+                }
+                _ => {
+                    values.push(0);
+                    nulls.push(true);
+                }
+            }
+        }
+        let nulls = nulls.contains(&true).then_some(nulls);
+        Ok(Some(Col { data: Data::Dec(values, scale), nulls, ty: oid::NUMERIC }))
     }
 
     /// `LIKE` and `ILIKE` of a column of codes of the table and a constant pattern, which tests the bytes of each code once with no copy of the text, or `None` for other arguments. A pattern with an error gives `None`, and the row engine gives the same result.
@@ -1375,6 +1493,11 @@ enum Method<'q> {
     Int128 {
         avg: bool,
     },
+    /// `sum` and `avg` of `numeric` values of [`Data::Dec`] of the scale.
+    Dec {
+        avg: bool,
+        scale: u8,
+    },
     Min,
     Max,
     /// `sum` or `avg` of `x + by`: the sums of the column `x` in `bases[base]` and `by` times the count. `wide` is `None` for [`Method::SumInt`], else the `avg` of [`Method::Int128`]. The values of `x + by` must be in `range`, else the row engine runs the query and gives the error.
@@ -1501,6 +1624,18 @@ impl Results<'_> {
                         .map_err(rupg_func::type_error)?,
                 ),
             },
+            (Method::Dec { avg, scale }, States::Sum(states)) => match states[g] {
+                (0, _) => Value::Null,
+                (n, sum) => {
+                    let sum = Numeric::from_decimal(sum, u32::from(*scale));
+                    Value::Numeric(if *avg {
+                        sum.div(&Numeric::from_integer(i128::from(n)))
+                            .map_err(rupg_func::type_error)?
+                    } else {
+                        sum
+                    })
+                }
+            },
             (Method::Min | Method::Max, States::Extreme(states)) => {
                 states[g].map_or(Value::Null, |v| int_value(call.agg.args[0].ty, v))
             }
@@ -1528,6 +1663,14 @@ fn method<'q>(agg: &'q Aggref, expr: &'q Expr) -> Result<Option<Method<'q>>> {
         "sum" if arg_ty == oid::INT8 && expr.ty == oid::NUMERIC => Method::Int128 { avg: false },
         "avg" if matches!(arg_ty, oid::INT2 | oid::INT4 | oid::INT8) && expr.ty == oid::NUMERIC => {
             Method::Int128 { avg: true }
+        }
+        "sum" | "avg"
+            if arg_ty == oid::NUMERIC
+                && expr.ty == oid::NUMERIC
+                && agg.distinct.is_empty()
+                && arg.and_then(dec_scale).is_some() =>
+        {
+            Method::Dec { avg: name == "avg", scale: arg.and_then(dec_scale).unwrap_or(0) }
         }
         "min" if int && expr.ty == arg_ty => Method::Min,
         "max" if int && expr.ty == arg_ty => Method::Max,
@@ -1620,8 +1763,10 @@ pub(crate) fn run(
         });
     }
     for item in &query.group {
-        let ty = query.targets[item.target].expr.ty;
-        if !plain(item.collation) || ty == oid::BPCHAR {
+        let expr = &query.targets[item.target].expr;
+        // A `character` column with a length pads each value to the length, so two values are equal when their bytes are equal. Other `character` values can differ only in trailing spaces.
+        let padded = matches!(expr.kind, ExprKind::Var(_)) && expr.typmod > 4;
+        if !plain(item.collation) || (expr.ty == oid::BPCHAR && !padded) {
             return Ok(None);
         }
     }
@@ -1629,7 +1774,11 @@ pub(crate) fn run(
     let mut wanted = Vec::new();
     let mut places = vec![usize::MAX; types.len()];
     for (column, _) in used.iter().enumerate().filter(|(_, u)| **u) {
-        let Some(kind) = kind_of(types[column]) else { return Ok(None) };
+        let Some(kind) = kind_of(types[column])
+            .or_else(|| numeric_kind(types[column], relation.columns[column].typmod))
+        else {
+            return Ok(None);
+        };
         if kind == Kind::Text && !table.columns.get(column).is_some_and(|c| plain(c.collation)) {
             return Ok(None);
         }
@@ -1821,7 +1970,7 @@ fn top(
     // The scan skips the rows after the cut when the column of the lead key is a stored column of integers and its nulls come last.
     let scan_cut = lead.and_then(|(target, descending, nulls_first)| {
         let place = *scan.exec.places.get(columns[target])?;
-        (!nulls_first && scan.exec.stored.get(place).is_some_and(|s| s.kind.store() == Store::Int))
+        (!nulls_first && scan.exec.stored.get(place).is_some_and(|s| int_column(s)))
             .then_some((place, descending, &cut))
     });
     scan.each_cut(scan_cut, &mut |exec, batch, sel| {
@@ -2503,7 +2652,7 @@ impl Exec<'_> {
                     ),
                     _ => return None,
                 };
-                if self.stored[place].kind.store() != Store::Int {
+                if !int_column(&self.stored[place]) {
                     return None;
                 }
                 let key = rupg_summary::key::int(value);
@@ -2529,7 +2678,7 @@ impl Exec<'_> {
                 int_compare(src)?;
                 let [a, b] = args.as_slice() else { return None };
                 let place = place(a)?;
-                if self.stored[place].kind.store() != Store::Int {
+                if !int_column(&self.stored[place]) {
                     return None;
                 }
                 let values: Vec<i64> = match &b.kind {
@@ -2588,7 +2737,7 @@ fn grouped(
         let states = match &method {
             Method::Count | Method::CountArg => States::Count(Vec::new()),
             Method::Distinct => States::Distinct(Vec::new()),
-            Method::SumInt | Method::Int128 { .. } => States::Sum(Vec::new()),
+            Method::SumInt | Method::Int128 { .. } | Method::Dec { .. } => States::Sum(Vec::new()),
             Method::Min | Method::Max => States::Extreme(Vec::new()),
             Method::Row(_) => States::Row(Vec::new()),
             Method::Shift { .. } => States::Shift,
@@ -3001,10 +3150,19 @@ fn grouped(
                             }
                         }
                     }
-                    (Method::SumInt | Method::Int128 { .. }, States::Sum(states)) => {
+                    (
+                        Method::SumInt | Method::Int128 { .. } | Method::Dec { .. },
+                        States::Sum(states),
+                    ) => {
                         let col =
                             col.as_ref().ok_or_else(|| Error::internal("sum has no argument"))?;
-                        let Some(ints) = col.ints() else {
+                        let ints = match call.method {
+                            Method::Dec { scale, .. } => {
+                                decs(col).filter(|&(_, s)| s == scale).map(|(ints, _)| ints)
+                            }
+                            _ => col.ints(),
+                        };
+                        let Some(ints) = ints else {
                             bail = true;
                             return Ok(false);
                         };
@@ -3303,7 +3461,7 @@ fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) ->
         }
         _ => None,
     };
-    let int = |p: usize| exec.stored[p].kind.store() == Store::Int;
+    let int = |p: usize| int_column(&exec.stored[p]);
     let mut places = Vec::with_capacity(aggs.len());
     for call in aggs.iter() {
         let arg = call.agg.args.first();
@@ -3320,7 +3478,7 @@ fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) ->
                     None => return Vec::new(),
                 }
             }
-            Method::Distinct | Method::Row(_) => return Vec::new(),
+            Method::Distinct | Method::Dec { .. } | Method::Row(_) => return Vec::new(),
         });
     }
     let Some(base_places) =
@@ -3441,15 +3599,14 @@ fn parallel_plan(
         return None;
     }
     let place = |expr: &Expr| place_of(exec, expr);
-    let int_place =
-        |expr: &Expr| place(expr).filter(|&p| matches!(exec.stored[p].kind.store(), Store::Int));
+    let int_place = |expr: &Expr| place(expr).filter(|&p| int_column(&exec.stored[p]));
     // A key that is a column of an other key plus a constant gets its words from the words of that key after the scan, so that the groups have fewer words.
     let derived: Vec<Option<Derived>> = keys
         .iter()
         .map(|key| {
             let (var, by, range) = shifted(key)?;
             let from = keys.iter().position(|k| k.kind == var.kind)?;
-            place_of(exec, var).filter(|&p| matches!(exec.stored[p].kind.store(), Store::Int))?;
+            place_of(exec, var).filter(|&p| int_column(&exec.stored[p]))?;
             Some(Derived { from, by, range })
         })
         .collect();
@@ -3500,7 +3657,10 @@ fn parallel_plan(
             }
             ExprKind::Case(case) => case_input(exec, case),
             _ => place(key)
-                .filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))
+                .filter(|&p| {
+                    !matches!(exec.stored[p].kind.store(), Store::Float)
+                        && !matches!(exec.stored[p].kind, Kind::Numeric(_))
+                })
                 .map(groups::Input::Column),
         })
         .collect::<Option<Vec<_>>>()?;
@@ -3515,7 +3675,7 @@ fn parallel_plan(
                 Method::Min => groups::Fold::Min(int_place(arg?)?),
                 Method::Max => groups::Fold::Max(int_place(arg?)?),
                 Method::Shift { .. } => groups::Fold::None,
-                Method::Distinct | Method::Row(_) => return None,
+                Method::Distinct | Method::Dec { .. } | Method::Row(_) => return None,
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -3537,8 +3697,10 @@ fn case_input(exec: &Exec<'_>, case: &rupg_analyze::Case) -> Option<groups::Inpu
         _ => vec![cond],
     };
     let tests = conds.into_iter().map(|c| exec.zone_test(c)).collect::<Option<Vec<_>>>()?;
-    let then =
-        place_of(exec, result).filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))?;
+    let then = place_of(exec, result).filter(|&p| {
+        !matches!(exec.stored[p].kind.store(), Store::Float)
+            && !matches!(exec.stored[p].kind, Kind::Numeric(_))
+    })?;
     let dict = exec.dict_of[then];
     let default = match &case.default.kind {
         ExprKind::Const(v) if v.is_null() => None,
