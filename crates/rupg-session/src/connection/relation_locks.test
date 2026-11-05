@@ -1,0 +1,65 @@
+A> CREATE TABLE rl (a int)
+CREATE TABLE
+A> BEGIN
+BEGIN
+A> SELECT count(*) FROM rl
+fields count:20:8:-1
+row 0
+SELECT 1
+B> SELECT mode, granted, fastpath FROM pg_locks WHERE relation = 'rl'::regclass
+fields mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1,fastpath@pg_locks.15:16:1:-1
+row AccessShareLock,t,t
+SELECT 1
+B> SET lock_timeout = '10ms'
+SET
+B> DROP TABLE rl
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16384 of database 5)
+B> TRUNCATE rl
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16384 of database 5)
+B> ALTER TABLE rl ADD COLUMN b int
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16384 of database 5)
+B> SELECT mode, granted, fastpath FROM pg_locks WHERE relation = 'rl'::regclass
+fields mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1,fastpath@pg_locks.15:16:1:-1
+row AccessShareLock,t,f
+SELECT 1
+B> INSERT INTO rl VALUES (1)
+INSERT 0 1
+A> COMMIT
+COMMIT
+B> BEGIN
+BEGIN
+B> UPDATE rl SET a = 2
+UPDATE 1
+A> SELECT mode, granted, fastpath FROM pg_locks WHERE relation = 'rl'::regclass
+fields mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1,fastpath@pg_locks.15:16:1:-1
+row RowExclusiveLock,t,t
+SELECT 1
+A> SET lock_timeout = '10ms'
+SET
+A> CREATE INDEX ON rl (a)
+ERROR 55P03 canceling statement due to lock timeout (waiting for ShareLock on relation 16384 of database 5)
+A> SELECT count(*) FROM rl
+fields count:20:8:-1
+row 1
+SELECT 1
+B> SAVEPOINT s
+SAVEPOINT
+B> SELECT a FROM rl FOR UPDATE
+fields a@rl.1:23:4:-1
+row 2
+SELECT 1
+B> SELECT mode FROM pg_locks WHERE relation = 'rl'::regclass ORDER BY 1
+fields mode@pg_locks.13:25:-1:-1
+row RowExclusiveLock
+row RowShareLock
+SELECT 2
+B> ROLLBACK TO s
+ROLLBACK
+B> SELECT mode FROM pg_locks WHERE relation = 'rl'::regclass ORDER BY 1
+fields mode@pg_locks.13:25:-1:-1
+row RowExclusiveLock
+SELECT 1
+B> COMMIT
+COMMIT
+A> DROP TABLE rl
+DROP TABLE

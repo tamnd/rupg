@@ -82,6 +82,8 @@ impl Definer<'_, '_> {
         if let Found::User(oid) = found
             && !alter
         {
+            // `ShareUpdateExclusiveLock` for `CONCURRENTLY`, which lets writes go on, and `ShareLock` for the others.
+            self.an.env.relation_lock(oid, if stmt.concurrent { 4 } else { 5 })?;
             self.check_not_in_use(oid, "CREATE INDEX")?;
         }
         // `ProcessUtilitySlow` checks each partition of a partitioned table before `DefineIndex`.

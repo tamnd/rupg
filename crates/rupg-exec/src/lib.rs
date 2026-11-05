@@ -2009,10 +2009,13 @@ impl Plan {
         if self.row_security.is_some_and(|user| user != rupg_func::current_user_oid(session)) {
             return Err(not_yet("a plan of a query on a table with row security for another role"));
         }
+        // `AcquireExecutorLocks`: `RowShareLock` for a statement with `FOR UPDATE` or `FOR SHARE`, and `AccessShareLock` for the others.
+        let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
+        let mode = if self.lock_clause().is_some() { 2 } else { 1 };
+        session.lock_relations(reads, mode, self.query.write.as_ref().map(|write| write.table))?;
         rupg_func::check_permissions(&self.query.perms, session)?;
         rupg_func::check_execute(&self.query.funcs, session)?;
         check_row_marks(&self.query, session)?;
-        let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
         scan::check_scannable(reads, session)
     }
 

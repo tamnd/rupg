@@ -9090,6 +9090,12 @@ mod tests {
         big_stack(|| two_sessions(include_str!("connection/lock_conflicts.test")));
     }
 
+    /// The locks that statements take on relations in two sessions: a read and a write take a weak lock on the fast path, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE` and `CREATE INDEX` wait for them until `lock_timeout`, a strong request moves the weak locks to the table, and the rollback to a savepoint releases the locks after it.
+    #[test]
+    fn relation_locks() {
+        big_stack(|| two_sessions(include_str!("connection/relation_locks.test")));
+    }
+
     /// `LOCK TABLE` in two sessions that wait: a wait with the wait event `relation` that ends at the commit of the other session, a deadlock that the session with the shorter `deadlock_timeout` finds, and the end of `lock_timeout` with the lock in the context.
     #[test]
     fn lock_wait() {

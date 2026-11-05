@@ -10,6 +10,7 @@ use rupg_func::{Backend, BackendState, Client, Process, Progress, RelationCounts
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
+use crate::advisory::Fast;
 use crate::guc::{self, Settings};
 use crate::heap::Change;
 use crate::query;
@@ -128,12 +129,19 @@ pub(crate) struct Activity {
     pub(crate) system_user: Option<String>,
     /// True while the row of the session has the progress of a command.
     progress: Cell<bool>,
+    /// The fast path of the weak locks of the transaction on relations, after [`Connection::join`].
+    pub(crate) fast: Option<Arc<Fast>>,
 }
 
 impl Activity {
     /// The number of the session in the table, after [`Connection::greet`].
     pub(crate) fn number(&self) -> Option<i32> {
         self.number
+    }
+
+    /// The OID of the database of the session.
+    pub(crate) fn database(&self) -> u32 {
+        self.database
     }
 
     /// Changes the row of the session in the table, if the session has a row.
@@ -306,6 +314,7 @@ impl Connection {
         let (number, row) = self.store.join_row(backend, Arc::clone(&self.end));
         self.activity.number = Some(number);
         self.activity.row = Some(row);
+        self.activity.fast = Some(self.store.locks().join(self.pid));
     }
 
     /// `pgstat_report_activity`: the state of the session, and the text of the statement that starts when `text` is `Some`.
@@ -451,7 +460,11 @@ impl Connection {
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.
     pub(super) fn transaction_ended(&self) {
         self.large_objects.borrow_mut().clear();
-        self.store.locks().release_all(self.pid, false);
+        let locks = self.store.locks();
+        if let Some(fast) = &self.activity.fast {
+            locks.release_fast(fast);
+        }
+        locks.release_all(self.pid, false);
         self.activity.clear();
         // `AbortTransaction` ends the progress of a command that failed.
         self.report_progress(None);
@@ -465,6 +478,9 @@ impl Connection {
     /// The end of the session, which releases its advisory locks and frees its row of the table.
     pub(super) fn leave(&mut self) {
         let locks = self.store.locks();
+        if let Some(fast) = self.activity.fast.take() {
+            locks.leave(&fast);
+        }
         locks.release_all(self.pid, false);
         locks.release_all(self.pid, true);
         self.store.heap().release(self.pid);

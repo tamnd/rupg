@@ -418,6 +418,15 @@ pub trait Session {
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
+    /// `LockRelationOid` for the start of a statement: the transaction holds `RowExclusiveLock` on the table `write` that the statement writes, and `mode` on each other relation of `reads`, until it ends. The session waits while another transaction holds a mode that conflicts. A session with no server takes no locks.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    fn lock_relations(&self, reads: &[u32], mode: u8, write: Option<u32>) -> Result<()> {
+        let _ = (reads, mode, write);
+        Ok(())
+    }
     /// The rows of `pg_lock_status`, in the 16 columns of the function: the locks that the sessions hold or wait for. A session with no server has no locks.
     fn locks(&self) -> Vec<Vec<Value>> {
         Vec::new()
