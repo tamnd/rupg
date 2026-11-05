@@ -1,0 +1,67 @@
+> CREATE TABLE gh (k int, v int)
+CREATE TABLE
+> INSERT INTO gh SELECT i % 50, i FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT k, count(*), sum(v) FROM gh GROUP BY k HAVING sum(v) > 49020000
+fields k@gh.1:23:4:-1,count:20:8:-1,sum:20:8:-1
+row 44,1400,49026600
+row 42,1400,49023800
+row 40,1400,49021000
+row 43,1400,49025200
+row 48,1400,49032200
+row 0,1400,49035000
+row 45,1400,49028000
+row 41,1400,49022400
+row 46,1400,49029400
+row 49,1400,49033600
+row 47,1400,49030800
+SELECT 11
+> SELECT k, sum(v) FROM gh GROUP BY k HAVING sum(v) > 49020000 LIMIT 3 OFFSET 1
+fields k@gh.1:23:4:-1,sum:20:8:-1
+row 42,49023800
+row 40,49021000
+row 43,49025200
+SELECT 3
+> SELECT k, avg(v) AS a FROM gh GROUP BY k HAVING count(*) > 100 AND min(v) < 40 ORDER BY a DESC LIMIT 3
+fields k@gh.1:23:4:-1,a:1700:-1:-1
+row 39,35014.000000000000
+row 38,35013.000000000000
+row 37,35012.000000000000
+SELECT 3
+> SELECT k % 7 AS m, min(v::text), count(*) FROM gh GROUP BY m HAVING count(*) > 9000 ORDER BY 2 LIMIT 2
+fields m:23:4:-1,min:25:-1:-1,count:20:8:-1
+row 1,1,9800
+row 3,10,9800
+SELECT 2
+> SELECT k, count(*) FROM gh GROUP BY k HAVING 1 / (min(k) - 41) > -1 LIMIT 2 OFFSET 30
+fields k@gh.1:23:4:-1,count:20:8:-1
+row 2,1400
+row 16,1400
+SELECT 2
+> SELECT k, count(*) FROM gh GROUP BY k HAVING 1 / (min(k) - 41) > -1 LIMIT 3 OFFSET 30
+fields k@gh.1:23:4:-1,count:20:8:-1
+ERROR 22012 division by zero
+> SELECT k, count(*) FROM gh GROUP BY k HAVING 1 / (min(k) - 41) > -1 ORDER BY k LIMIT 1
+fields k@gh.1:23:4:-1,count:20:8:-1
+ERROR 22012 division by zero
+> CREATE SEQUENCE hs
+CREATE SEQUENCE
+> SELECT k FROM gh GROUP BY k HAVING nextval('hs') % 2 = 0 LIMIT 3
+fields k@gh.1:23:4:-1
+row 44
+row 42
+row 43
+SELECT 3
+> SELECT currval('hs')
+fields currval:20:8:-1
+row 6
+SELECT 1
+> SELECT k FROM gh GROUP BY k HAVING nextval('hs') % 3 = 0 ORDER BY k DESC LIMIT 2
+fields k@gh.1:23:4:-1
+row 49
+row 48
+SELECT 2
+> SELECT currval('hs')
+fields currval:20:8:-1
+row 56
+SELECT 1

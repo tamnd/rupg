@@ -1101,7 +1101,7 @@ impl Expr {
     }
 
     /// The first `Some` that `f` gives for an argument of the expression, in the order of [`Expr::children`]. The common kinds of expressions give their arguments with no list, so that a search of a large expression does not allocate a list at each node.
-    fn find_child<'a, T>(&'a self, f: &mut impl FnMut(&'a Expr) -> Option<T>) -> Option<T> {
+    pub fn find_child<'a, T>(&'a self, f: &mut impl FnMut(&'a Expr) -> Option<T>) -> Option<T> {
         let args: &'a [Expr] = match &self.kind {
             ExprKind::Const(_)
             | ExprKind::Param(_)
