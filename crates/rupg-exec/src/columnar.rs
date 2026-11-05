@@ -3873,8 +3873,7 @@ fn word_order(
     let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
     /// The places of a key, true for descending, true for nulls first, and the key.
     type PlaceKey = (Vec<u64>, bool, bool, usize);
-    let mut places: Vec<PlaceKey> = Vec::with_capacity(natives.len());
-    for &(k, descending, nulls_first) in natives {
+    let place_of = |&(k, descending, nulls_first): &(usize, bool, bool)| -> Option<PlaceKey> {
         let key = words.chunks(width).map(|g| g[k]);
         let by = match shapes[k] {
             Shape::Int(_) => concat(on_parts(tasks, groups, |range| {
@@ -3899,8 +3898,8 @@ fn word_order(
                 }
             }
         };
-        places.push((by, descending, nulls_first, k));
-    }
+        Some((by, descending, nulls_first, k))
+    };
     // Each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
     let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey| {
         let null = null(g, *k);
@@ -3913,6 +3912,38 @@ fn word_order(
             (false, true) => 1_u128 << 64 | u128::from(place),
         }
     };
+    // For the groups that change the heap of a top of counts, the first key alone gives a first part of the order, and only the groups of that part and the groups whose counts come before the top of its heap need all the keys.
+    if let Want::Top { counts, descending, bound } = want
+        && let [lead, _, ..] = natives
+        && bound > 0
+    {
+        let prefix = (groups / TOP_PREFIX).max(bound.saturating_mul(4));
+        if prefix < groups {
+            let lead = place_of(lead)?;
+            let leads: Vec<u128> = (0..groups).map(|g| number(g, &lead)).collect();
+            let mut sorted = leads.clone();
+            let (_, &mut last, _) = sorted.select_nth_unstable(prefix - 1);
+            drop(sorted);
+            // The groups whose first key is at most the first key of the last group of the part are a first part of the order, since the order compares the first key first.
+            let rank = |g: usize| {
+                let c = i128::from(counts[g]);
+                if descending { c } else { -c }
+            };
+            let mut ranks: Vec<i128> =
+                (0..groups).filter(|&g| leads[g] <= last).map(rank).collect();
+            let (_, &mut top, _) = ranks.select_nth_unstable_by(bound - 1, |a, b| b.cmp(a));
+            drop(ranks);
+            let chosen: Vec<usize> =
+                (0..groups).filter(|&g| leads[g] <= last || rank(g) > top).collect();
+            let mut some = Vec::with_capacity(chosen.len() * width);
+            for &g in &chosen {
+                some.extend_from_slice(&words[g * width..(g + 1) * width]);
+            }
+            let order = word_order(tasks, &some, shapes, dicts, natives, chosen.len(), Want::All)?;
+            return Some(order.into_iter().map(|i| chosen[i]).collect());
+        }
+    }
+    let places: Vec<PlaceKey> = natives.iter().map(place_of).collect::<Option<_>>()?;
     let order = match places.as_slice() {
         [one] => {
             let numbers: Vec<(u128, u32)> =
@@ -4270,6 +4301,49 @@ mod tests {
         assert_eq!(one, many);
         let first = packed_order(Some(&tasks), groups, 3, Want::First(1000), number).unwrap();
         assert_eq!(first, one[..1000]);
+    }
+
+    /// The order of the words of the keys for [`Want::Top`], which finds a first part of the order by the first key, keeps the same groups in the heap of a top of counts as the order of all the groups, also with equal first keys, nulls and keys in descending order.
+    #[test]
+    fn a_top_order_of_words_gives_the_heap_of_all_the_groups() {
+        let mut seed = 7_u64;
+        for round in 0..200_u32 {
+            let groups = 60 + (round as usize * 1193) % 9000;
+            let bound = 1 + round as usize % 10;
+            let descending = round % 2 == 0;
+            let spread = [2_u64, 6, 50, 1000][round as usize % 4];
+            let lead = [3_u64, 40, 100_000][round as usize % 3];
+            let mut next = || {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                seed >> 20
+            };
+            let counts: Vec<i64> =
+                (0..groups).map(|_| i64::try_from(next() % spread).unwrap() + 1).collect();
+            // Three keys and the mask of nulls. The second key is the place of the group, so that no two groups have the same keys.
+            let mut words = Vec::with_capacity(groups * 4);
+            for g in 0..groups {
+                let null = u64::from(next() % 17 == 0);
+                words.extend([next() % lead, g as u64, next() % 5, null]);
+            }
+            let shapes = [Shape::Int(oid::INT8), Shape::Int(oid::INT8), Shape::Int(oid::INT8)];
+            let natives =
+                [(0, round % 3 == 0, round % 5 == 0), (2, false, false), (1, true, false)];
+            let heap = |order: Vec<usize>| {
+                let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
+                    Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
+                };
+                let mut heap = sort::Bounded::new(bound);
+                for g in order {
+                    heap.push((counts[g], g), &mut cmp).unwrap();
+                }
+                heap.finish(&mut cmp).unwrap()
+            };
+            let order = |want| word_order(None, &words, &shapes, &[], &natives, groups, want);
+            let all = order(Want::All).unwrap();
+            let top = order(Want::Top { counts: &counts, descending, bound }).unwrap();
+            assert!(top.len() <= all.len(), "round {round}");
+            assert_eq!(heap(top), heap(all), "round {round}");
+        }
     }
 
     /// The heap of a top of counts keeps the same groups in the same order from the order of [`Want::Top`] as from the order of all the groups, also with many equal counts, for both directions.
