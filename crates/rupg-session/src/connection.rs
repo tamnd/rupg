@@ -699,7 +699,7 @@ impl Connection {
     }
 
     /// What a statement reads of the session.
-    fn reader(&self) -> Reader<'_> {
+    pub(crate) fn reader(&self) -> Reader<'_> {
         self.reader_on(self.catalog())
     }
 
@@ -9091,6 +9091,12 @@ mod tests {
     #[test]
     fn relation_locks() {
         big_stack(|| two_sessions(include_str!("connection/relation_locks.test")));
+    }
+
+    /// Row locks in two sessions: `INSERT ... ON CONFLICT DO UPDATE`, `UPDATE`, `DELETE` and the locking clauses wait for a lock of `FOR UPDATE` in a table and in a partition, `NOWAIT` fails, `SKIP LOCKED` skips the row, and `FOR KEY SHARE` lets an `UPDATE` of the columns that are not keys go.
+    #[test]
+    fn row_locks() {
+        big_stack(|| two_sessions(include_str!("connection/row_locks.test")));
     }
 
     /// `LOCK TABLE` in two sessions that wait: a wait with the wait event `relation` that ends at the commit of the other session, a deadlock that the session with the shorter `deadlock_timeout` finds, and the end of `lock_timeout` with the lock in the context.

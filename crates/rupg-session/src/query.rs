@@ -21,7 +21,7 @@ use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
 use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsEntropy;
 use rupg_platform::{Clock, Entropy, Io, OpenMode};
-use rupg_sql::nodes::{Node, VariableSetKind, VariableSetStmt};
+use rupg_sql::nodes::{LockWaitPolicy, Node, VariableSetKind, VariableSetStmt};
 use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
     oid, tz,
@@ -31,7 +31,7 @@ use rupg_wire::{Field, Portals, Statements};
 use crate::advisory::{EXCLUSIVE, Edge, Mode, ROW_EXCLUSIVE, Request, SHARE, Tag, mode_name};
 use crate::connection::{Activity, Connection, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
-use crate::heap::View;
+use crate::heap::{RowLocked, View, tid_text};
 use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
@@ -698,6 +698,77 @@ impl<'a> Reader<'a> {
             self.acquire(tag, mode, false, true, RELATION)?;
         }
         Ok(())
+    }
+
+    /// `ExecLockRows` for the rows `rows` of a plan of [`Plan::locking`], which end with the `tableoid` and the `ctid` of the row of each table of `tables` after the `width` columns of the query: the transaction locks the row of each table with the strength and the wait policy of `locks`. A lock that conflicts waits for the end of the other transaction, `SKIP LOCKED` skips the row and `NOWAIT` fails. A row that the transaction deleted goes. The result has the rows with the columns of the query, or `None` when the statement must run again with a new snapshot.
+    ///
+    /// # Errors
+    ///
+    /// `55P03` for `NOWAIT`, the errors of [`Reader::wait_xact`], and `40001` in `REPEATABLE READ` for a row that a transaction that committed after the snapshot changed.
+    pub(crate) fn lock_rows(
+        &self,
+        (tables, locks): (&[u32], &[(i32, i32)]),
+        rows: Vec<Vec<Value>>,
+        width: usize,
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        let (Some(conn), Some(view)) = (self.conn, self.view.as_ref()) else {
+            return Ok(Some(
+                rows.into_iter()
+                    .map(|mut row| {
+                        row.truncate(width);
+                        row
+                    })
+                    .collect(),
+            ));
+        };
+        let xid = conn.transaction_id(true).unwrap_or(view.xid);
+        let heap = conn.heap();
+        let mut out = Vec::with_capacity(rows.len());
+        'rows: for mut row in rows {
+            for (at, &(strength, wait)) in locks.iter().enumerate().take(tables.len()) {
+                let place = width + 2 * at;
+                let (Some(&Value::Oid(relation)), Some(&Value::Int8(tid))) =
+                    (row.get(place), row.get(place + 1))
+                else {
+                    // The nullable side of an outer join has no row to lock.
+                    continue;
+                };
+                let tid = tid.cast_unsigned();
+                let strength = u8::try_from(strength).unwrap_or(crate::heap::UPDATE);
+                loop {
+                    match heap.lock_row((relation, tid), view, (xid, strength))? {
+                        RowLocked::Done => break,
+                        RowLocked::Gone => continue 'rows,
+                        RowLocked::Again => return Ok(None),
+                        RowLocked::Wait(holder) => {
+                            let name = self
+                                .catalog
+                                .relation(relation)
+                                .map(|r| r.name.clone())
+                                .unwrap_or_default();
+                            let wait = LockWaitPolicy(wait);
+                            if wait == LockWaitPolicy::LockWaitSkip {
+                                continue 'rows;
+                            }
+                            if wait == LockWaitPolicy::LockWaitError {
+                                return Err(Error::new(
+                                    SqlState::LOCK_NOT_AVAILABLE,
+                                    format!("could not obtain lock on row in relation \"{name}\""),
+                                ));
+                            }
+                            let context = format!(
+                                "while locking tuple {} in relation \"{name}\"",
+                                tid_text(tid)
+                            );
+                            self.wait_xact(xid, holder, &context)?;
+                        }
+                    }
+                }
+            }
+            row.truncate(width);
+            out.push(row);
+        }
+        Ok(Some(out))
     }
 
     /// `XactLockTableWait`: the wait of the transaction `xid` for the end of the transaction `holder`, which changed a row that the statement changes. After `deadlock_timeout`, the session looks once for a cycle of waits. A cancel and the end of `lock_timeout` stop the wait. `context` tells the row, as `XactLockTableWaitErrorCb` does.
@@ -2149,6 +2220,9 @@ pub(crate) fn run_select(
         }
         return Ok(rows);
     }
+    if let Some((locking, locks)) = plan.locking() {
+        return run_locking(&types, (&locking, &locks), params, reader, formats);
+    }
     let (values, failed) = match plan.run_select(params, reader) {
         Ok(values) => (values, None),
         Err((values, error)) => (values, Some(error)),
@@ -2165,6 +2239,47 @@ pub(crate) fn run_select(
         None => Ok(rows),
         Some(error) => Err((rows, error)),
     }
+}
+
+/// `ExecLockRows` for a query with a locking clause: the rows of the plan `locking` of [`Plan::locking`], each after the lock of the row of each table with a row mark, with the columns of the types `types`. In `READ COMMITTED`, when a transaction that committed after the snapshot changed a row, the statement runs again with a new snapshot, which sees the last version of the row, as `EvalPlanQual` checks it.
+///
+/// # Errors
+///
+/// The errors of [`Plan::run_select`], of [`Reader::lock_rows`] and of the output functions.
+fn run_locking(
+    types: &[u32],
+    (locking, locks): (&Plan, &[(i32, i32)]),
+    params: &[Value],
+    reader: &Reader<'_>,
+    formats: &[i16],
+) -> std::result::Result<Vec<Row>, (Vec<Row>, Error)> {
+    let mut fresh = None;
+    let values = loop {
+        let current = fresh.as_ref().unwrap_or(reader);
+        let values =
+            locking.run_select(params, current).map_err(|(_, error)| (Vec::new(), error))?;
+        let locked = current.lock_rows((locking.marks(), locks), values, types.len());
+        match locked.map_err(|error| (Vec::new(), error))? {
+            Some(values) => break values,
+            None => match reader.conn {
+                Some(conn) => fresh = Some(conn.reader()),
+                None => {
+                    return Err((
+                        Vec::new(),
+                        Error::internal("a row changed in a reader with no session"),
+                    ));
+                }
+            },
+        }
+    };
+    let mut rows = Vec::with_capacity(values.len());
+    for values in &values {
+        match encode(types, values, reader, formats) {
+            Ok(row) => rows.push(row),
+            Err(error) => return Err((rows, error)),
+        }
+    }
+    Ok(rows)
 }
 
 /// The bytes of the values of a row of the types `types` in the result format of each column: 1 is binary and any other code is text.
