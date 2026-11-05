@@ -1318,6 +1318,7 @@ fn unsupported(expr: &Expr) -> bool {
                     | ExprKind::JsonTable(_) => true,
                     ExprKind::Var(var) => var.levels_up != 0 || var.attnum <= 0,
                     ExprKind::Collate(_, collation) => !plain(*collation),
+                    ExprKind::Func(f) => f.collation != 0,
                     ExprKind::Agg(agg) => {
                         agg.levels_up != 0
                             || agg.kind != b'n'

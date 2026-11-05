@@ -140,6 +140,7 @@ fn op_clause(column: &KeyColumn, strategy: i16, value: Expr) -> Result<Expr> {
         form: FuncForm::Operator(op.oid),
         variadic: false,
         retset: false,
+        collation: 0,
     })))
 }
 
@@ -168,6 +169,7 @@ fn hash_qual(parent: u32, columns: &[KeyColumn], modulus: i32, remainder: i32) -
         form: FuncForm::Call,
         variadic: false,
         retset: false,
+        collation: 0,
     }))]
 }
 

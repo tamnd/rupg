@@ -157,7 +157,8 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
             values: vec![Value::Null],
             ty: arg.ty,
         }),
-        ExprKind::Func(f) if f.args.len() == 2 => {
+        // A test in a collation of ICU does not prune, because the bounds order the strings as their bytes.
+        ExprKind::Func(f) if f.args.len() == 2 && f.collation == 0 => {
             let (attnum, (value, ty), commuted) =
                 match (column(&f.args[0], index), constant(&f.args[1])) {
                     (Some(attnum), Some(c)) => (attnum, c, false),

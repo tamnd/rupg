@@ -270,6 +270,9 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 FuncForm::SqlSyntax => out.push_str(" :form sql"),
             }
             out.push_str(&format!(" :variadic {}", f.variadic));
+            if f.collation != 0 {
+                out.push_str(&format!(" :inputcollid {}", f.collation));
+            }
             write_args(&f.args, out)?;
         }
         ExprKind::Relabel(arg, form)
@@ -1083,6 +1086,12 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 variadic: f.flag("variadic")?,
                 // A stored expression has no call of a function that gives a set.
                 retset: false,
+                collation: f
+                    .get("inputcollid")
+                    .ok()
+                    .map(|i| atom(i).and_then(number))
+                    .transpose()?
+                    .unwrap_or(0),
             })
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
@@ -1615,6 +1624,7 @@ mod tests {
                 form: FuncForm::Operator(551),
                 variadic: false,
                 retset: false,
+                collation: 0,
             }),
             ty: oid::INT4,
             typmod: -1,
@@ -1697,6 +1707,7 @@ mod tests {
                     form: FuncForm::ImplicitCast,
                     variadic: true,
                     retset: false,
+                    collation: 0,
                 }),
                 ty: oid::VARCHAR,
                 typmod: 14,

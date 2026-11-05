@@ -67,6 +67,7 @@ fn call(func: u32, args: Vec<Expr>, ty: u32, at: Option<usize>) -> Expr {
         form: FuncForm::Call,
         variadic: false,
         retset: false,
+        collation: 0,
     });
     Expr { kind, ty, typmod: -1, location: at }
 }

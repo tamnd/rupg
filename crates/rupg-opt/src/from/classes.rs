@@ -424,6 +424,7 @@ pub(crate) fn equality(families: &[u32], left: &Expr, right: &Expr) -> Option<Ex
         form: FuncForm::Operator(op),
         variadic: false,
         retset: proc.retset,
+        collation: 0,
     };
     Some(Expr::new(ExprKind::Func(func), oid::BOOL))
 }

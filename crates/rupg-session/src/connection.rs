@@ -7826,6 +7826,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_create.test")));
     }
 
+    /// The comparison of strings in a collation of ICU: `<`, `>`, `bttextcmp`, `text_larger` and `text_smaller` of `text`, `varchar`, `bpchar` and `name` with an explicit `COLLATE`, a column of a subquery and a column of a table in a collation of ICU, with an index that orders the bytes, a prepared statement, a check constraint, `ALL` with a subquery, and the numeric order of `kn`. `connection/icu_compare.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_compare() {
+        big_stack(|| script(include_str!("connection/icu_compare.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {

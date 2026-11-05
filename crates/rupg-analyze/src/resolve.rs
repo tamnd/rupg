@@ -1018,6 +1018,13 @@ impl Analyzer<'_> {
                 )
                 .at_opt(at));
             }
+            // `max` and `min` of strings order them, with the collation of their input.
+            if matches!(proc.name, "max" | "min") && self.icu_input(&args) != 0 {
+                return Err(crate::transform::not_yet(
+                    &format!("the aggregate {} in a collation of ICU", proc.name),
+                    at,
+                ));
+            }
             return self.aggregate_call(proc.oid, row.kind, args, parts, variadic, result, at);
         }
         if prokind != b'f' && !proc_call {
@@ -1030,6 +1037,7 @@ impl Analyzer<'_> {
         if proc.retset {
             self.srfs = (self.srfs.0 + 1, at);
         }
+        let collation = self.call_collation(proc.oid, &args, at)?;
         Ok(Expr {
             kind: ExprKind::Func(Func {
                 oid: proc.oid,
@@ -1037,6 +1045,7 @@ impl Analyzer<'_> {
                 form: FuncForm::Call,
                 variadic,
                 retset: proc.retset,
+                collation,
             }),
             ty: result,
             typmod: -1,
@@ -1312,6 +1321,7 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         self.funcs.push(op.code);
+        let collation = self.call_collation(op.code, &args, at)?;
         Ok(Expr {
             kind: ExprKind::Func(Func {
                 oid: op.code,
@@ -1319,6 +1329,7 @@ impl Analyzer<'_> {
                 form: FuncForm::Operator(op.oid),
                 variadic: false,
                 retset: false,
+                collation,
             }),
             ty: result,
             typmod: -1,

@@ -280,6 +280,8 @@ pub struct Func {
     pub variadic: bool,
     /// `funcretset`: true when the function gives a set.
     pub retset: bool,
+    /// `inputcollid` when it is a collation of ICU, which orders the strings as the collator does, or 0 for a collation that orders them as their bytes.
+    pub collation: u32,
 }
 
 /// An argument by its name, as `NamedArgExpr`.

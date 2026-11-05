@@ -680,7 +680,14 @@ fn build_cast(
         -1
     };
     Expr {
-        kind: ExprKind::Func(Func { oid: func, args, form, variadic: false, retset: false }),
+        kind: ExprKind::Func(Func {
+            oid: func,
+            args,
+            form,
+            variadic: false,
+            retset: false,
+            collation: 0,
+        }),
         ty: target,
         typmod,
         location,

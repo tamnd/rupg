@@ -768,6 +768,8 @@ pub struct Call<'a> {
     pub variadic: bool,
     /// The number of rows that the caller reads from a set kernel, or `None` for all the rows. A function of the target list stops after them, as a function in the value-per-call mode of PostgreSQL gives no more rows when the node above it stops.
     pub want: Option<usize>,
+    /// `fncollation`: the collation of the inputs when it is a collation of ICU, or 0 for a collation that orders the strings as their bytes.
+    pub collation: u32,
 }
 
 impl std::fmt::Debug for Call<'_> {
@@ -777,6 +779,7 @@ impl std::fmt::Debug for Call<'_> {
             .field("ret", &self.ret)
             .field("variadic", &self.variadic)
             .field("want", &self.want)
+            .field("collation", &self.collation)
             .finish_non_exhaustive()
     }
 }

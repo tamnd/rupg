@@ -372,7 +372,7 @@ pub(crate) struct Agg<'q> {
 impl Agg<'_> {
     /// The call of a kernel of the aggregate with the argument types `args`.
     fn call<'s>(&self, eval: &'s Eval<'_>, args: &'s [u32], ret: u32) -> Call<'s> {
-        Call { session: eval.session, args, ret, variadic: false, want: None }
+        Call { session: eval.session, args, ret, variadic: false, want: None, collation: 0 }
     }
 
     pub(crate) fn start(&self, eval: &Eval<'_>) -> Result<State> {
@@ -739,6 +739,7 @@ impl Agg<'_> {
                         ret: self.ty,
                         variadic: false,
                         want: None,
+                        collation: 0,
                     };
                     f(&call, &[value])
                 }

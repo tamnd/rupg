@@ -2829,8 +2829,14 @@ impl<'a> Eval<'a> {
             };
         }
         let kernel = set_kernel(f.oid, call.location)?;
-        let c =
-            Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic, want };
+        let c = Call {
+            session: self.session,
+            args: &types,
+            ret: call.ty,
+            variadic: f.variadic,
+            want,
+            collation: 0,
+        };
         kernel(&c, &args)
     }
 
@@ -3430,7 +3436,14 @@ impl<'a> Eval<'a> {
             && let Some(kernel) = rupg_func::kernel(func)
             && self.session.catalog().and_then(|c| c.function(func)).is_none()
         {
-            let call = Call { session: self.session, args: types, ret, variadic, want: None };
+            let call = Call {
+                session: self.session,
+                args: types,
+                ret,
+                variadic,
+                want: None,
+                collation: 0,
+            };
             return kernel(&call, args);
         }
         if let Some(body) = self.cache.body(func, types, self.session)? {
@@ -3458,13 +3471,17 @@ impl<'a> Eval<'a> {
             };
         }
         let kernel = kernel(func, None)?;
-        let call = Call { session: self.session, args: types, ret, variadic, want: None };
+        let call =
+            Call { session: self.session, args: types, ret, variadic, want: None, collation: 0 };
         kernel(&call, args)
     }
 
     fn func(&mut self, f: &Func, expr: &Expr) -> Result<Value> {
         if let Some(p) = populate::populate_function(f.oid) {
             return Ok(self.populate_call(f, p, &[])?.pop().unwrap_or(Value::Null));
+        }
+        if f.collation != 0 {
+            return self.collated_call(f, expr.ty);
         }
         if !matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
             && !f.args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg(_)))
@@ -3509,14 +3526,39 @@ impl<'a> Eval<'a> {
         self.call(f.oid, &types, expr.ty, f.variadic, &args)
     }
 
+    /// [`Eval::func`] for a call in a collation of ICU, as `<` of `text` in `en-x-icu`: the kernel gets the collation, as `fncollation` gives it to the function. The analyzer gives a collation of ICU only to a built-in function.
+    fn collated_call(&mut self, f: &Func, ret: u32) -> Result<Value> {
+        let args = f.args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+        if strict(f.oid) && args.iter().any(Value::is_null) {
+            return Ok(Value::Null);
+        }
+        let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        let kernel = kernel(f.oid, None)?;
+        let call = Call {
+            session: self.session,
+            args: &types,
+            ret,
+            variadic: f.variadic,
+            want: None,
+            collation: f.collation,
+        };
+        kernel(&call, &args)
+    }
+
     /// [`Eval::func`] for a function that [`Cache::plain_kernel`] found: the kernel with the values of the arguments, or null for a strict function with a null argument.
     fn kernel_call(&mut self, kernel: Kernel, strict: bool, f: &Func, ret: u32) -> Result<Value> {
         let call = |eval: &Self, types: &[u32], args: &[Value]| {
             if strict && args.iter().any(Value::is_null) {
                 return Ok(Value::Null);
             }
-            let call =
-                Call { session: eval.session, args: types, ret, variadic: f.variadic, want: None };
+            let call = Call {
+                session: eval.session,
+                args: types,
+                ret,
+                variadic: f.variadic,
+                want: None,
+                collation: 0,
+            };
             kernel(&call, args)
         };
         match &f.args[..] {
@@ -4349,6 +4391,7 @@ pub fn exclusion_conflict(
                 form: FuncForm::Operator(op),
                 variadic: false,
                 retset: false,
+                collation: 0,
             }),
             oid::BOOL,
         );

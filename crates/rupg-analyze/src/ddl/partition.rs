@@ -278,6 +278,10 @@ impl Definer<'_, '_> {
             if !elem.collation.is_empty() {
                 collation = self.an.collation_oid(&elem.collation, None)?;
             }
+            // The bounds of the partitions order the strings as their bytes.
+            if crate::collate::icu(collation, Some(&*self.catalog)) {
+                return Err(super::not_yet("a partition key in a collation of ICU", None));
+            }
             if types::collatable(ty) {
                 if collation == 0 {
                     return Err(Error::new(
