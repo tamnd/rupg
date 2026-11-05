@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `VACUUM FULL` takes `AccessExclusiveLock` on each relation, and `VACUUM` with no list takes `ShareUpdateExclusiveLock` on each relation, as in PostgreSQL (#1350).
 - A row goes to the client from the bytes of its columns with no list of the values for each row (#1349).
 - More statements take locks on their relations, as in PostgreSQL: `CREATE TRIGGER` and the table that a new foreign key references take `ShareRowExclusiveLock`, `DROP INDEX` also locks the table of the index, `CLUSTER` takes `AccessExclusiveLock`, `REINDEX` takes `ShareLock` on the table and `AccessExclusiveLock` on the index (`ShareUpdateExclusiveLock` on both with `CONCURRENTLY`), and `VACUUM` and `ANALYZE` take `ShareUpdateExclusiveLock` (#1348).
 - Statements take locks on their relations until the end of the transaction, as in PostgreSQL. A read takes `AccessShareLock`, a statement with `FOR UPDATE` or `FOR SHARE` takes `RowShareLock` and a write takes `RowExclusiveLock` on its table. These weak locks go on a fast path of the session and touch no shared state while no session holds or waits for a strong lock on the relation. `DROP TABLE`, `TRUNCATE` and `ALTER TABLE` take `AccessExclusiveLock` and `CREATE INDEX` takes `ShareLock`, so they wait for the transactions that use the table, until `lock_timeout`. `pg_locks` shows the locks on the fast path with `fastpath` true (#1346).
