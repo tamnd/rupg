@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Column, CurrentOf, Expr, ExprKind, FieldStore,
@@ -34,6 +34,8 @@ pub struct Plan {
     run: Option<Arc<Query>>,
     /// `row_security_user_id`: the current user when a table of the query has row security, whose policies the plan has for that role.
     row_security: Option<u32>,
+    /// The relations that [`Plan::query`] reads, also in its subqueries, its queries of `WITH` and its sublinks, in the order of [`scan::check_scannable`]. The first start of a copy finds them, and the copies share them, as they share the query.
+    reads: Arc<OnceLock<Vec<u32>>>,
 }
 
 /// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
@@ -432,6 +434,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         marks: Vec::new(),
         run: None,
         row_security,
+        reads: Arc::default(),
     })
 }
 
@@ -1889,6 +1892,7 @@ impl Plan {
                     marks: Vec::new(),
                     run: None,
                     row_security: self.row_security,
+                    reads: Arc::default(),
                 };
                 (plan, read.contains(&n))
             })
@@ -1974,6 +1978,7 @@ impl Plan {
             marks: self.marks.clone(),
             run,
             row_security: self.row_security,
+            reads: Arc::default(),
         })
     }
 
@@ -2007,7 +2012,8 @@ impl Plan {
         rupg_func::check_permissions(&self.query.perms, session)?;
         rupg_func::check_execute(&self.query.funcs, session)?;
         check_row_marks(&self.query, session)?;
-        scan::check_scannable(&self.query, session)
+        let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
+        scan::check_scannable(reads, session)
     }
 
     /// The checks of `ExecutorStart` with `EXEC_FLAG_EXPLAIN_ONLY`: `ExecCheckPermissions` and the checks of `EXECUTE` of `ExecInitFunc`, with no check of a read-only transaction or of a relation that has no data.

@@ -36,7 +36,14 @@ impl Plan {
             add(&mut query, added.collect());
             marks.into_iter().map(|(_, oid)| oid).collect()
         };
-        Plan { query: Arc::new(query), written, marks, run: None, row_security: self.row_security }
+        Plan {
+            query: Arc::new(query),
+            written,
+            marks,
+            run: None,
+            row_security: self.row_security,
+            reads: Arc::default(),
+        }
     }
 
     /// The OID of each table whose `tableoid` and `ctid` the rows of the cursor end with, from [`Plan::cursor`].

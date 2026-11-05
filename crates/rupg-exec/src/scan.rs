@@ -893,24 +893,39 @@ pub(crate) fn check_foreign(query: &Query, session: &dyn Session) -> Result<()> 
 }
 
 /// `ExecCheckRelationsScannable`: the materialized views that the query reads, also in its subqueries, its queries of `WITH` and its sublinks, are populated. The executor checks them when it starts, before the description of the rows.
-pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()> {
+/// `reads` are the relations of the query, from [`scanned_relations`].
+pub(crate) fn check_scannable(reads: &[u32], session: &dyn Session) -> Result<()> {
+    let Some(catalog) = session.catalog() else { return Ok(()) };
+    reads.iter().filter_map(|&oid| catalog.relation(oid)).try_for_each(check_populated)
+}
+
+/// The relations that a query reads, also in its subqueries, its queries of `WITH` and its sublinks, which [`check_scannable`] checks. They do not change with the catalog, so a plan finds them once.
+pub(crate) fn scanned_relations(query: &Query) -> Vec<u32> {
+    let mut reads = Vec::new();
+    add_scanned(query, &mut reads);
+    reads
+}
+
+fn add_scanned(query: &Query, reads: &mut Vec<u32>) {
     for relation in &query.relations {
-        if let Some(sub) = relation.subquery.as_deref() {
-            check_scannable(sub, session)?;
-        } else if let Some(rel) = session.catalog().and_then(|c| c.relation(relation.oid)) {
-            check_populated(rel)?;
+        match relation.subquery.as_deref() {
+            Some(sub) => add_scanned(sub, reads),
+            // `Expr::find` also visits the sublinks in a sublink, so a relation can come again. The first time is the one that counts for the order of the errors.
+            None if !reads.contains(&relation.oid) => reads.push(relation.oid),
+            None => {}
         }
     }
     for cte in &query.ctes {
-        check_scannable(&cte.query, session)?;
+        add_scanned(&cte.query, reads);
     }
-    let error = query.find_expr(&mut |expr| {
-        expr.find(0, &mut |e, _| match &e.kind {
-            ExprKind::SubLink(sub) => check_scannable(&sub.query, session).err(),
-            _ => None,
+    query.find_expr(&mut |expr| {
+        expr.find(0, &mut |e, _| {
+            if let ExprKind::SubLink(sub) = &e.kind {
+                add_scanned(&sub.query, reads);
+            }
+            None::<()>
         })
     });
-    error.map_or(Ok(()), Err)
 }
 
 /// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` or an `= ANY` of an array of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
