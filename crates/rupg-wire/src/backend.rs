@@ -297,10 +297,15 @@ impl OutBuf {
 
     /// One `DataRow`. A result of many rows does not come through here: the vector encoder of `rupg-types` writes the rows of a whole vector with the `put_` methods.
     pub fn data_row(&mut self, values: &[Option<&[u8]>]) {
+        self.data_row_of(values.iter().copied());
+    }
+
+    /// `DataRow` from the values of each column, with no list of the values.
+    pub fn data_row_of<'a>(&mut self, values: impl ExactSizeIterator<Item = Option<&'a [u8]>>) {
         let mark = self.begin(b'D');
         self.put_i16(values.len() as i16);
         for value in values {
-            self.put_value(*value);
+            self.put_value(value);
         }
         self.finish(mark);
     }

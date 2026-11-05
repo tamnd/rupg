@@ -908,8 +908,7 @@ impl Connection {
             let reader = self.reader();
             for values in &values {
                 let row = query::encode(&types, values, &reader, &[])?;
-                let row: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
-                out.data_row(&row);
+                out.data_row_of(row.iter().map(Option::as_deref));
             }
             return Ok((CommandTag::Select, values.len() as u64, end));
         }
@@ -931,8 +930,7 @@ impl Connection {
         }
         // The binary form of `text` is its bytes, as in the text form, so the rows of a `SHOW` serve both formats.
         for row in &rows[*at..*at + count] {
-            let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
-            out.data_row(&values);
+            out.data_row_of(row.iter().map(Option::as_deref));
         }
         *at += count;
         let end = max.is_none_or(|max| count < max);
