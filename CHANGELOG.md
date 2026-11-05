@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A point read of a key takes a read lock of the heap and not the write lock, so that the point reads of many sessions do not wait for each other (#1344).
 - exec, session: a point `SELECT` encodes the values of the versions as the heap keeps them, with no copy of the values: the heap keeps the values of a version in an `Arc`, and the read takes one count of it for each row (#1342).
 
 ## 0.4.20 (2026-11-05)
