@@ -486,9 +486,6 @@ impl Analyzer<'_> {
         }
         let strategy = kinds.trailing_zeros();
         if let Some(kind) = RowCompareKind::of_strategy(strategy) {
-            if ops.iter().any(|op| matches!(&op.kind, ExprKind::Func(f) if f.collation != 0)) {
-                return Err(not_yet("a comparison of rows in a collation of ICU", at));
-            }
             let compares = operators
                 .iter()
                 .map(|&operator| {
@@ -776,10 +773,9 @@ impl Analyzer<'_> {
             self.coerce(right, array_decl, -1, Context::Implicit, None)?
         };
         let args = vec![left, right];
-        if self.call_collation(op.code, &args, at)? != 0 {
-            return Err(not_yet("ANY and ALL with an order in a collation of ICU", at));
-        }
-        Ok(Expr::new(ExprKind::ScalarArrayOp { func: op.code, any, args }, oid::BOOL).at(at))
+        let collation = self.call_collation(op.code, &args, at)?;
+        Ok(Expr::new(ExprKind::ScalarArrayOp { func: op.code, any, args, collation }, oid::BOOL)
+            .at(at))
     }
 
     /// `transformAExprIn`: `x IN (a, b)` as `x = ANY (ARRAY[a, b])` when the values have a common type, or else as `x = a OR x = b`.

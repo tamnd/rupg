@@ -489,7 +489,10 @@ fn values_any(link: &SubLink, fold: &mut Fold<'_>) -> Result<Option<Expr>> {
     }
     let array = Expr::new(ExprKind::Const(Value::Array(Box::new(Array::one(values)))), array);
     let args = vec![left.clone(), array];
-    Ok(Some(Expr::new(ExprKind::ScalarArrayOp { func: *func, any: true, args }, oid::BOOL)))
+    Ok(Some(Expr::new(
+        ExprKind::ScalarArrayOp { func: *func, any: true, args, collation: 0 },
+        oid::BOOL,
+    )))
 }
 
 /// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function and no function that gives a set in its target list.
@@ -633,7 +636,7 @@ fn negate(not: &Expr, arg: &Expr) -> Expr {
             func.form = FuncForm::Operator(row.oid);
             with(arg, ExprKind::Func(func))
         }
-        ExprKind::ScalarArrayOp { func, any, args } => {
+        ExprKind::ScalarArrayOp { func, any, args, collation } => {
             let [left, array] = args.as_slice() else { return keep() };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
             let mut ops = builtin::operators().iter().filter(|o| o.code == *func);
@@ -644,7 +647,12 @@ fn negate(not: &Expr, arg: &Expr) -> Expr {
             match op.and_then(|o| builtin::operator_by_oid(o.negator)) {
                 Some(row) => with(
                     arg,
-                    ExprKind::ScalarArrayOp { func: row.code, any: !any, args: args.clone() },
+                    ExprKind::ScalarArrayOp {
+                        func: row.code,
+                        any: !any,
+                        args: args.clone(),
+                        collation: *collation,
+                    },
                 ),
                 None => keep(),
             }
@@ -1421,11 +1429,12 @@ impl<'a> Fold<'a> {
                 }
                 if immutable(*equal) { self.evaluate(folded(args)) } else { Ok(folded(args)) }
             }
-            ExprKind::ScalarArrayOp { func, any, args } => {
+            ExprKind::ScalarArrayOp { func, any, args, collation } => {
                 let args = self.list(args)?;
                 let all = args.iter().all(|a| value(a).is_some());
-                let folded = with(expr, ExprKind::ScalarArrayOp { func: *func, any: *any, args });
-                if all && immutable(*func) { self.evaluate(folded) } else { Ok(folded) }
+                let (func, any, collation) = (*func, *any, *collation);
+                let folded = with(expr, ExprKind::ScalarArrayOp { func, any, args, collation });
+                if all && immutable(func) { self.evaluate(folded) } else { Ok(folded) }
             }
             ExprKind::Agg(agg) => {
                 let mut agg = agg.clone();

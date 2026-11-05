@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - A plan reads the size of an index and the range of a column from the frozen columns of a table, so that the scan after the plan does not freeze the table again. A point read that thaws a table keeps its frozen columns, and the next freeze takes them back when no row changed. A freeze that fails waits until the table has twice as many versions (#1367).
+- `ANY` and `ALL` with an ordering operator and comparisons of rows in a collation of ICU order the strings as the ICU collator does, with the collation of each field for a row, as in PostgreSQL (#1368).
 - `GREATEST`, `LEAST`, `max` and `min` in a collation of ICU order the strings as the ICU collator does, as in PostgreSQL. This covers plain and grouped aggregates, `FILTER`, `DISTINCT`, windows, views and the plan of `max` and `min` that reads the first row of a sort (#1365).
 - Comparisons of strings in a collation of ICU (`<`, `<=`, `>`, `>=`, `bttextcmp`, `text_larger`, `text_smaller` and the `bpchar` and `name` forms), and the sorts of `ORDER BY`, windows and aggregates, order the strings as the ICU collator does, as in PostgreSQL; the uses of an ICU collation that do not follow it yet fail with `FEATURE_NOT_SUPPORTED` (#1360).
 - `CREATE COLLATION` with `provider = icu` makes a collation of ICU, with the standard form of the locale, the checks of `icu_validation_level` and the collator version, as in PostgreSQL (#1357).

@@ -1,0 +1,162 @@
+!details
+> create table t (g int, s text, c char(3))
+CREATE TABLE
+> insert into t values (1, 'a', 'a'), (1, 'B', 'B'), (2, 'b', 'b'), (2, 'A', 'A'), (1, 'ä', 'ä'), (2, 'z', 'z'), (1, 'Z', 'Z'), (2, '10', '10'), (1, '9', '9'), (2, null, null)
+INSERT 0 10
+> select 'a' < any (array['B' collate "en-x-icu"]), 'a' < any (array['B' collate "C"]), 'a' collate "en-x-icu" > all (array['A', '9']), 'a' > all (array['A', '9'])
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t
+SELECT 1
+> select 'ä' < any (array['b', 'z'] collate "sv-x-icu"), 'ä' < all (array['b', 'z'] collate "de-x-icu"), 'a' collate "en-x-icu" < any (array[null, 'B']), 'a' collate "en-x-icu" < all (array[null, 'B'])
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,NULL
+SELECT 1
+> select s from t where s collate "en-x-icu" < any (array['b', 'A']) order by s collate "C"
+fields s@t.2:25:-1:-1
+row 10
+row 9
+row A
+row a
+row ä
+SELECT 5
+> select s from t where s collate "en-x-icu" >= all (array['a', 'B']) order by s collate "C"
+fields s@t.2:25:-1:-1
+row B
+row Z
+row z
+SELECT 3
+> select s from t where not (s collate "en-x-icu" < any (array['b'])) order by s collate "C"
+fields s@t.2:25:-1:-1
+row B
+row Z
+row b
+row z
+SELECT 4
+> select s from t where s collate "en-x-icu" > any ('{Z,b}') order by s collate "C"
+fields s@t.2:25:-1:-1
+row B
+row Z
+row z
+SELECT 3
+> select c from t where c collate "en-x-icu" < any (array['b'::char(3)]) order by c collate "C"
+fields c@t.3:1042:-1:7
+row 10 
+row 9  
+row A  
+row a  
+row ä  
+SELECT 5
+> create collation num (provider = icu, locale = 'en-u-kn-true')
+NOTICE 00000 using standard form "en-u-kn" for ICU locale "en-u-kn-true"
+CREATE COLLATION
+> select s from t where s collate num < all (array['10', 'a']) order by s collate "C"
+fields s@t.2:25:-1:-1
+row 9
+SELECT 1
+> select ('a', 1) < ('B' collate "en-x-icu", 0), ('a', 1) < ('B' collate "C", 0), ('b', 1) <= ('B' collate "en-x-icu", 1), (1, 'a' collate "en-x-icu") > (1, 'A')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f
+SELECT 1
+> select ('a' collate "en-x-icu", 2) < ('a', 3), ('a' collate "en-x-icu", null::int) < ('a', 3), ('a' collate "en-x-icu", null::int) < ('B', 3)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,NULL,t
+SELECT 1
+> select s, g from t where (s collate "en-x-icu", g) < ('b', 2) order by s collate "C"
+fields s@t.2:25:-1:-1,g@t.1:23:4:-1
+row 10,2
+row 9,1
+row A,2
+row a,1
+row ä,1
+SELECT 5
+> select s, g from t where (g, s) >= (2, 'b' collate "en-x-icu") order by s collate "C"
+fields s@t.2:25:-1:-1,g@t.1:23:4:-1
+row b,2
+row z,2
+SELECT 2
+> select s from t where (s, s) > ('a' collate "en-x-icu", 'b' collate "C") order by s collate "C"
+fields s@t.2:25:-1:-1
+row A
+row B
+row Z
+row b
+row z
+row ä
+SELECT 6
+> create table t2 as select g, s collate "en-x-icu" as s from t
+SELECT 10
+> select s from t2 where s < any (array['b']) order by s collate "C"
+fields s@t2.2:25:-1:-1
+row 10
+row 9
+row A
+row a
+row ä
+SELECT 5
+> select s, g from t2 where (s, g) <= ('b', 2) order by s collate "C"
+fields s@t2.2:25:-1:-1,g@t2.1:23:4:-1
+row 10,2
+row 9,1
+row A,2
+row a,1
+row b,2
+row ä,1
+SELECT 6
+> create index ts on t (s)
+CREATE INDEX
+> create index tgs on t (s, g)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> select s from t where s < any (array['b' collate "en-x-icu"]) order by s collate "C"
+fields s@t.2:25:-1:-1
+row 10
+row 9
+row A
+row a
+row ä
+SELECT 5
+> select s, g from t where (s, g) < ('b' collate "en-x-icu", 9) order by s collate "C"
+fields s@t.2:25:-1:-1,g@t.1:23:4:-1
+row 10,2
+row 9,1
+row A,2
+row a,1
+row b,2
+row ä,1
+SELECT 6
+> reset enable_seqscan
+RESET
+> create view v as select s, s collate "en-x-icu" < any (array['b']) as a, (s collate "en-x-icu", g) < ('b', 2) as r from t
+CREATE VIEW
+> select * from v order by s collate "C"
+fields s@v.1:25:-1:-1,a@v.2:16:1:-1,r@v.3:16:1:-1
+row 10,t,t
+row 9,t,t
+row A,t,t
+row B,f,f
+row Z,f,f
+row a,t,t
+row b,f,f
+row z,f,f
+row ä,t,t
+row NULL,NULL,NULL
+SELECT 10
+> prepare p (text[]) as select s from t where s collate "en-x-icu" < all ($1) order by s collate "C"
+PREPARE
+> execute p ('{b,Z}')
+fields s@t.2:25:-1:-1
+row 10
+row 9
+row A
+row a
+row ä
+SELECT 5
+> drop view v
+DROP VIEW
+> drop table t2
+DROP TABLE
+> drop table t
+DROP TABLE
+> drop collation num
+DROP COLLATION

@@ -62,8 +62,8 @@ pub enum ExprKind {
     NullIf { equal: u32, args: Vec<Expr> },
     /// `DistinctExpr`: `IS DISTINCT FROM`, or `IS NOT DISTINCT FROM` when `not` is true, with the function of the `=` operator.
     Distinct { equal: u32, not: bool, args: Vec<Expr> },
-    /// `ScalarArrayOpExpr`: `x op ANY (array)` when `any` is true, or `x op ALL (array)`.
-    ScalarArrayOp { func: u32, any: bool, args: Vec<Expr> },
+    /// `ScalarArrayOpExpr`: `x op ANY (array)` when `any` is true, or `x op ALL (array)`. `collation` is `inputcollid` when it is a collation of ICU, as in [`Func::collation`], or 0.
+    ScalarArrayOp { func: u32, any: bool, args: Vec<Expr>, collation: u32 },
     /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument. The form is explicit for a cast of a row to a composite type, as `row_format`.
     Row(Vec<Expr>, CastForm),
     /// The whole row of a join, as the `Var` with the attribute number 0 of a join, which the planner of PostgreSQL makes a `RowExpr` with the names of the columns. A join with no relation of its own gives the columns of the join as the fields.

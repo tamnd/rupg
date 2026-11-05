@@ -402,8 +402,11 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :kind {} :compares ({})", rc.kind.name(), compares.join(" ")));
             write_args(&rc.ops, out)?;
         }
-        ExprKind::ScalarArrayOp { func, any, args } => {
+        ExprKind::ScalarArrayOp { func, any, args, collation } => {
             out.push_str(&format!(" :func {func} :any {any}"));
+            if *collation != 0 {
+                out.push_str(&format!(" :inputcollid {collation}"));
+            }
             write_args(args, out)?;
         }
         ExprKind::Array { element, multidims, elements } => {
@@ -1216,6 +1219,12 @@ fn expr_of(item: &Item) -> Result<Expr> {
             func: f.number("func")?,
             any: f.flag("any")?,
             args: f.exprs("args")?,
+            collation: f
+                .get("inputcollid")
+                .ok()
+                .map(|i| atom(i).and_then(number))
+                .transpose()?
+                .unwrap_or(0),
         },
         "ARRAY" => ExprKind::Array {
             element: f.number("element")?,
@@ -1700,7 +1709,7 @@ mod tests {
                 oid::BOOL,
             ),
             Expr::new(
-                ExprKind::ScalarArrayOp { func: 65, any: false, args: vec![var(1)] },
+                ExprKind::ScalarArrayOp { func: 65, any: false, args: vec![var(1)], collation: 0 },
                 oid::BOOL,
             ),
             Expr::new(

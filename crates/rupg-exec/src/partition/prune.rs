@@ -167,7 +167,7 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
             let operator = operator(f.oid, f.args[0].ty, f.args[1].ty)?;
             Some(Clause { attnum, operator, commuted, any: false, values: vec![value.clone()], ty })
         }
-        ExprKind::ScalarArrayOp { func, any: true, args } if args.len() == 2 => {
+        ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 } if args.len() == 2 => {
             let attnum = column(&args[0], index)?;
             let element = builtin::type_by_oid(args[1].ty).map_or(0, |row| row.elem);
             // A null element is not equal to a value, so it does not count.

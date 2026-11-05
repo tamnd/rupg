@@ -1319,6 +1319,7 @@ fn unsupported(expr: &Expr) -> bool {
                     ExprKind::Var(var) => var.levels_up != 0 || var.attnum <= 0,
                     ExprKind::Collate(_, collation) => !plain(*collation),
                     ExprKind::Func(f) => f.collation != 0,
+                    ExprKind::ScalarArrayOp { collation, .. } => *collation != 0,
                     ExprKind::Agg(agg) => {
                         agg.levels_up != 0
                             || agg.collation != 0
@@ -2501,7 +2502,7 @@ impl Exec<'_> {
                 ))
             }
             // `x IN (c, ...)`, which `eval_const_expressions` makes `x = ANY (array)`. A null element is equal to no value, so it is not in the test.
-            ExprKind::ScalarArrayOp { func, any: true, args } => {
+            ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 } => {
                 let src = src(*func);
                 if !src.ends_with("eq") {
                     return None;

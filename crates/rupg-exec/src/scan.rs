@@ -1009,7 +1009,7 @@ fn key_lookup(
                 .map(|(column, (value, param))| (column, vec![value], param)),
                 _ => None,
             },
-            ExprKind::ScalarArrayOp { func, any: true, args } if HASH_EQUALS.contains(func) => {
+            ExprKind::ScalarArrayOp { func, any: true, args, .. } if HASH_EQUALS.contains(func) => {
                 match args.as_slice() {
                     [a, b] => key_column(a).zip(key_value(b, params)).and_then(|(column, v)| {
                         let (Value::Array(array), param) = v else { return None };

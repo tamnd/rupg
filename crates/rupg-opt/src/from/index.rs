@@ -1032,7 +1032,8 @@ fn match_one<'q>(
     }
     match &expr.kind {
         ExprKind::RowCompare(rc) => row_compare(r, index, column, rc, source).map(|c| vec![c]),
-        ExprKind::ScalarArrayOp { func, any: true, args } => {
+        // An index orders the bytes, so a comparison in a collation of ICU is not an index clause.
+        ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 } => {
             let [left, array] = args.as_slice() else { return None };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
             let op = cost::array_operator(*func, left.ty, element)?;
@@ -1086,7 +1087,10 @@ fn match_one<'q>(
             let kind = ClauseKind::Array(s, cost::array_length(&array));
             let func = builtin::operator_by_oid(op)?.code;
             let args = vec![index_expr.clone(), array];
-            let expr = Expr::new(ExprKind::ScalarArrayOp { func, any: true, args }, oid::BOOL);
+            let expr = Expr::new(
+                ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 },
+                oid::BOOL,
+            );
             Some(clause(Cow::Owned(expr), kind))
         }
         // `textstarts_with_support`: `starts_with(column, prefix)` gives the clauses of `column ^@ prefix`.
@@ -1909,7 +1913,8 @@ fn bool_items(expr: &Expr) -> Option<(BoolOp, Cow<'_, [Expr]>)> {
         ExprKind::Bool(op @ (BoolOp::And | BoolOp::Or), args) => {
             Some((*op, Cow::Borrowed(args.as_slice())))
         }
-        ExprKind::ScalarArrayOp { func, any, args } => {
+        // The items of a comparison in a collation of ICU would compare the bytes in a proof.
+        ExprKind::ScalarArrayOp { func, any, args, collation: 0 } => {
             let [left, array] = args.as_slice() else { return None };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
             let values: Vec<Expr> = match &array.kind {
