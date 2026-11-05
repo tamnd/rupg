@@ -256,7 +256,9 @@ impl Buf {
             1 => self.keys.push(key[0]),
             2 => self.keys.extend_from_slice(&key[..2]),
             3 => self.keys.extend_from_slice(&key[..3]),
-            width => self.keys.extend_from_slice(&key[..width]),
+            // A copy of a known number of words is not a call of `memcpy`.
+            4 => self.keys.extend_from_slice(&key[..4]),
+            width => self.keys.extend(key.iter().take(width)),
         }
         self.firsts.push(first);
     }
