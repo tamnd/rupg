@@ -2429,6 +2429,34 @@ impl Exec<'_> {
                     },
                 ))
             }
+            // `x IN (c, ...)`, which `eval_const_expressions` makes `x = ANY (array)`. A null element is equal to no value, so it is not in the test.
+            ExprKind::ScalarArrayOp { func, any: true, args } => {
+                let src = src(*func);
+                if !src.ends_with("eq") {
+                    return None;
+                }
+                int_compare(src)?;
+                let [a, b] = args.as_slice() else { return None };
+                let place = place(a)?;
+                if self.stored[place].kind.store() != Store::Int {
+                    return None;
+                }
+                let values: Vec<i64> = match &b.kind {
+                    ExprKind::Const(Value::Array(array)) => {
+                        array.values.iter().flatten().map(int_of).collect::<Option<_>>()?
+                    }
+                    ExprKind::Array { multidims: false, elements, .. } => elements
+                        .iter()
+                        .filter(|e| !matches!(e.kind, ExprKind::Const(Value::Null)))
+                        .map(constant)
+                        .collect::<Option<_>>()?,
+                    _ => return None,
+                };
+                let mut keys: Vec<u64> = values.into_iter().map(rupg_summary::key::int).collect();
+                keys.sort_unstable();
+                keys.dedup();
+                Some((place, Test::In(keys)))
+            }
             _ => None,
         }
     }
@@ -2599,6 +2627,28 @@ fn grouped(
                 trailing: false,
             });
         }
+    }
+    // Calls of `count(DISTINCT)` of one column with one key: the tasks count the pairs of a group and a value.
+    if found.is_none()
+        && let [key] = keys[..]
+        && bases.is_empty()
+        && !scan.answered.contains(&true)
+        && aggs.iter().all(|call| matches!(call.method, Method::Distinct))
+        && let Some(tasks) = session.tasks().filter(|_| scan.open)
+        && let Some(arg) = distinct_arg(&aggs)
+        && let Some((plan, derived)) =
+            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks.parallelism())
+        && derived.iter().all(Option::is_none)
+    {
+        session.interrupted()?;
+        found = groups::distinct_groups(
+            tasks,
+            &scan.exec.stored,
+            &plan,
+            rows,
+            scan.segments,
+            aggs.len(),
+        )?;
     }
     if let Some(found) = found {
         groups = found.firsts.len();
@@ -3292,6 +3342,14 @@ fn parallel_plan(
         .map(|(key, _)| match &key.kind {
             ExprKind::Const(v) if v.is_null() => Some(groups::Input::Const(None)),
             ExprKind::Const(v) => int_of(v).map(|v| groups::Input::Const(Some(v as u64))),
+            ExprKind::Func(func) if src(func.oid) == "timestamp_trunc" => {
+                match func.args.as_slice() {
+                    [field, arg] if arg.ty == oid::TIMESTAMP => {
+                        Some(groups::Input::Floor(int_place(arg)?, unit(field)?))
+                    }
+                    _ => None,
+                }
+            }
             _ => place(key)
                 .filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))
                 .map(groups::Input::Column),

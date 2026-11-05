@@ -133,3 +133,84 @@ SELECT 1
 fields count:20:8:-1
 row 5
 SELECT 1
+> CREATE TABLE dz (i int, g int, v bigint, s text)
+CREATE TABLE
+> INSERT INTO dz SELECT i, CASE WHEN i % 7 = 0 THEN NULL ELSE i % 9 END, CASE WHEN i % 11 = 0 THEN NULL ELSE ((i::bigint * 7919) % 90001) / (1 + i % 9) - 2000 END, CASE WHEN i % 13 = 0 THEN NULL ELSE 's' || (i % 23) END FROM generate_series(1, 150000) i
+INSERT 0 150000
+> SELECT g, count(DISTINCT v) FROM dz GROUP BY g ORDER BY g NULLS FIRST
+fields g@dz.2:23:4:-1,count:20:8:-1
+row NULL,14872
+row 0,12987
+row 1,9256
+row 2,7511
+row 3,6607
+row 4,6066
+row 5,5712
+row 6,5447
+row 7,5244
+row 8,5101
+SELECT 10
+> SELECT s, count(DISTINCT v), count(DISTINCT v) FROM dz WHERE g > 3 GROUP BY s ORDER BY 2 DESC, 1 LIMIT 4
+fields s@dz.4:25:-1:-1,count:20:8:-1,count:20:8:-1
+row NULL,4383,4383
+row s16,2493,2493
+row s14,2476,2476
+row s9,2459,2459
+SELECT 4
+> SELECT g, count(DISTINCT s) FROM dz GROUP BY g ORDER BY 2, 1 NULLS FIRST
+fields g@dz.2:23:4:-1,count:20:8:-1
+row NULL,23
+row 0,23
+row 1,23
+row 2,23
+row 3,23
+row 4,23
+row 5,23
+row 6,23
+row 7,23
+row 8,23
+SELECT 10
+> SELECT g, count(DISTINCT v) AS u FROM dz GROUP BY g
+fields g@dz.2:23:4:-1,u:20:8:-1
+row 0,12987
+row 1,9256
+row 2,7511
+row 3,6607
+row 4,6066
+row 5,5712
+row 6,5447
+row 7,5244
+row 8,5101
+row NULL,14872
+SELECT 10
+> SELECT g, count(DISTINCT g) FROM dz GROUP BY g ORDER BY 1
+fields g@dz.2:23:4:-1,count:20:8:-1
+row 0,1
+row 1,1
+row 2,1
+row 3,1
+row 4,1
+row 5,1
+row 6,1
+row 7,1
+row 8,1
+row NULL,0
+SELECT 10
+> SELECT s FROM dz GROUP BY s HAVING count(DISTINCT v) < 4990 ORDER BY 1 NULLS FIRST
+fields s@dz.4:25:-1:-1
+row s13
+row s15
+row s17
+row s19
+row s2
+row s21
+SELECT 6
+> SELECT g, count(DISTINCT v) FROM dz WHERE i < 0 GROUP BY g
+fields g@dz.2:23:4:-1,count:20:8:-1
+SELECT 0
+> SELECT g, count(DISTINCT v) AS u FROM dz WHERE v IS NULL OR i > 149990 GROUP BY g ORDER BY u DESC, g LIMIT 3
+fields g@dz.2:23:4:-1,u:20:8:-1
+row 6,2
+row 0,1
+row 1,1
+SELECT 3

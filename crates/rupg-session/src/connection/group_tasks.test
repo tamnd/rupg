@@ -149,3 +149,79 @@ row 28935,28940,6
 row 6932,6937,6
 row 13632,13637,6
 SELECT 4
+> SELECT a, count(*), sum(w) FROM gt WHERE b IN (-500, 7, NULL, 499) GROUP BY a ORDER BY a
+fields a@gt.2:23:4:-1,count:20:8:-1,sum:1700:-1:-1
+row 0,118,2950496
+row 1,117,3021602
+row 2,117,3006539
+row 3,117,2983602
+row 4,116,2903263
+row 5,117,2888581
+row 6,116,2915666
+SELECT 7
+> SELECT b, count(*) FROM gt WHERE w IN (5, 50020, 77) AND a IN (0, 3000000000) GROUP BY b ORDER BY b
+fields b@gt.3:23:4:-1,count:20:8:-1
+row -390,1
+row NULL,1
+SELECT 2
+> SELECT a, count(*) FROM gt WHERE b NOT IN (1, 2) AND u > 299000 GROUP BY a ORDER BY a
+fields a@gt.2:23:4:-1,count:20:8:-1
+row 0,129
+row 1,130
+row 2,129
+row 3,130
+row 4,130
+row 5,130
+row 6,129
+SELECT 7
+> SELECT a, count(*) FROM gt WHERE b IN (9999, -9999) GROUP BY a
+fields a@gt.2:23:4:-1,count:20:8:-1
+SELECT 0
+> SELECT a, count(*) FROM gt WHERE u = ANY ('{1,2,299999,NULL}') GROUP BY a ORDER BY a
+fields a@gt.2:23:4:-1,count:20:8:-1
+row 0,1
+row 1,1
+row 2,1
+SELECT 3
+> CREATE TABLE gts (i int, ts timestamp)
+CREATE TABLE
+> INSERT INTO gts SELECT i, CASE WHEN i % 17 = 0 THEN NULL WHEN i = 5 THEN 'infinity' WHEN i = 6 THEN '-infinity' WHEN i % 2 = 0 THEN timestamp '1999-12-31 23:00:00' - i * interval '7.5 second' ELSE timestamp '2013-07-14 10:00:00' + i * interval '3.25 second' END FROM generate_series(1, 150000) i
+INSERT 0 150000
+> SELECT date_trunc('minute', ts) AS m, count(*) FROM gts GROUP BY date_trunc('minute', ts) ORDER BY date_trunc('minute', ts) LIMIT 4 OFFSET 1000
+fields m:1114:8:-1,count:20:8:-1
+row 1999-12-19 15:09:00,4
+row 1999-12-19 15:10:00,4
+row 1999-12-19 15:11:00,4
+row 1999-12-19 15:12:00,3
+SELECT 4
+> SELECT date_trunc('hour', ts), count(*), min(i) FROM gts WHERE i > 1000 GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 3
+fields date_trunc:1114:8:-1,count:20:8:-1,min:23:4:-1
+row NULL,8765,1003
+row 2013-07-14 11:00:00,522,1109
+row 2013-07-14 15:00:00,522,5539
+SELECT 3
+> SELECT date_trunc('day', ts) AS d, count(*) FROM gts GROUP BY d ORDER BY d NULLS FIRST LIMIT 6
+fields d:1114:8:-1,count:20:8:-1
+row NULL,8823
+row -infinity,1
+row 1999-12-18 00:00:00,339
+row 1999-12-19 00:00:00,5421
+row 1999-12-20 00:00:00,5421
+row 1999-12-21 00:00:00,5422
+SELECT 6
+> SELECT date_trunc('second', ts), count(*) FROM gts WHERE i < 40 GROUP BY 1 ORDER BY 1 LIMIT 3
+fields date_trunc:1114:8:-1,count:20:8:-1
+row -infinity,1
+row 1999-12-31 22:55:15,1
+row 1999-12-31 22:55:30,1
+SELECT 3
+> SELECT date_trunc('month', ts), count(*) FROM gts GROUP BY 1 ORDER BY 1 LIMIT 3
+fields date_trunc:1114:8:-1,count:20:8:-1
+row -infinity,1
+row 1999-12-01 00:00:00,70588
+row 2013-07-01 00:00:00,70587
+SELECT 3
+> SELECT count(*) FROM (SELECT date_trunc('minute', ts) FROM gts GROUP BY 1) s
+fields count:20:8:-1
+row 26878
+SELECT 1
