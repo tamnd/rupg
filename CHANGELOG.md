@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `GROUP BY` with a sort puts the rows in a hash table and sorts only one row of each group, and the keys of a sort compare `character` values and the `=` of the integer, date, time and text types with no call (#1369).
 - A plan reads the size of an index and the range of a column from the frozen columns of a table, so that the scan after the plan does not freeze the table again. A point read that thaws a table keeps its frozen columns, and the next freeze takes them back when no row changed. A freeze that fails waits until the table has twice as many versions (#1367).
 - `ANY` and `ALL` with an ordering operator and comparisons of rows in a collation of ICU order the strings as the ICU collator does, with the collation of each field for a row, as in PostgreSQL (#1368).
 - `GREATEST`, `LEAST`, `max` and `min` in a collation of ICU order the strings as the ICU collator does, as in PostgreSQL. This covers plain and grouped aggregates, `FILTER`, `DISTINCT`, windows, views and the plan of `max` and `min` that reads the first row of a sort (#1365).

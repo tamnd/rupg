@@ -1275,6 +1275,9 @@ fn groups<'a>(
     }
     let mut groups: Vec<Vec<usize>> = Vec::new();
     if list.iter().all(|g| g.sort != 0) {
+        if let Some(groups) = sorted_groups(&types, &keys, &keys_of)? {
+            return Ok(groups);
+        }
         let mut order: Vec<usize> = (0..tuples.len()).collect();
         sort::qsort(&mut order, &mut |a, b| {
             Ok(keys_of.compare(&keys[*a], &keys[*b])?.then(a.cmp(b)))
@@ -1301,6 +1304,29 @@ fn groups<'a>(
         }
     }
     Ok(groups)
+}
+
+/// The groups of the rows with the keys `keys`, in the order that a sort of the rows on the keys gives them, from a hash table of the rows and a sort of the groups only. A query with few groups and many rows, such as TPC-H Q1, then sorts a few keys and not the key of each row. The result is `None` when a key has no hash function, or when the sort orders the keys of two groups the same, because a sort of the rows can then put the rows of the two groups in one group.
+fn sorted_groups(
+    types: &[u32],
+    keys: &[Vec<Value>],
+    keys_of: &sort::Keys<'_>,
+) -> Result<Option<Vec<Vec<usize>>>> {
+    let mut hash = |row: usize| hashed::hash(types.iter().copied().zip(&keys[row]));
+    if keys.first().is_some_and(|_| hash(0).is_err()) {
+        return Ok(None);
+    }
+    let mut groups =
+        hashed::groups(keys.len(), 0.0, &mut hash, &mut |a, b| keys_of.equal(&keys[a], &keys[b]))?;
+    sort::qsort(&mut groups, &mut |a, b| {
+        Ok(keys_of.compare(&keys[a[0]], &keys[b[0]])?.then(a[0].cmp(&b[0])))
+    })?;
+    for pair in groups.windows(2) {
+        if keys_of.compare(&keys[pair[0][0]], &keys[pair[1][0]])?.is_eq() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(groups))
 }
 
 /// The groups of grouping sets, each with the place of its set.

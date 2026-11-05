@@ -30,6 +30,34 @@ struct Key {
     collated: Option<(Collator, bool)>,
     /// The collation of ICU of the key, which the calls of its functions get, or 0.
     collation: u32,
+    /// For a sort function that is `<` or `>` of `character` in a collation that orders the bytes: true for `>`. The keys then compare the bytes with no trailing spaces with no call.
+    padded: Option<bool>,
+    /// When the equality function is `=` of an integer, date, time, `text` or `character` type, in a collation whose equality is the equality of the bytes: true for `character`. The keys then compare the integers or the bytes with no call.
+    same: Option<bool>,
+}
+
+/// For the function `<` or `>` of `character` with itself: true for `>`. In a collation that orders the bytes, the order is the order of the bytes with no trailing spaces, as `bpcharcmp` gives it.
+fn padded(func: u32) -> Option<bool> {
+    match rupg_pgcatalog::builtin::proc_by_oid(func)?.name {
+        "bpcharlt" => Some(false),
+        "bpchargt" => Some(true),
+        _ => None,
+    }
+}
+
+/// For the function `=` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz`, `text` or `character` with itself: true for `character`. In a collation whose equality is the equality of the bytes, two values of these types are equal when their integers or their bytes are equal, with no trailing spaces for `character`.
+fn same(func: u32) -> Option<bool> {
+    match rupg_pgcatalog::builtin::proc_by_oid(func)?.name {
+        "int2eq" | "int4eq" | "int8eq" | "date_eq" | "time_eq" | "timestamp_eq"
+        | "timestamptz_eq" | "texteq" => Some(false),
+        "bpchareq" => Some(true),
+        _ => None,
+    }
+}
+
+/// True for a collation whose order and equality are the order and the equality of the bytes: no collation, the default collation, `C` and `POSIX`.
+fn bytewise(collation: u32) -> bool {
+    matches!(collation, 0 | 100 | 950 | 951)
 }
 
 /// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz`, `numeric` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here. A `numeric` compares as an integer only in a column of integers, and a value of `numeric` calls the function.
@@ -41,6 +69,17 @@ fn native(func: u32) -> Option<bool> {
         "int2gt" | "int4gt" | "int8gt" | "date_gt" | "time_gt" | "timestamp_gt"
         | "timestamptz_gt" | "numeric_gt" | "text_gt" => Some(true),
         _ => None,
+    }
+}
+
+/// For a key whose equality function compares with no call: true when the two values are equal, with no trailing spaces when `trim` is true, or `None` when a value is not an integer or text.
+fn native_equal(trim: bool, x: &Value, y: &Value) -> Option<bool> {
+    match (x, y) {
+        (Value::Text(x), Value::Text(y)) if trim => {
+            Some(x.trim_end_matches(' ') == y.trim_end_matches(' '))
+        }
+        (Value::Text(x), Value::Text(y)) => Some(x == y),
+        _ => int(x).zip(int(y)).map(|(x, y)| x == y),
     }
 }
 
@@ -70,6 +109,7 @@ impl<'a> Keys<'a> {
                 let ty = types[g.target];
                 let text = matches!(ty, oid::TEXT | oid::VARCHAR);
                 let collator = rupg_func::collator(session, g.collation);
+                let bytes = collator.is_none() && bytewise(g.collation);
                 let collated =
                     native(g.sort).filter(|_| text).and_then(|desc| Some((collator?, desc)));
                 Ok(Key {
@@ -81,6 +121,8 @@ impl<'a> Keys<'a> {
                     descending: if collator.is_some() { None } else { native(g.sort) },
                     collated,
                     collation: if collator.is_some() { g.collation } else { 0 },
+                    padded: padded(g.sort).filter(|_| bytes),
+                    same: same(g.equal).filter(|_| bytes),
                 })
             })
             .collect::<Result<_>>()?;
@@ -141,6 +183,15 @@ impl<'a> Keys<'a> {
                     continue;
                 }
             }
+            if let (Some(descending), Value::Text(x), Value::Text(y)) = (key.padded, x, y) {
+                let order =
+                    x.trim_end_matches(' ').as_bytes().cmp(y.trim_end_matches(' ').as_bytes());
+                let order = if descending { order.reverse() } else { order };
+                if order != Ordering::Equal {
+                    return Ok(order);
+                }
+                continue;
+            }
             let order = match (x.is_null(), y.is_null()) {
                 (true, true) => Ordering::Equal,
                 (true, false) if key.nulls_first => Ordering::Less,
@@ -176,7 +227,10 @@ impl<'a> Keys<'a> {
             let same = match (x.is_null(), y.is_null()) {
                 (true, true) => true,
                 (false, false) => match key.equal {
-                    Some(equal) => self.test(equal, key, x, y)?,
+                    Some(equal) => match key.same.and_then(|trim| native_equal(trim, x, y)) {
+                        Some(same) => same,
+                        None => self.test(equal, key, x, y)?,
+                    },
                     None => false,
                 },
                 _ => false,
