@@ -12,6 +12,7 @@ use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
+use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
 use rupg_summary::zone::{Test, Verdict, Zone};
 use rupg_types::{Numeric, Value, oid};
@@ -3736,6 +3737,7 @@ fn values_of_words(words: &[u64], shapes: &[Shape], dicts: &[Dict]) -> Vec<Value
 
 /// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the places of the codes of the groups in the order of their bytes for a few groups. `None` for a key of codes with no text.
 fn word_order(
+    tasks: Option<&dyn Tasks>,
     words: &[u64],
     shapes: &[Shape],
     dicts: &[Dict],
@@ -3751,7 +3753,9 @@ fn word_order(
     for &(k, descending, nulls_first) in natives {
         let key = words.chunks(width).map(|g| g[k]);
         let by = match shapes[k] {
-            Shape::Int(_) => key.map(|w| w ^ (1 << 63)).collect(),
+            Shape::Int(_) => concat(on_parts(tasks, groups, |range| {
+                range.map(|g| words[g * width + k] ^ (1 << 63)).collect()
+            })),
             Shape::Code(d) => {
                 let dict = match &dicts[d] {
                     Dict::Stored(stored) if stored.kind == Kind::Text => stored.dict.as_ref()?,
@@ -3760,7 +3764,12 @@ fn word_order(
                 };
                 if dict.has_order() || groups.saturating_mul(4) >= dict.len() {
                     let order = dict.order();
-                    key.map(|w| u64::from(order.get(w as usize).copied().unwrap_or(0))).collect()
+                    concat(on_parts(tasks, groups, |range| {
+                        range
+                            .map(|g| words[g * width + k] as usize)
+                            .map(|w| u64::from(order.get(w).copied().unwrap_or(0)))
+                            .collect()
+                    }))
                 } else {
                     code_places(dict, key, |g| null(g, k))
                 }
@@ -3799,7 +3808,7 @@ fn word_order(
         }
         _ => {
             if let Some(order) =
-                packed_order(groups, places.len(), want, |g, p| number(g, &places[p]))
+                packed_order(tasks, groups, places.len(), want, |g, p| number(g, &places[p]))
             {
                 return Some(order);
             }
@@ -3823,18 +3832,29 @@ fn word_order(
 
 /// The order of `groups` groups by `keys` numbers of each, when the numbers less their least value fit together in 128 bits. `number` gives the number of a key of a group. A sort of one number for each group compares no memory, and groups with equal numbers stay in their order.
 fn packed_order(
+    tasks: Option<&dyn Tasks>,
     groups: usize,
     keys: usize,
     want: Want<'_>,
-    number: impl Fn(usize, usize) -> u128,
+    number: impl Fn(usize, usize) -> u128 + Sync,
 ) -> Option<Vec<usize>> {
     let mut least = vec![u128::MAX; keys];
     let mut most = vec![0_u128; keys];
-    for g in 0..groups {
+    for (low, high) in on_parts(tasks, groups, |range| {
+        let mut low = vec![u128::MAX; keys];
+        let mut high = vec![0_u128; keys];
+        for g in range {
+            for k in 0..keys {
+                let n = number(g, k);
+                low[k] = low[k].min(n);
+                high[k] = high[k].max(n);
+            }
+        }
+        (low, high)
+    }) {
         for k in 0..keys {
-            let n = number(g, k);
-            least[k] = least[k].min(n);
-            most[k] = most[k].max(n);
+            least[k] = least[k].min(low[k]);
+            most[k] = most[k].max(high[k]);
         }
     }
     let bits: Vec<u32> =
@@ -3842,25 +3862,64 @@ fn packed_order(
     if bits.iter().sum::<u32>() > 128 {
         return None;
     }
-    let numbers: Vec<(u128, u32)> = (0..groups)
-        .map(|g| {
-            let packed = (0..keys).fold(0_u128, |packed, k| {
-                // A key of no bits has one value and adds nothing.
-                if bits[k] == 0 {
-                    packed
-                } else {
-                    packed.checked_shl(bits[k]).unwrap_or(0) | (number(g, k) - least[k])
-                }
-            });
-            (packed, g as u32)
-        })
-        .collect();
+    let (bits, least) = (&bits, &least);
+    let numbers: Vec<(u128, u32)> = concat(on_parts(tasks, groups, |range| {
+        range
+            .map(|g| {
+                let packed = (0..keys).fold(0_u128, |packed, k| {
+                    // A key of no bits has one value and adds nothing.
+                    if bits[k] == 0 {
+                        packed
+                    } else {
+                        packed.checked_shl(bits[k]).unwrap_or(0) | (number(g, k) - least[k])
+                    }
+                });
+                (packed, g as u32)
+            })
+            .collect()
+    }));
     Some(
         first_of(numbers, want, |n| n.1 as usize, Ord::cmp)
             .into_iter()
             .map(|(_, g)| g as usize)
             .collect(),
     )
+}
+
+/// The fewest groups for each task of [`on_parts`], so that few groups do not pay for the tasks.
+const ORDER_GROUPS: usize = 1 << 15;
+
+/// The results of `f` for the parts of the groups `0..groups`, in the order of the parts. With tasks and many groups, each task does one part.
+fn on_parts<T: Send>(
+    tasks: Option<&dyn Tasks>,
+    groups: usize,
+    f: impl Fn(std::ops::Range<usize>) -> T + Sync,
+) -> Vec<T> {
+    let jobs = tasks.map_or(1, |t| t.parallelism().min(groups / ORDER_GROUPS));
+    let Some(tasks) = tasks.filter(|_| jobs > 1) else {
+        return vec![f(0..groups)];
+    };
+    let chunk = groups.div_ceil(jobs);
+    let mut out: Vec<Option<T>> = (0..groups.div_ceil(chunk)).map(|_| None).collect();
+    let f = &f;
+    let work: Vec<Job<'_>> = out
+        .iter_mut()
+        .enumerate()
+        .map(|(n, slot)| {
+            let range = n * chunk..((n + 1) * chunk).min(groups);
+            Box::new(move || *slot = Some(f(range))) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    out.into_iter().flatten().collect()
+}
+
+/// The items of the parts `parts` one after the other.
+fn concat<T: Copy>(mut parts: Vec<Vec<T>>) -> Vec<T> {
+    if parts.len() == 1 {
+        return parts.pop().unwrap_or_default();
+    }
+    parts.concat()
 }
 
 /// The groups of the order of the groups that a query reads.
@@ -3980,7 +4039,8 @@ fn group_order(
             .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
             .collect();
         if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
-            && let Some(order) = word_order(words, shapes, dicts, &natives, groups, want)
+            && let Some(order) =
+                word_order(session.tasks(), words, shapes, dicts, &natives, groups, want)
         {
             return Ok(order);
         }
@@ -4060,16 +4120,32 @@ mod tests {
                     .cmp(&numbers[b * keys..(b + 1) * keys])
                     .then(a.cmp(&b))
             });
-            match packed_order(groups, keys, Want::All, number) {
+            match packed_order(None, groups, keys, Want::All, number) {
                 Some(order) => assert_eq!(order, sorted, "round {round}"),
                 None => assert_eq!(range, 1 << 40, "round {round}"),
             }
             // With a limit, the order is the first groups of the order of all.
             let limit = round as usize % 7 * groups / 5;
-            if let Some(order) = packed_order(groups, keys, Want::First(limit), number) {
+            if let Some(order) = packed_order(None, groups, keys, Want::First(limit), number) {
                 assert_eq!(order, sorted[..limit.min(groups)], "round {round} limit {limit}");
             }
         }
+    }
+
+    /// A packed sort on tasks gives the order of a packed sort on the calling task, also for many groups with equal keys.
+    #[test]
+    fn a_packed_order_on_tasks_is_the_order_on_one_task() {
+        let tasks = rupg_platform::os::OsTasks;
+        let groups = 5 * ORDER_GROUPS + 77;
+        let numbers: Vec<u128> = (0..groups * 3)
+            .map(|i| u128::from((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 50) % 900)
+            .collect();
+        let number = |g: usize, k: usize| numbers[g * 3 + k];
+        let one = packed_order(None, groups, 3, Want::All, number).unwrap();
+        let many = packed_order(Some(&tasks), groups, 3, Want::All, number).unwrap();
+        assert_eq!(one, many);
+        let first = packed_order(Some(&tasks), groups, 3, Want::First(1000), number).unwrap();
+        assert_eq!(first, one[..1000]);
     }
 
     /// The heap of a top of counts keeps the same groups in the same order from the order of [`Want::Top`] as from the order of all the groups, also with many equal counts, for both directions.
@@ -4099,9 +4175,9 @@ mod tests {
                 }
                 heap.finish(&mut cmp).unwrap()
             };
-            let all = packed_order(groups, 1, Want::All, number).unwrap();
+            let all = packed_order(None, groups, 1, Want::All, number).unwrap();
             let want = Want::Top { counts: &counts, descending, bound };
-            let top = packed_order(groups, 1, want, number).unwrap();
+            let top = packed_order(None, groups, 1, want, number).unwrap();
             assert!(top.len() <= all.len(), "round {round}");
             assert_eq!(heap(top), heap(all), "round {round}");
         }
