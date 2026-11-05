@@ -355,7 +355,7 @@ impl Tables {
     /// The table `key` with the values of its versions, for a read by rows.
     fn get(&mut self, key: &(u32, u32)) -> Option<&Table> {
         let table = self.0.get_mut(key)?;
-        table.thaw();
+        table.thaw_read();
         Some(table)
     }
 
@@ -393,6 +393,7 @@ impl Tables {
     fn append(&mut self, key: (u32, u32)) -> &mut Table {
         let table = self.0.entry(key).or_default();
         table.warm();
+        table.kept = None;
         table.columns = Columns::default();
         table
     }
@@ -900,6 +901,21 @@ struct Table {
     frozen: Option<Frozen>,
     /// The headers of all the versions in encoded columns, when `versions` is empty.
     cold: Option<Cold>,
+    /// The number of versions of the last freeze that did not make the columns, or 0. The next freeze waits until the table has twice as many versions, so that a table with a column that has no encoding, such as a `uuid` column, does not encode all its other columns again at each load and each scan.
+    unfrozen: usize,
+    /// The frozen columns that a read thawed, which the next freeze takes back when the versions did not change.
+    kept: Option<Kept>,
+}
+
+/// The frozen columns of a table that a read by rows or by key thawed. A write drops them. When the table has the same versions at the next freeze, the freeze takes the columns back and does not make them again.
+#[derive(Debug)]
+struct Kept {
+    frozen: Frozen,
+    /// The places of the versions whose values were in the columns.
+    places: Vec<usize>,
+    /// [`Table::made`] and the number of versions at the thaw. The inserts change the first and the removals change the second, and each removal goes through a thaw for a write, which drops the columns.
+    made: u64,
+    len: usize,
 }
 
 /// The IDs of the versions of one hash of a [`KeyMap`]. Most keys have one version, so one ID stays in the map and only more than one ID needs a list on the heap. This keeps an allocation and a miss of the cache from each read of a key.
@@ -1140,6 +1156,7 @@ fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
 impl Table {
     /// Moves the values of all the versions into the encoded columns, when each column keeps its values exactly. When new versions went between the frozen ones, the heap makes each column again from all the versions, one column at a time.
     fn freeze(&mut self, tasks: Option<&dyn Tasks>) {
+        self.take_kept();
         if self.fold(tasks) {
             self.freeze_to(self.versions.len(), tasks);
         } else {
@@ -1226,18 +1243,36 @@ impl Table {
             }
             return;
         }
+        if self.unfrozen != 0 && (self.unfrozen..self.unfrozen.saturating_mul(2)).contains(&end) {
+            return;
+        }
+        let Some(columns) = self.first_columns(tail, width) else {
+            self.unfrozen = end;
+            return;
+        };
+        self.unfrozen = 0;
+        for version in &mut self.versions[start..end] {
+            version.values = Arc::default();
+        }
+        self.frozen = Some(Frozen { rows: end - start, end, columns, moved: Vec::new() });
+    }
+
+    /// The encoded columns of the first frozen rows `tail`, each with `width` values, or `None` when a value has no column type, not the type of its column, or does not come back the same from a decode.
+    fn first_columns(&self, tail: &[Version], width: usize) -> Option<Vec<Arc<Stored>>> {
+        // A column with no type of its own stops the freeze before any column is encoded.
+        if (0..width).any(|at| kind_of(tail.iter().map(|version| &version.values[at])).is_none()) {
+            return None;
+        }
         let mut columns = Vec::with_capacity(width);
         for at in 0..width {
-            let Some(kind) = kind_of(tail.iter().map(|version| &version.values[at])) else {
-                return;
-            };
+            let kind = kind_of(tail.iter().map(|version| &version.values[at]))?;
             let values = tail.iter().map(|version| version.values.get(at));
             let stored = match self.columns.stored.get(&at) {
                 Some(stored) if stored.kind == kind => Stored::clone(stored),
                 _ => {
                     let mut stored = Stored::new(kind, None, Vec::new(), 0);
                     if stored.extend(values).is_err() {
-                        return;
+                        return None;
                     }
                     stored
                 }
@@ -1247,14 +1282,11 @@ impl Table {
                 decoded.next().is_some_and(|value| same(&version.values[at], &value))
             });
             if !exact || decoded.next().is_some() || decoded.failed {
-                return;
+                return None;
             }
             columns.push(Arc::new(stored));
         }
-        for version in &mut self.versions[start..end] {
-            version.values = Arc::default();
-        }
-        self.frozen = Some(Frozen { rows: end - start, end, columns, moved: Vec::new() });
+        Some(columns)
     }
 
     /// The values of the column `at` of each version, in order, with the values of the frozen versions decoded from the column.
@@ -1470,22 +1502,48 @@ impl Table {
         self
     }
 
-    /// Puts the values of the frozen versions of the table back into the versions.
+    /// Puts the values of the frozen versions of the table back into the versions, for a write. The columns that a read kept go.
     fn thaw(&mut self) {
-        self.warm();
-        if self.frozen.is_none() {
-            return;
+        self.kept = None;
+        self.thaw_rows();
+    }
+
+    /// [`Table::thaw`] for a read, which keeps the frozen columns for the next freeze.
+    fn thaw_read(&mut self) {
+        if let Some((frozen, places)) = self.thaw_rows() {
+            let (made, len) = (self.made, self.versions.len());
+            self.kept = Some(Kept { frozen, places, made, len });
         }
+    }
+
+    /// Puts the values of the frozen versions back into the versions, and gives the columns with the places of these versions.
+    fn thaw_rows(&mut self) -> Option<(Frozen, Vec<usize>)> {
+        self.warm();
+        self.frozen.as_ref()?;
         let mut rows = Vec::new();
         self.each_row(|at, values| {
             if self.versions[at].values.is_empty() {
                 rows.push((at, Arc::<[Value]>::from(values)));
             }
         });
-        self.frozen = None;
+        let frozen = self.frozen.take()?;
+        let places = rows.iter().map(|&(at, _)| at).collect();
         for (at, values) in rows {
             self.versions[at].values = values;
         }
+        Some((frozen, places))
+    }
+
+    /// Takes back the columns that a read thawed, when the table has the same versions, and drops the values of these versions again.
+    fn take_kept(&mut self) {
+        let Some(kept) = self.kept.take() else { return };
+        if self.frozen.is_some() || kept.made != self.made || kept.len != self.versions.len() {
+            return;
+        }
+        for &at in &kept.places {
+            self.versions[at].values = Arc::default();
+        }
+        self.frozen = Some(kept.frozen);
     }
 
     fn add(
@@ -2274,7 +2332,7 @@ impl Heap {
         let Some(table) = state.tables.0.get_mut(&(view.database, relation)) else {
             return Some(Vec::new());
         };
-        table.thaw();
+        table.thaw_read();
         table.keys.retain(|map| !map.stale);
         let kept = table.keys.iter().position(|map| {
             map.derived.is_none()
@@ -2785,10 +2843,11 @@ impl Heap {
         let (entries, total, made, count) = {
             let mut guard = self.state();
             let state = &mut *guard;
-            let Some(table) = state.tables.get(&(database, relation)) else {
+            // The read keeps the frozen columns of the table, as the plan of each query reads the size of each index, and a thaw would make the next scan freeze the table again.
+            let Some(table) = state.tables.meta(&(database, relation)) else {
                 return BtreeSize::EMPTY;
             };
-            let count = table.versions.len();
+            let count = table.len();
             if let Some(cached) = table.btree_sizes.get(&index)
                 && cached.shape == *shape
                 && (cached.made == table.made && cached.count == count
@@ -2797,24 +2856,28 @@ impl Heap {
                 return cached.size;
             }
             let step = count.div_ceil(btree::EXACT).max(1);
-            let kept = table.versions.iter().filter(|v| !state.aborted.contains(&v.xmin));
-            let total = if step == 1 { 0 } else { kept.clone().count() };
-            let entries: Vec<Box<[Value]>> = kept
-                .step_by(step)
-                .map(|v| {
-                    shape
-                        .columns
-                        .iter()
-                        .map(|&c| v.values.get(c).cloned().unwrap_or(Value::Null))
-                        .collect()
-                })
-                .collect();
-            let total = total.max(entries.len());
+            let mut total = 0;
+            let mut entries: Vec<Box<[Value]>> = Vec::new();
+            table.each_version_row(Some(&shape.columns), |version, values| {
+                if state.aborted.contains(&version.xmin) {
+                    return;
+                }
+                if total % step == 0 {
+                    entries.push(
+                        shape
+                            .columns
+                            .iter()
+                            .map(|&c| values.get(c).cloned().unwrap_or(Value::Null))
+                            .collect(),
+                    );
+                }
+                total += 1;
+            });
             (entries, total, table.made, count)
         };
         let size = btree::size(entries, total, shape);
         let mut state = self.state();
-        if let Some(table) = state.tables.get_mut(&(database, relation)) {
+        if let Some(table) = state.tables.settings_of(&(database, relation)) {
             let cached = btree::Cached { made, count, shape: shape.clone(), size };
             table.btree_sizes.insert(index, cached);
         }
@@ -2912,23 +2975,32 @@ impl Heap {
             let _published = self.published();
             state.horizon()
         };
-        let table = state.tables.get(&(database, relation))?;
+        // The read keeps the frozen columns of the table, as [`Heap::btree_size`] does.
+        let table = state.tables.meta(&(database, relation))?;
         let dead =
             |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
-        let mut range: Option<(&Value, &Value)> = None;
-        for version in table.versions.iter().filter(|v| !dead(v)) {
-            let Some(value) = version.values.get(column).filter(|v| !v.is_null()) else {
-                continue;
+        let mut range: Option<(Value, Value)> = None;
+        let mut unordered = false;
+        table.each_version_row(Some(&[column]), |version, values| {
+            let Some(value) = values.get(column).filter(|v| !v.is_null() && !dead(version)) else {
+                return;
             };
-            range = Some(match range {
-                None => (value, value),
-                Some((min, max)) => (
-                    if order(value, min)?.is_lt() { value } else { min },
-                    if order(value, max)?.is_gt() { value } else { max },
-                ),
-            });
-        }
-        range.map(|(min, max)| (min.clone(), max.clone()))
+            match &mut range {
+                None => range = Some((value.clone(), value.clone())),
+                Some((min, max)) => match (order(value, min), order(value, max)) {
+                    (Some(low), Some(high)) => {
+                        if low.is_lt() {
+                            *min = value.clone();
+                        }
+                        if high.is_gt() {
+                            *max = value.clone();
+                        }
+                    }
+                    _ => unordered = true,
+                },
+            }
+        });
+        if unordered { None } else { range }
     }
 
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
@@ -3945,6 +4017,102 @@ mod tests {
         table.chill();
         assert!(table.cold.is_some());
         check(table, true);
+    }
+
+    #[test]
+    fn the_size_of_an_index_and_the_range_of_a_column_keep_the_frozen_columns() {
+        let heap = Heap::default();
+        let xid = heap.begin(1);
+        let row = |i: usize| vec![Value::Int8((i * 7 % 3001) as i64), Value::Int8((i % 5) as i64)];
+        let rows = (0..3001).map(row).collect::<Vec<_>>();
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        heap.commit(xid);
+        let (columns, types, options) = (vec![0, 1], vec![oid::INT8, oid::INT8], vec![0, 0]);
+        let shape = Shape {
+            columns,
+            types,
+            key_count: 2,
+            options,
+            unique: true,
+            fillfactor: 90,
+            deduplicate: true,
+        };
+        let order = |a: &Value, b: &Value| match (a, b) {
+            (Value::Int8(a), Value::Int8(b)) => Some(a.cmp(b)),
+            _ => None,
+        };
+        let size = heap.btree_size(1, 7, 9, &shape);
+        let range = heap.variable_range(1, 7, 0, order);
+        assert_eq!(range, Some((Value::Int8(0), Value::Int8(3000))));
+        {
+            let mut state = heap.state();
+            let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+            table.freeze(None);
+            table.seal();
+            table.chill();
+            assert!(table.cold.is_some());
+            table.btree_sizes.clear();
+        }
+        assert_eq!(heap.btree_size(1, 7, 9, &shape), size);
+        assert_eq!(heap.variable_range(1, 7, 0, order), range);
+        let state = heap.state();
+        let table = &state.tables.0[&(1, 7)];
+        assert!(table.frozen.is_some() && table.cold.is_some());
+    }
+
+    #[test]
+    fn a_freeze_takes_back_the_columns_that_a_read_thawed() {
+        let heap = Heap::default();
+        let xid = heap.begin(1);
+        let row = |i: usize| vec![Value::Int8(i as i64), Value::Text(format!("v{}", i % 13))];
+        let rows = (0..3000).map(row).collect::<Vec<_>>();
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        heap.commit(xid);
+        let mut state = heap.state();
+        let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+        table.freeze(None);
+        let columns: Vec<Arc<Stored>> = table.frozen.as_ref().unwrap().columns.clone();
+        // A read thaws the table and keeps the columns, and the next freeze takes them back.
+        let read = state.tables.get(&(1, 7)).unwrap();
+        assert!(read.frozen.is_none() && read.kept.is_some());
+        assert_eq!(&*read.versions[5].values, &row(5)[..]);
+        let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+        table.freeze(None);
+        let frozen = table.frozen.as_ref().unwrap();
+        assert!(frozen.columns.iter().zip(&columns).all(|(a, b)| Arc::ptr_eq(a, b)));
+        assert!(table.versions.iter().all(|version| version.values.is_empty()));
+        let mut all = Vec::new();
+        table.each_version_row(None, |_, values| all.push(values.to_vec()));
+        assert_eq!(all, (0..3000).map(row).collect::<Vec<_>>());
+        // A write after the read drops the columns, and the freeze makes them again.
+        state.tables.get(&(1, 7)).unwrap();
+        state.tables.get_mut(&(1, 7)).unwrap();
+        let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+        assert!(table.kept.is_none());
+        table.freeze(None);
+        let frozen = table.frozen.as_ref().unwrap();
+        assert!(!frozen.columns.iter().zip(&columns).any(|(a, b)| Arc::ptr_eq(a, b)));
+    }
+
+    #[test]
+    fn a_freeze_that_fails_waits_until_the_table_has_twice_as_many_versions() {
+        let heap = Heap::default();
+        let xid = heap.begin(1);
+        // A `uuid` column has no encoding, so the versions keep their values.
+        let row = |i: usize| vec![Value::Int8(i as i64), Value::Uuid([i as u8; 16])];
+        let rows = (0..200).map(row).collect::<Vec<_>>();
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        let mut state = heap.state();
+        let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+        table.freeze_to(100, None);
+        assert!(table.frozen.is_none());
+        assert_eq!(table.unfrozen, 100);
+        table.freeze_to(199, None);
+        assert_eq!(table.unfrozen, 100);
+        table.freeze_to(200, None);
+        assert_eq!(table.unfrozen, 200);
+        assert!(table.frozen.is_none());
+        assert!(table.versions.iter().all(|version| version.values.len() == 2));
     }
 
     #[test]
