@@ -140,7 +140,7 @@ impl Prepared {
             return Ok(None);
         };
         let same = std::ptr::eq(self.catalog.as_ptr(), Arc::as_ptr(&reader.catalog))
-            && rupg_analyze::Env::search_path(reader) == self.search_path;
+            && reader.search_path_is(&self.search_path);
         if (same && !plan.row_security()) || !query::is_query(node) {
             return Ok(None);
         }

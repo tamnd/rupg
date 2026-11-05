@@ -790,6 +790,11 @@ impl<'a> Reader<'a> {
         path
     }
 
+    /// True when the OIDs of the schemas of `search_path` are `oids`, as [`rupg_analyze::Env::search_path`] gives them, with no list of the OIDs.
+    pub(crate) fn search_path_is(&self, oids: &[u32]) -> bool {
+        self.path().iter().map(|&(_, oid)| oid).eq(oids.iter().copied())
+    }
+
     /// The schemas of `search_path` that exist, in order, without the implicit schemas, as `recomputeNamespacePath` finds them. `$user` names the schema of the user, and `pg_temp` the temporary schema, which do not exist yet.
     fn find_path(&self, text: &str) -> Vec<(String, u32)> {
         let mut path: Vec<(String, u32)> = Vec::new();
