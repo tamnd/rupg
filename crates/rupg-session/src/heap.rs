@@ -520,7 +520,7 @@ impl Cold {
                 aborted: 0,
                 next: 0,
                 len: lens[at] as u16,
-                values: Box::default(),
+                values: Arc::default(),
             })
             .collect())
     }
@@ -1105,7 +1105,7 @@ impl Table {
         }
         frozen.moved.sort_unstable_by_key(|&(tid, _)| tid);
         for &at in &places[..done] {
-            self.versions[at].values = Box::default();
+            self.versions[at].values = Arc::default();
         }
         done == places.len()
     }
@@ -1150,7 +1150,7 @@ impl Table {
                 from = to;
             }
             for version in &mut self.versions[start..from] {
-                version.values = Box::default();
+                version.values = Arc::default();
             }
             return;
         }
@@ -1180,7 +1180,7 @@ impl Table {
             columns.push(Arc::new(stored));
         }
         for version in &mut self.versions[start..end] {
-            version.values = Box::default();
+            version.values = Arc::default();
         }
         self.frozen = Some(Frozen { rows: end - start, end, columns, moved: Vec::new() });
     }
@@ -1228,7 +1228,7 @@ impl Table {
             columns.push(Arc::new(stored));
         }
         for version in &mut self.versions {
-            version.values = Box::default();
+            version.values = Arc::default();
         }
         let rows = self.versions.len();
         self.frozen = Some(Frozen { rows, end: rows, columns, moved: Vec::new() });
@@ -1407,7 +1407,7 @@ impl Table {
         let mut rows = Vec::new();
         self.each_row(|at, values| {
             if self.versions[at].values.is_empty() {
-                rows.push((at, Box::<[Value]>::from(values)));
+                rows.push((at, Arc::<[Value]>::from(values)));
             }
         });
         self.frozen = None;
@@ -1450,7 +1450,7 @@ impl Table {
                 map.make_stale();
             }
         }
-        let values = values.into_boxed_slice();
+        let values = Arc::<[Value]>::from(values);
         let len = u16::try_from(len).unwrap_or(u16::MAX);
         let made = self.made;
         let version =
@@ -1705,7 +1705,8 @@ struct Version {
     next: u64,
     /// `MAXALIGN(t_len)`: the space of the version in its page.
     len: u16,
-    values: Box<[Value]>,
+    /// The values of the columns. A point read takes a count of the `Arc` and reads the values after it lets the lock of the heap go, with no copy of them.
+    values: Arc<[Value]>,
 }
 
 /// `SnapshotData` of an MVCC snapshot: the transactions whose changes a statement does not see.
@@ -2123,9 +2124,37 @@ impl Heap {
         relation: u32,
         view: &View,
         used: Option<&[bool]>,
-        (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
+        key_columns: (&[usize], &[u32], bool),
         key: &[Value],
     ) -> Option<Vec<Vec<Value>>> {
+        let wanted = used_columns(used);
+        self.key_versions(relation, view, key_columns, key, |version, combos| {
+            version_row(version, &version.values, combos, wanted.as_deref(), false)
+        })
+    }
+
+    /// [`Heap::key_rows`] with the values of all the columns of each version as the heap keeps them, and the ID of the version. The values are not copied, so a point read reads them after it lets the lock of the heap go.
+    pub(crate) fn key_shared(
+        &self,
+        relation: u32,
+        view: &View,
+        key_columns: (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Option<Vec<rupg_func::SharedRow>> {
+        self.key_versions(relation, view, key_columns, key, |version, _| {
+            (Arc::clone(&version.values), version.tid)
+        })
+    }
+
+    /// The result of `each` for each version that [`Heap::key_rows`] reads, with the combo command IDs of the table.
+    fn key_versions<T>(
+        &self,
+        relation: u32,
+        view: &View,
+        (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
+        key: &[Value],
+        mut each: impl FnMut(&Version, &HashMap<u64, u32>) -> T,
+    ) -> Option<Vec<T>> {
         let mut guard = self.state();
         let state = &mut *guard;
         let horizon = {
@@ -2176,14 +2205,11 @@ impl Heap {
         } else {
             found
         };
-        let wanted = used_columns(used);
         Some(
             tids.iter()
                 .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
                 .filter(|version| visible(version, view))
-                .map(|version| {
-                    version_row(version, &version.values, &table.combos, wanted.as_deref(), false)
-                })
+                .map(|version| each(version, &table.combos))
                 .collect(),
         )
     }
@@ -3724,7 +3750,7 @@ mod tests {
         let table = state.tables.0.get_mut(&(1, 7)).unwrap();
         table.frozen = None;
         for (version, at) in table.versions.iter_mut().zip(0..) {
-            version.values = row(at).into_boxed_slice();
+            version.values = row(at).into();
         }
         check(table, false);
         // The first rows are frozen and the last rows keep their values.
@@ -3764,7 +3790,7 @@ mod tests {
         let table = state.tables.0.get_mut(&(1, 7)).unwrap();
         table.frozen = None;
         for (version, at) in table.versions.iter_mut().zip(0..) {
-            version.values = row(at).into_boxed_slice();
+            version.values = row(at).into();
         }
         table.freeze_to(ROWS + 3000, None);
         // The last version goes to the next slot of the page of the version before the place `near` or after it, as a new version in an earlier page does.

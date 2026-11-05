@@ -227,6 +227,9 @@ pub struct HeapSize {
     pub vm_blocks: u32,
 }
 
+/// The values of all the columns of a version as the store keeps them, and the ID of the version, for [`Session::table_shared_rows_by_key`].
+pub type SharedRow = (Arc<[Value]>, u64);
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -609,6 +612,20 @@ pub trait Session {
         key: &[Value],
     ) -> Result<Option<Vec<Vec<Value>>>> {
         let _ = (relation, used, columns, types, nulls_not_distinct, key);
+        Ok(None)
+    }
+    /// [`Session::table_rows_by_key`] with the values of all the columns of each version as the store keeps them, and the ID of the version, with no copy of the values. `None` as [`Session::table_rows_by_key`] gives it.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_shared_rows_by_key(
+        &self,
+        relation: u32,
+        (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Result<Option<Vec<SharedRow>>> {
+        let _ = (relation, columns, types, nulls_not_distinct, key);
         Ok(None)
     }
     /// The rows of [`Session::table_rows`], each with the system columns `xmin` and `xmax` of its version before the ID of the version.

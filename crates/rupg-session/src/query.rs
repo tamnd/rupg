@@ -1384,6 +1384,20 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_shared_rows_by_key(
+        &self,
+        relation: u32,
+        key_columns: (&[usize], &[u32], bool),
+        key: &[Value],
+    ) -> Result<Option<Vec<rupg_func::SharedRow>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => {
+                Ok(store.heap().key_shared(relation, view, key_columns, key))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn table_rows_with_xids(
         &self,
         relation: u32,
@@ -2093,6 +2107,18 @@ pub(crate) fn run_select(
     formats: &[i16],
 ) -> std::result::Result<Vec<Row>, (Vec<Row>, Error)> {
     let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+    // A point read encodes the values of the versions as the heap keeps them, with no copy of the values.
+    if let Some(found) = plan.point_shared(params, reader) {
+        let found = found.map_err(|error| (Vec::new(), error))?;
+        let mut rows = Vec::with_capacity(found.len());
+        for at in 0..found.len() {
+            match encode(&types, found.values(at), reader, formats) {
+                Ok(row) => rows.push(row),
+                Err(error) => return Err((rows, error)),
+            }
+        }
+        return Ok(rows);
+    }
     let (values, failed) = match plan.run_select(params, reader) {
         Ok(values) => (values, None),
         Err((values, error)) => (values, Some(error)),
@@ -2116,13 +2142,13 @@ pub(crate) fn run_select(
 /// # Errors
 ///
 /// The errors of the output functions.
-pub(crate) fn encode(
+pub(crate) fn encode<'v>(
     types: &[u32],
-    values: &[Value],
+    values: impl IntoIterator<Item = &'v Value>,
     reader: &Reader<'_>,
     formats: &[i16],
 ) -> Result<Row> {
-    let mut row = Vec::with_capacity(values.len());
+    let mut row = Vec::with_capacity(types.len());
     for (i, (&ty, value)) in types.iter().zip(values).enumerate() {
         if matches!(value, Value::Null) {
             row.push(None);

@@ -1152,7 +1152,7 @@ pub(crate) fn point_shape(query: &Query) -> bool {
 }
 
 /// What a target of a point read gives.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Point<'q> {
     /// A column of the user, from 0, with no cast.
     Column(usize),
@@ -1188,28 +1188,8 @@ pub(crate) fn point_rows(
     params: &[Value],
     session: &dyn Session,
 ) -> Result<Option<Vec<Vec<Value>>>> {
-    let Some(filter) = &query.filter else { return Ok(None) };
-    let mut conds = Vec::new();
-    conjuncts(filter, &mut conds);
-    // Each condition must be an `=` of its own column, so that the key has all the conditions and the read needs no other test.
-    let mut columns = Vec::with_capacity(conds.len());
-    for cond in &conds {
-        let ExprKind::Func(f) = &cond.kind else { return Ok(None) };
-        let [a, b] = f.args.as_slice() else { return Ok(None) };
-        if !HASH_EQUALS.contains(&f.oid) {
-            return Ok(None);
-        }
-        let Some(column) = key_column(a).or_else(|| key_column(b)) else { return Ok(None) };
-        if columns.contains(&column) {
-            return Ok(None);
-        }
-        columns.push(column);
-    }
-    let Some(lookup) = key_lookup(query, (&conds, params), session) else { return Ok(None) };
+    let Some(lookup) = point_key(query, params, session) else { return Ok(None) };
     let [key] = lookup.keys.as_slice() else { return Ok(None) };
-    if lookup.columns.len() != columns.len() {
-        return Ok(None);
-    }
     // `=` is strict, so a null key is equal to no key, also in an index with `NULLS NOT DISTINCT`.
     if key.iter().any(|value| matches!(value, Value::Null)) {
         return Ok(Some(Vec::new()));
@@ -1250,6 +1230,95 @@ pub(crate) fn point_rows(
         rows.push(values);
     }
     Ok(Some(rows))
+}
+
+/// The key of a point read of [`point_rows`]: each condition of `WHERE` is an `=` of its own column, and the columns are all the key columns of a unique index, with one value each. `None` for a query that runs as a scan.
+fn point_key(query: &Query, params: &[Value], session: &dyn Session) -> Option<KeyLookup> {
+    let filter = query.filter.as_ref()?;
+    let mut conds = Vec::new();
+    conjuncts(filter, &mut conds);
+    // Each condition must be an `=` of its own column, so that the key has all the conditions and the read needs no other test.
+    let mut columns = Vec::with_capacity(conds.len());
+    for cond in &conds {
+        let ExprKind::Func(f) = &cond.kind else { return None };
+        let [a, b] = f.args.as_slice() else { return None };
+        if !HASH_EQUALS.contains(&f.oid) {
+            return None;
+        }
+        let column = key_column(a).or_else(|| key_column(b))?;
+        if columns.contains(&column) {
+            return None;
+        }
+        columns.push(column);
+    }
+    let lookup = key_lookup(query, (&conds, params), session)?;
+    (lookup.keys.len() == 1 && lookup.columns.len() == columns.len()).then_some(lookup)
+}
+
+/// The rows of a point read of a `SELECT` as [`point_rows`] gives them, with the values of the versions as the store keeps them and no copy of them.
+#[derive(Debug)]
+pub struct PointRows<'q> {
+    rows: Vec<(Arc<[Value]>, Value)>,
+    targets: Vec<Option<Point<'q>>>,
+    params: &'q [Value],
+}
+
+/// The value of a target that is not a column, a parameter or a constant.
+static NULL: Value = Value::Null;
+
+impl<'q> PointRows<'q> {
+    /// The count of rows.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// True when the read found no row.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// The values of the targets of row `at`.
+    pub fn values(&self, at: usize) -> impl Iterator<Item = &Value> + '_ {
+        let (row, tid) = &self.rows[at];
+        self.targets.iter().map(move |target| match *target {
+            Some(Point::Column(c)) => row.get(c).unwrap_or(&NULL),
+            Some(Point::Tid) => tid,
+            Some(Point::Param(n)) => self.params.get(n - 1).unwrap_or(&NULL),
+            Some(Point::Const(value)) => value,
+            None => &NULL,
+        })
+    }
+
+    /// The read of [`point_rows`] for a `SELECT`, with no copy of the values. `None` when the session cannot lend the values or the query runs as a scan.
+    pub(crate) fn read(
+        query: &'q Query,
+        params: &'q [Value],
+        session: &dyn Session,
+    ) -> Result<Option<Self>> {
+        let Some(lookup) = point_key(query, params, session) else { return Ok(None) };
+        let [key] = lookup.keys.as_slice() else { return Ok(None) };
+        let targets = query.targets.iter().map(|t| point_target(&t.expr)).collect();
+        // `=` is strict, so a null key is equal to no key, also in an index with `NULLS NOT DISTINCT`.
+        if key.iter().any(|value| matches!(value, Value::Null)) {
+            return Ok(Some(PointRows { rows: Vec::new(), targets, params }));
+        }
+        let key_columns = (&lookup.columns[..], &lookup.types[..], lookup.nulls_not_distinct);
+        let Some(found) = session.table_shared_rows_by_key(lookup.relation, key_columns, key)?
+        else {
+            return Ok(None);
+        };
+        session.count_scan(lookup.relation);
+        let rows = found
+            .into_iter()
+            .filter(|(row, _)| {
+                lookup.columns.iter().zip(key).all(|(&c, value)| row.get(c) == Some(value))
+            })
+            .map(|(row, tid)| (row, Value::Int8(tid.cast_signed())))
+            .collect();
+        Ok(Some(PointRows { rows, targets, params }))
+    }
 }
 
 /// The most keys that [`key_rows`] reads one at a time. With more, the scan reads all the rows.

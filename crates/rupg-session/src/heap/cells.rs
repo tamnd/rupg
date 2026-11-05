@@ -221,7 +221,7 @@ impl Heap {
                 aborted: 0,
                 next: 0,
                 len,
-                values: Box::default(),
+                values: Arc::default(),
             };
             if table.versions.last().is_none_or(|last| last.tid < tid) {
                 table.versions.push(version);
