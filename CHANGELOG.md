@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.4.20 (2026-11-05)
+
 ### Added
 
 - The report of a statement to `pg_stat_activity` reuses the buffers of the text of the statement, so a prepared statement that runs again makes no copies of its text (#1340).
