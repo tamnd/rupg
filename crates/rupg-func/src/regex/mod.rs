@@ -493,8 +493,12 @@ fn text(chars: &[u32], (so, eo): (usize, usize)) -> String {
     chars[so..eo].iter().filter_map(|&c| char::from_u32(c)).collect()
 }
 
-/// [`text`] at the end of `out`.
-fn push_text(out: &mut String, chars: &[u32], (so, eo): (usize, usize)) {
+/// [`text`] at the end of `out`, for the characters `chars` of `s`. When `s` has one byte for each character, the text is the bytes of `s`.
+fn push_text(out: &mut String, s: &str, chars: &[u32], (so, eo): (usize, usize)) {
+    if s.len() == chars.len() {
+        out.push_str(&s[so..eo]);
+        return;
+    }
     out.extend(chars[so..eo].iter().filter_map(|&c| char::from_u32(c)));
 }
 
@@ -564,7 +568,12 @@ fn start_at(start: i64) -> usize {
 }
 
 /// `appendStringInfoRegexpSubstr`: the replacement with `\1` to `\9` as the text of each group, `\&` as the text of the match and `\\` as one backslash. A backslash before another character stays.
-fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, chars: &[u32]) {
+fn substitute(
+    out: &mut String,
+    replacement: &str,
+    groups: &tree::Groups,
+    (s, chars): (&str, &[u32]),
+) {
     let mut it = replacement.chars().peekable();
     while let Some(c) = it.next() {
         if c != '\\' {
@@ -586,7 +595,7 @@ fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, chars:
         };
         it.next();
         if let Some(span) = span {
-            push_text(out, chars, span);
+            push_text(out, s, chars, span);
         }
     }
 }
@@ -606,15 +615,15 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
             search = next_search(span);
             continue;
         }
-        push_text(&mut out, &chars, (done, span.0));
-        substitute(&mut out, replacement, &groups, &chars);
+        push_text(&mut out, s, &chars, (done, span.0));
+        substitute(&mut out, replacement, &groups, (s, &chars));
         done = span.1;
         if n > 0 {
             break;
         }
         search = next_search(span);
     }
-    push_text(&mut out, &chars, (done, chars.len()));
+    push_text(&mut out, s, &chars, (done, chars.len()));
     Ok(Value::Text(out))
 }
 
