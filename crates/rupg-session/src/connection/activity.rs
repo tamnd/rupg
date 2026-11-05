@@ -122,6 +122,8 @@ pub(crate) struct Activity {
     relations: RefCell<Option<Arc<HashMap<u32, RelationCounts>>>>,
     /// `debug_query_string`: the text of the message that runs, in full. It is `None` while the session waits for the client.
     pub(crate) query: Option<String>,
+    /// The buffer of the last text of [`Activity::query`], which the next statement fills again with no new allocation.
+    spare: String,
     /// `SYSTEM_USER`, as `auth_method:authn_id`, or `None` for a method that checks no identity.
     pub(crate) system_user: Option<String>,
     /// True while the row of the session has the progress of a command.
@@ -244,9 +246,16 @@ pub(super) fn application_name(settings: &Settings) -> String {
 
 /// `pg_mbcliplen`: cuts the text to at most `max` bytes at the end of a character.
 fn clip(text: &mut String, max: usize) {
+    let end = clip_len(text, max);
+    text.truncate(end);
+}
+
+/// The length of the text that [`clip`] keeps.
+fn clip_len(text: &str, max: usize) -> usize {
     if text.len() > max {
-        let end = (0..=max).rev().find(|&at| text.is_char_boundary(at)).unwrap_or(0);
-        text.truncate(end);
+        (0..=max).rev().find(|&at| text.is_char_boundary(at)).unwrap_or(0)
+    } else {
+        text.len()
     }
 }
 
@@ -302,7 +311,16 @@ impl Connection {
     /// `pgstat_report_activity`: the state of the session, and the text of the statement that starts when `text` is `Some`.
     pub(super) fn report(&mut self, state: BackendState, text: Option<&str>) {
         if let Some(text) = text {
-            self.activity.query = Some(text.to_owned());
+            match &mut self.activity.query {
+                Some(query) if query == text => {}
+                query => {
+                    let mut kept =
+                        query.take().unwrap_or_else(|| std::mem::take(&mut self.activity.spare));
+                    kept.clear();
+                    kept.push_str(text);
+                    *query = Some(kept);
+                }
+            }
         }
         if self.activity.row.is_none() {
             return;
@@ -314,11 +332,7 @@ impl Connection {
             (BackendState::Running, Some(text)) if known.query_id => rupg_sql::query_id(text),
             _ => 0,
         };
-        let text = text.map(|text| {
-            let mut text = text.to_owned();
-            clip(&mut text, known.query_bytes);
-            text
-        });
+        let text = text.map(|text| &text[..clip_len(text, known.query_bytes)]);
         let now = query::now(&*self.clock);
         let start = self.statement_start;
         self.activity.change(|backend| {
@@ -344,7 +358,11 @@ impl Connection {
             backend.state = state;
             backend.state_change = Some(now);
             if let Some(text) = text {
-                backend.query = text;
+                // The text of a prepared statement that runs again is the same, so the row keeps it.
+                if backend.query != text {
+                    backend.query.clear();
+                    backend.query.push_str(text);
+                }
                 backend.query_start = Some(start);
             }
         });
@@ -357,7 +375,9 @@ impl Connection {
             TransactionStatus::Block => BackendState::IdleInTransaction,
             TransactionStatus::Failed => BackendState::IdleInTransactionAborted,
         };
-        self.activity.query = None;
+        if let Some(query) = self.activity.query.take() {
+            self.activity.spare = query;
+        }
         self.report(state, None);
         // Out of a statement, only the snapshot of a transaction in `REPEATABLE READ` stays, as `SnapshotResetXmin` keeps the registered snapshots.
         if state == BackendState::IdleInTransactionAborted || self.snapshot.borrow().is_none() {
