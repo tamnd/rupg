@@ -7874,6 +7874,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_array.test")));
     }
 
+    /// `upper`, `lower`, `initcap` and `casefold` in a collation of ICU map the case in the language of the collation: the dotted and dotless `i` of Turkish and Azerbaijani, the accents of Greek in upper case, the final sigma, the `IJ` of Dutch, the digraphs in title case and the words of UAX #29 for `initcap`. `connection/icu_case.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_case() {
+        big_stack(|| script(include_str!("connection/icu_case.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {

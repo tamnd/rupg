@@ -273,7 +273,7 @@ impl Analyzer<'_> {
         crate::collate::icu_input(args, &levels, self.env.catalog())
     }
 
-    /// `inputcollid` of a call of the function `func` when the function orders strings in a collation of ICU, or 0. A function that reads the collation in another way, such as `upper` and the regular expressions, is not supported yet in a collation of ICU.
+    /// `inputcollid` of a call of the function `func` when the function orders strings or maps their case in a collation of ICU, or 0. A function that reads the collation in another way, such as the regular expressions, is not supported yet in a collation of ICU.
     pub(crate) fn call_collation(
         &self,
         func: u32,

@@ -79,18 +79,47 @@ fn byteaoctetlen(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(count(b.len()))
 }
 
-/// `lower` and `casefold` in the C locale: only the ASCII letters change.
-fn lower(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Text(arg(args, 0)?.to_ascii_lowercase()))
+/// `lower` in the C locale: only the ASCII letters change. In a collation of ICU, `u_strToLower` in the language of the collation.
+fn lower(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let s = arg(args, 0)?;
+    if let Some(language) = crate::collator::case_language(call.session, call.collation) {
+        let mapper = icu_casemap::CaseMapper::new();
+        return Ok(Value::Text(mapper.lowercase_to_string(s, &language).into_owned()));
+    }
+    Ok(Value::Text(s.to_ascii_lowercase()))
 }
 
-/// `upper` in the C locale.
-fn upper(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Text(arg(args, 0)?.to_ascii_uppercase()))
+/// `casefold` in the C locale: the ASCII letters in lower case. In a collation of ICU, `u_strFoldCase`, with the mappings of the dotted and dotless `i` of Turkish and Azerbaijani for those languages, as `strfold_icu` gives it.
+fn casefold(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let s = arg(args, 0)?;
+    if let Some(language) = crate::collator::case_language(call.session, call.collation) {
+        let mapper = icu_casemap::CaseMapper::new();
+        let folded = if matches!(language.language.as_str(), "tr" | "az") {
+            mapper.fold_turkic_string(s)
+        } else {
+            mapper.fold_string(s)
+        };
+        return Ok(Value::Text(folded.into_owned()));
+    }
+    Ok(Value::Text(s.to_ascii_lowercase()))
 }
 
-/// `initcap` in the C locale: an ASCII letter after a letter or a digit is in lower case, and the other ASCII letters are in upper case.
-fn initcap(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// `upper` in the C locale: only the ASCII letters change. In a collation of ICU, `u_strToUpper` in the language of the collation.
+fn upper(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let s = arg(args, 0)?;
+    if let Some(language) = crate::collator::case_language(call.session, call.collation) {
+        let mapper = icu_casemap::CaseMapper::new();
+        return Ok(Value::Text(mapper.uppercase_to_string(s, &language).into_owned()));
+    }
+    Ok(Value::Text(s.to_ascii_uppercase()))
+}
+
+/// `initcap` in the C locale: an ASCII letter after a letter or a digit is in lower case, and the other ASCII letters are in upper case. In a collation of ICU, `u_strToTitle` with the words of UAX #29.
+fn initcap(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let s = arg(args, 0)?;
+    if let Some(language) = crate::collator::case_language(call.session, call.collation) {
+        return Ok(Value::Text(titlecase(s, &language)));
+    }
     let mut out = String::new();
     let mut after_word = false;
     for c in arg(args, 0)?.chars() {
@@ -98,6 +127,30 @@ fn initcap(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         after_word = c.is_ascii_alphanumeric();
     }
     Ok(Value::Text(out))
+}
+
+/// `u_strToTitle` with the word break iterator of the root locale: each word of UAX #29 has its first letter, number or symbol in title case and the rest in lower case, in the language `language`.
+fn titlecase(s: &str, language: &icu_locale_core::LanguageIdentifier) -> String {
+    use icu_casemap::TitlecaseMapper;
+    use icu_casemap::options::TitlecaseOptions;
+    use icu_segmenter::WordSegmenter;
+    use icu_segmenter::options::WordBreakInvariantOptions;
+    let mapper = TitlecaseMapper::new();
+    let words = WordSegmenter::new_for_non_complex_scripts(WordBreakInvariantOptions::default());
+    let mut out = String::with_capacity(s.len());
+    let mut start = 0;
+    for end in words.segment_str(s) {
+        if end > start {
+            let word = mapper.titlecase_segment_to_string(
+                &s[start..end],
+                language,
+                TitlecaseOptions::default(),
+            );
+            out.push_str(&word);
+        }
+        start = end;
+    }
+    out
 }
 
 /// Which ends of a string a trim removes.
@@ -1033,7 +1086,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "bpcharlen" => bpcharlen,
         "textoctetlen" | "bpcharoctetlen" => octetlen,
         "byteaoctetlen" => byteaoctetlen,
-        "lower" | "casefold" => lower,
+        "lower" => lower,
+        "casefold" => casefold,
         "upper" => upper,
         "initcap" => initcap,
         "ltrim1" | "ltrim" => ltrim,

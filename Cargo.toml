@@ -70,8 +70,10 @@ libc = "0.2.191"
 libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["v2", "no_thp"] }
 # sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
 hmac = "0.13"
+icu_casemap = "2.3"
 icu_collator = "2.3"
 icu_locale_core = "2.3"
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 md-5 = "0.11"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 sha2 = { version = "0.11", default-features = false }
