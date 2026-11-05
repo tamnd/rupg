@@ -2078,6 +2078,23 @@ impl Plan {
         scan::point_rows(query, params, session).transpose()
     }
 
+    /// [`Plan::run_select`] of a point read by the key of a unique index, with the values of the versions as the store keeps them, after the checks of [`Plan::start`]. `None` for a query that runs in another way.
+    pub fn point_shared<'q>(
+        &'q self,
+        params: &'q [Value],
+        session: &dyn Session,
+    ) -> Option<Result<PointRows<'q>>> {
+        let query = self.runnable();
+        if self.row_security.is_some() || query.write.is_some() || !scan::point_shape(query) {
+            return None;
+        }
+        // The same checks as `point_select`, which only a query that the store can read by its key does.
+        if let Err(error) = self.start(session) {
+            return Some(Err(error));
+        }
+        PointRows::read(query, params, session).transpose()
+    }
+
     /// [`Plan::run`] with no checks of the constraints of the table. The rows of an `INSERT` have the values of the conditions of the check constraints after the columns of the table. `COPY ... FROM` drops the rows that its condition `WHERE` rejects before [`Plan::check`], as `CopyFrom` does.
     ///
     /// # Errors
@@ -4508,7 +4525,7 @@ mod window;
 pub use analyze::analyze;
 pub use insert::{failing_row, row_types};
 pub use partition::{Router, leaves as partition_leaves};
-pub use scan::members;
+pub use scan::{PointRows, members};
 pub use user::variadic_type;
 
 #[cfg(test)]

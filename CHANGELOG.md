@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- exec, session: a point `SELECT` encodes the values of the versions as the heap keeps them, with no copy of the values: the heap keeps the values of a version in an `Arc`, and the read takes one count of it for each row (#1342).
+
 ## 0.4.20 (2026-11-05)
 
 ### Added
