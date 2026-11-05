@@ -1,8 +1,10 @@
-//! The heavyweight locks of the sessions of a server, as `lock.c` keeps them: the advisory locks of the lock method `USER_LOCKMETHOD` and the locks that `LOCK TABLE` takes on relations. Both use the conflicts of `LockConflicts`. A session is the owner of its locks by its process ID.
+//! The heavyweight locks of the sessions of a server, as `lock.c` keeps them: the advisory locks of the lock method `USER_LOCKMETHOD` and the locks that statements and `LOCK TABLE` take on relations. All use the conflicts of `LockConflicts`. A session is the owner of its locks by its process ID.
+//!
+//! The weak modes of a relation, `AccessShareLock`, `RowShareLock` and `RowExclusiveLock`, conflict only with the strong modes. When no owner holds or waits for a strong mode on a relation of the same partition, a weak lock goes in the [`Fast`] path of its owner and touches no shared state. A strong request first counts itself in its partition and moves the weak locks of the relation from all the fast paths to the table, as `FastPathTransferRelationLocks` does.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use rupg_func::AdvisoryKey;
@@ -32,11 +34,28 @@ impl std::fmt::Display for Tag {
 /// A lock mode, from `AccessShareLock`, which is 1, to `AccessExclusiveLock`, which is 8.
 pub(crate) type Mode = u8;
 
+/// `RowExclusiveLock`, the mode of the table that a statement writes.
+pub(crate) const ROW_EXCLUSIVE: Mode = 3;
+
 /// `ShareLock`, the mode of a shared advisory lock.
 pub(crate) const SHARE: Mode = 5;
 
 /// `ExclusiveLock`, the mode of an exclusive advisory lock.
 pub(crate) const EXCLUSIVE: Mode = 7;
+
+/// `ShareUpdateExclusiveLock`, the first strong mode. The modes before it go on the fast path.
+const STRONG: Mode = 4;
+
+/// `FAST_PATH_STRONG_LOCK_HASH_PARTITIONS`.
+const PARTITIONS: usize = 1024;
+
+/// The partition of the count of strong locks of a relation tag, or `None` for an advisory tag.
+fn partition(tag: Tag) -> Option<usize> {
+    match tag {
+        Tag::Relation { relation, .. } => Some(relation as usize % PARTITIONS),
+        Tag::Advisory { .. } => None,
+    }
+}
 
 /// The names of the modes in the messages, from mode 1.
 const NAMES: [&str; 8] = [
@@ -108,8 +127,14 @@ impl Lock {
             && !ahead.iter().any(|wait| wait.owner != owner && conflicts(mode, wait.mode))
     }
 
-    /// `GrantLock`: one more hold of `owner` in mode `mode` at the level.
-    fn grant(&mut self, owner: i32, mode: Mode, session: bool) {
+    /// True when an owner holds or waits for a strong mode.
+    fn strong(&self) -> bool {
+        self.holds.iter().any(|hold| hold.mode >= STRONG)
+            || self.queue.iter().any(|wait| wait.mode >= STRONG)
+    }
+
+    /// The hold of `owner` in mode `mode`, which is new with no counts when the owner has none.
+    fn hold(&mut self, owner: i32, mode: Mode) -> &mut Hold {
         let at = match self.holds.iter().position(|h| h.owner == owner && h.mode == mode) {
             Some(at) => at,
             None => {
@@ -117,7 +142,12 @@ impl Lock {
                 self.holds.len() - 1
             }
         };
-        let hold = &mut self.holds[at];
+        &mut self.holds[at]
+    }
+
+    /// `GrantLock`: one more hold of `owner` in mode `mode` at the level.
+    fn grant(&mut self, owner: i32, mode: Mode, session: bool) {
+        let hold = self.hold(owner, mode);
         if session {
             hold.session += 1;
         } else {
@@ -152,14 +182,43 @@ pub(crate) struct Edge {
     pub(crate) tag: Tag,
 }
 
+/// The weak locks of the transaction of one owner on relations that took the fast path, as the `fpRelId` and the `fpLockBits` of a `PGPROC` keep them: the tag, the mode and the count.
+#[derive(Debug)]
+pub(crate) struct Fast {
+    owner: i32,
+    holds: Mutex<Vec<(Tag, Mode, u32)>>,
+}
+
+impl Fast {
+    fn holds(&self) -> MutexGuard<'_, Vec<(Tag, Mode, u32)>> {
+        self.holds.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// The heavyweight locks of a server.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Locks {
     table: Mutex<HashMap<Tag, Lock>>,
     /// False while the table is empty. A request sets it under the lock of the table, and [`Locks::release_all`] clears it when the table becomes empty, so that the end of a transaction with no locks takes no lock.
     used: AtomicBool,
     /// The signal of a release, or of a request that leaves a queue.
     changed: Condvar,
+    /// `FastPathStrongRelationLocks`: for each partition, the number of the relation tags in the table with a hold or a request of a strong mode, and the strong requests that have not yet looked at the table.
+    strong: Box<[AtomicU32]>,
+    /// The fast paths of the owners.
+    fast: Mutex<Vec<Arc<Fast>>>,
+}
+
+impl Default for Locks {
+    fn default() -> Locks {
+        Locks {
+            table: Mutex::default(),
+            used: AtomicBool::default(),
+            changed: Condvar::default(),
+            strong: (0..PARTITIONS).map(|_| AtomicU32::new(0)).collect(),
+            fast: Mutex::default(),
+        }
+    }
 }
 
 impl Locks {
@@ -167,7 +226,76 @@ impl Locks {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `LockAcquire`: a hold that the owner has in this mode gets one more count. Otherwise the lock is free when no other owner holds or waits for a mode that conflicts. A lock that is not free gives [`Request::Busy`] without `wait`, and puts the request in the queue with `wait`, as `ProcSleep` does.
+    fn fasts(&self) -> MutexGuard<'_, Vec<Arc<Fast>>> {
+        self.fast.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The fast path of a new owner.
+    pub(crate) fn join(&self, owner: i32) -> Arc<Fast> {
+        let fast = Arc::new(Fast { owner, holds: Mutex::default() });
+        self.fasts().push(Arc::clone(&fast));
+        fast
+    }
+
+    /// The end of an owner: its fast path goes.
+    pub(crate) fn leave(&self, fast: &Arc<Fast>) {
+        self.fasts().retain(|other| !Arc::ptr_eq(other, fast));
+    }
+
+    /// `FastPathGrantRelationLock`: true when the weak lock of `tag` in `mode` goes on the fast path of the owner, because no owner holds or waits for a strong mode on a relation of its partition. False sends the request to [`Locks::request`].
+    pub(crate) fn weak(&self, fast: &Fast, tag: Tag, mode: Mode) -> bool {
+        let Some(part) = partition(tag).filter(|_| mode < STRONG) else { return false };
+        let mut holds = fast.holds();
+        // A strong request counts itself before it takes this lock to move the holds, so it sees this hold, or this load sees its count.
+        if self.strong[part].load(Ordering::SeqCst) != 0 {
+            return false;
+        }
+        match holds.iter_mut().find(|hold| hold.0 == tag && hold.1 == mode) {
+            Some(hold) => hold.2 += 1,
+            None => holds.push((tag, mode, 1)),
+        }
+        true
+    }
+
+    /// The end of the transaction of the owner of `fast`: its weak locks on the fast path go.
+    pub(crate) fn release_fast(&self, fast: &Fast) {
+        let mut holds = fast.holds();
+        if !holds.is_empty() {
+            holds.clear();
+        }
+    }
+
+    /// `FastPathTransferRelationLocks`: the weak locks of `tag` on the fast paths of all the owners go to the table.
+    fn transfer(&self, tag: Tag) {
+        let fasts = self.fasts();
+        for fast in fasts.iter() {
+            let mut holds = fast.holds();
+            if !holds.iter().any(|hold| hold.0 == tag) {
+                continue;
+            }
+            let mut table = self.table();
+            self.used.store(true, Ordering::Relaxed);
+            holds.retain(|&(held, mode, count)| {
+                if held != tag {
+                    return true;
+                }
+                table.entry(tag).or_default().hold(fast.owner, mode).xact += count;
+                false
+            });
+        }
+    }
+
+    /// The count of the partition of `tag` after a change of the table that took away the last strong hold or request of the tag.
+    fn settle(&self, tag: Tag, before: bool, after: bool) {
+        if before
+            && !after
+            && let Some(part) = partition(tag)
+        {
+            self.strong[part].fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// `LockAcquire`: a hold that the owner has in this mode gets one more count. Otherwise the lock is free when no other owner holds or waits for a mode that conflicts. A lock that is not free gives [`Request::Busy`] without `wait`, and puts the request in the queue with `wait`, as `ProcSleep` does. A strong request on a relation first counts itself in its partition and moves the weak locks of the relation to the table.
     pub(crate) fn request(
         &self,
         tag: Tag,
@@ -176,7 +304,33 @@ impl Locks {
         session: bool,
         wait: bool,
     ) -> Request {
+        let part = partition(tag).filter(|_| mode >= STRONG);
+        if let Some(part) = part {
+            self.strong[part].fetch_add(1, Ordering::SeqCst);
+            self.transfer(tag);
+        }
         let mut table = self.table();
+        let before = part.is_some() && table.get(&tag).is_some_and(Lock::strong);
+        let request = self.request_in(&mut table, tag, owner, mode, session, wait);
+        // The count of the request stays when the tag has its first strong hold or request.
+        if let Some(part) = part
+            && (before || !table.get(&tag).is_some_and(Lock::strong))
+        {
+            self.strong[part].fetch_sub(1, Ordering::SeqCst);
+        }
+        request
+    }
+
+    /// [`Locks::request`] in the table.
+    fn request_in(
+        &self,
+        table: &mut HashMap<Tag, Lock>,
+        tag: Tag,
+        owner: i32,
+        mode: Mode,
+        session: bool,
+        wait: bool,
+    ) -> Request {
         self.used.store(true, Ordering::Relaxed);
         let lock = table.entry(tag).or_default();
         if lock.holds.iter().any(|h| h.owner == owner && h.mode == mode) {
@@ -263,7 +417,9 @@ impl Locks {
     pub(crate) fn leave_queue(&self, tag: Tag, owner: i32) {
         let mut table = self.table();
         if let Some(lock) = table.get_mut(&tag) {
+            let before = lock.strong();
             lock.queue.retain(|wait| wait.owner != owner);
+            self.settle(tag, before, lock.strong());
             if lock.holds.is_empty() && lock.queue.is_empty() {
                 table.remove(&tag);
             }
@@ -304,13 +460,17 @@ impl Locks {
         pids
     }
 
-    /// `GetLockStatusData`: each hold and each request in a queue, as the tag, the owner, the mode, and true for a hold.
-    pub(crate) fn status(&self) -> Vec<(Tag, i32, Mode, bool)> {
-        let table = self.table();
+    /// `GetLockStatusData`: each hold on a fast path, and each hold and each request in a queue of the table, as the tag, the owner, the mode, true for a hold and true for a hold on a fast path.
+    pub(crate) fn status(&self) -> Vec<(Tag, i32, Mode, bool, bool)> {
         let mut rows = Vec::new();
+        for fast in self.fasts().iter() {
+            let holds = fast.holds();
+            rows.extend(holds.iter().map(|&(tag, mode, _)| (tag, fast.owner, mode, true, true)));
+        }
+        let table = self.table();
         for (tag, lock) in table.iter() {
-            rows.extend(lock.holds.iter().map(|hold| (*tag, hold.owner, hold.mode, true)));
-            rows.extend(lock.queue.iter().map(|wait| (*tag, wait.owner, wait.mode, false)));
+            rows.extend(lock.holds.iter().map(|hold| (*tag, hold.owner, hold.mode, true, false)));
+            rows.extend(lock.queue.iter().map(|wait| (*tag, wait.owner, wait.mode, false, false)));
         }
         rows
     }
@@ -326,7 +486,9 @@ impl Locks {
         };
         lock.holds[at].session -= 1;
         if lock.holds[at].session == 0 && lock.holds[at].xact == 0 {
+            let before = lock.strong();
             lock.holds.remove(at);
+            self.settle(tag, before, lock.strong());
             if lock.holds.is_empty() && lock.queue.is_empty() {
                 table.remove(&tag);
             }
@@ -336,34 +498,46 @@ impl Locks {
         true
     }
 
-    /// The counts of the holds of the transaction level of the owner, which a savepoint keeps for [`Locks::release_since`].
-    pub(crate) fn xact_holds(&self, owner: i32) -> Vec<(Tag, Mode, u32)> {
+    /// The counts of the holds of the transaction level of the owner, in the table and on its fast path, which a savepoint keeps for [`Locks::release_since`].
+    pub(crate) fn xact_holds(&self, owner: i32, fast: Option<&Fast>) -> Vec<(Tag, Mode, u32)> {
+        let mut holds = fast.map_or_else(Vec::new, |fast| fast.holds().clone());
         let table = self.table();
-        let mut holds = Vec::new();
         for (tag, lock) in table.iter() {
             for hold in lock.holds.iter().filter(|h| h.owner == owner && h.xact > 0) {
-                holds.push((*tag, hold.mode, hold.xact));
+                match holds.iter_mut().find(|k| k.0 == *tag && k.1 == hold.mode) {
+                    Some(kept) => kept.2 += hold.xact,
+                    None => holds.push((*tag, hold.mode, hold.xact)),
+                }
             }
         }
         holds
     }
 
-    /// `LockReleaseCurrentOwner` at the abort of a subtransaction: the holds of the transaction level of the owner go back to the counts of `kept`, so the locks that the subtransaction took go.
-    pub(crate) fn release_since(&self, owner: i32, kept: &[(Tag, Mode, u32)]) {
+    /// `LockReleaseCurrentOwner` at the abort of a subtransaction: the holds of the transaction level of the owner, in the table and on its fast path, go back to the counts of `kept`, so the locks that the subtransaction took go.
+    pub(crate) fn release_since(&self, owner: i32, fast: Option<&Fast>, kept: &[(Tag, Mode, u32)]) {
+        let count = |tag: Tag, mode: Mode| {
+            kept.iter().find(|k| k.0 == tag && k.1 == mode).map_or(0, |k| k.2)
+        };
+        if let Some(fast) = fast {
+            fast.holds().retain_mut(|hold| {
+                hold.2 = hold.2.min(count(hold.0, hold.1));
+                hold.2 > 0
+            });
+        }
         let mut table = self.table();
         let mut freed = false;
         table.retain(|tag, lock| {
+            let before = lock.strong();
             lock.holds.retain_mut(|hold| {
                 if hold.owner != owner || hold.xact == 0 {
                     return true;
                 }
-                let count =
-                    kept.iter().find(|k| k.0 == *tag && k.1 == hold.mode).map_or(0, |k| k.2);
-                hold.xact = hold.xact.min(count);
+                hold.xact = hold.xact.min(count(*tag, hold.mode));
                 let kept = hold.session > 0 || hold.xact > 0;
                 freed |= !kept;
                 kept
             });
+            self.settle(*tag, before, lock.strong());
             !lock.holds.is_empty() || !lock.queue.is_empty()
         });
         drop(table);
@@ -380,7 +554,8 @@ impl Locks {
         }
         let mut table = self.table();
         let mut freed = false;
-        table.retain(|_, lock| {
+        table.retain(|tag, lock| {
+            let before = lock.strong();
             lock.holds.retain_mut(|hold| {
                 if hold.owner != owner {
                     return true;
@@ -394,6 +569,7 @@ impl Locks {
                 freed |= !kept;
                 kept
             });
+            self.settle(*tag, before, lock.strong());
             !lock.holds.is_empty() || !lock.queue.is_empty()
         });
         if table.is_empty() {
@@ -499,16 +675,47 @@ mod tests {
         let locks = Locks::default();
         assert_eq!(locks.request(tag(1), 1, EXCLUSIVE, false, false), Request::Granted);
         assert_eq!(locks.request(tag(1), 1, EXCLUSIVE, true, false), Request::Granted);
-        let kept = locks.xact_holds(1);
+        let kept = locks.xact_holds(1, None);
         assert_eq!(locks.request(tag(1), 1, EXCLUSIVE, false, false), Request::Granted);
         assert_eq!(locks.request(tag(2), 1, EXCLUSIVE, false, false), Request::Granted);
-        locks.release_since(1, &kept);
-        assert_eq!(locks.xact_holds(1), kept);
+        locks.release_since(1, None, &kept);
+        assert_eq!(locks.xact_holds(1, None), kept);
         assert_eq!(locks.request(tag(2), 2, EXCLUSIVE, true, false), Request::Granted);
         assert_eq!(locks.request(tag(1), 2, EXCLUSIVE, true, false), Request::Busy);
         locks.release_all(1, false);
         assert!(locks.release(tag(1), 1, EXCLUSIVE));
         assert_eq!(locks.request(tag(1), 2, EXCLUSIVE, true, false), Request::Granted);
+    }
+
+    #[test]
+    fn fast_path() {
+        let locks = Locks::default();
+        let rel = Tag::Relation { database: 5, relation: 16384 };
+        let (one, two) = (locks.join(1), locks.join(2));
+        assert!(locks.weak(&one, rel, 1));
+        assert!(locks.weak(&one, rel, 1));
+        assert!(!locks.weak(&one, tag(1), 1));
+        assert!(locks.table().is_empty());
+        assert_eq!(locks.status(), [(rel, 1, 1, true, true)]);
+        // A strong request moves the weak lock to the table, where it conflicts.
+        assert_eq!(locks.request(rel, 2, 8, false, false), Request::Busy);
+        assert!(one.holds().is_empty());
+        assert_eq!(locks.xact_holds(1, Some(&one)), [(rel, 1, 2)]);
+        assert_eq!(locks.request(rel, 2, 8, false, true), Request::Queued);
+        // While a strong request waits, a weak lock does not take the fast path.
+        assert!(!locks.weak(&two, Tag::Relation { database: 5, relation: 16384 + 1024 }, 1));
+        locks.release_fast(&one);
+        locks.release_all(1, false);
+        assert!(locks.wait(rel, 2, false, Duration::ZERO, None));
+        locks.release_all(2, false);
+        assert!(locks.weak(&two, rel, 3));
+        let kept = locks.xact_holds(2, Some(&two));
+        assert!(locks.weak(&two, rel, 3));
+        assert!(locks.weak(&two, rel, 1));
+        locks.release_since(2, Some(&two), &kept);
+        assert_eq!(locks.xact_holds(2, Some(&two)), [(rel, 3, 1)]);
+        locks.leave(&one);
+        assert_eq!(locks.status().len(), 1);
     }
 
     #[test]

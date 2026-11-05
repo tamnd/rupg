@@ -89,7 +89,7 @@ impl Connection {
             deferred_unique: self.deferred_unique.borrow().clone(),
             deferred_exclusions: self.deferred_exclusions.borrow().clone(),
             modes: self.modes.borrow().clone(),
-            locks: self.store.locks().xact_holds(self.pid),
+            locks: self.store.locks().xact_holds(self.pid, self.activity.fast.as_deref()),
             writes: self.activity.writes(),
             notify: self.notify.borrow().clone(),
             large_objects: self.large_objects.borrow().serial(),
@@ -148,7 +148,7 @@ impl Connection {
         self.deferred_unique.borrow_mut().clone_from(&mark.deferred_unique);
         self.deferred_exclusions.borrow_mut().clone_from(&mark.deferred_exclusions);
         self.modes.borrow_mut().clone_from(&mark.modes);
-        self.store.locks().release_since(self.pid, &mark.locks);
+        self.store.locks().release_since(self.pid, self.activity.fast.as_deref(), &mark.locks);
         self.activity.roll_back_writes(&mark.writes);
         self.notify.borrow_mut().clone_from(&mark.notify);
         self.large_objects.borrow_mut().close_since(mark.large_objects);

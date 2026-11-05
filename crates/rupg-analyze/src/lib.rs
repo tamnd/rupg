@@ -273,6 +273,15 @@ pub trait Env {
         let _ = relid;
         false
     }
+    /// `LockRelationOid`: the transaction holds the lock of the relation `relid` in `mode`, from 1 for `AccessShareLock` to 8 for `AccessExclusiveLock`, until it ends. The session waits while another transaction holds a mode that conflicts. A session with no server takes no locks.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
+        let _ = (relid, mode);
+        Ok(())
+    }
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None

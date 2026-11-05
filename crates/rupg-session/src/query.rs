@@ -28,7 +28,7 @@ use rupg_types::{
 };
 use rupg_wire::{Field, Portals, Statements};
 
-use crate::advisory::{EXCLUSIVE, Edge, Mode, Request, SHARE, Tag, mode_name};
+use crate::advisory::{EXCLUSIVE, Edge, Mode, ROW_EXCLUSIVE, Request, SHARE, Tag, mode_name};
 use crate::connection::{Activity, Connection, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::heap::View;
@@ -680,6 +680,24 @@ impl<'a> Reader<'a> {
         let (_, store) = self.server()?;
         let tag = Tag::Relation { database: database_oid(store, self.database), relation };
         self.acquire(tag, mode, false, wait, RELATION)
+    }
+
+    /// `LockRelationOid` of the relations `relations` in `mode` until the end of the transaction. A weak mode takes the fast path of the session when it can. A session with no server takes no locks.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    fn take_locks(&self, relations: impl Iterator<Item = u32>, mode: Mode) -> Result<()> {
+        let Some((activity, store)) = self.activity else { return Ok(()) };
+        let locks = store.locks();
+        for relation in relations {
+            let tag = Tag::Relation { database: activity.database(), relation };
+            if activity.fast.as_deref().is_some_and(|fast| locks.weak(fast, tag, mode)) {
+                continue;
+            }
+            self.acquire(tag, mode, false, true, RELATION)?;
+        }
+        Ok(())
     }
 
     /// `XactLockTableWait`: the wait of the transaction `xid` for the end of the transaction `holder`, which changed a row that the statement changes. After `deadlock_timeout`, the session looks once for a cycle of waits. A cancel and the end of `lock_timeout` stop the wait. `context` tells the row, as `XactLockTableWaitErrorCb` does.
@@ -1632,6 +1650,13 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     /// `pg_lock_status`. Each session in a transaction holds `ExclusiveLock` on its virtual transaction ID, and on the ID of its transaction when it has one, as `VirtualXactLockTableInsert` and `XactLockTableInsert` take them. rupg keeps no local transaction IDs, so the local part of a virtual transaction ID is 1.
+    fn lock_relations(&self, reads: &[u32], mode: u8, write: Option<u32>) -> Result<()> {
+        if let Some(table) = write {
+            self.take_locks(std::iter::once(table), ROW_EXCLUSIVE)?;
+        }
+        self.take_locks(reads.iter().copied().filter(|&read| Some(read) != write), mode)
+    }
+
     fn locks(&self) -> Vec<Vec<Value>> {
         let Some((activity, store)) = self.activity else { return Vec::new() };
         let backends = activity.backends(store, &self.settings());
@@ -1671,12 +1696,13 @@ impl rupg_func::Session for Reader<'_> {
                 rows.push(own);
             }
         }
-        for (tag, pid, mode, granted) in store.locks().status() {
+        for (tag, pid, mode, granted, fast) in store.locks().status() {
             let lock = match tag {
                 Tag::Relation { database, relation } => {
                     let mut lock = row("relation", pid, mode, granted);
                     lock[1] = Value::Oid(database);
                     lock[2] = Value::Oid(relation);
+                    lock[14] = Value::Bool(fast);
                     lock
                 }
                 Tag::Advisory { database, key } => {
@@ -1839,6 +1865,10 @@ impl Env for Reader<'_> {
 
     fn table_in_use(&self, relid: u32) -> bool {
         self.conn.is_some_and(|conn| conn.table_in_use(relid))
+    }
+
+    fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
+        self.take_locks(std::iter::once(relid), mode)
     }
 
     fn database(&self) -> String {
