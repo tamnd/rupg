@@ -372,7 +372,8 @@ pub(crate) struct Agg<'q> {
 impl Agg<'_> {
     /// The call of a kernel of the aggregate with the argument types `args`.
     fn call<'s>(&self, eval: &'s Eval<'_>, args: &'s [u32], ret: u32) -> Call<'s> {
-        Call { session: eval.session, args, ret, variadic: false, want: None, collation: 0 }
+        let collation = self.agg.collation;
+        Call { session: eval.session, args, ret, variadic: false, want: None, collation }
     }
 
     pub(crate) fn start(&self, eval: &Eval<'_>) -> Result<State> {
@@ -733,15 +734,7 @@ impl Agg<'_> {
                 Some((_, true)) if value.is_null() => Ok(Value::Null),
                 Some((f, _)) => {
                     let types = [*ty];
-                    let call = Call {
-                        session: eval.session,
-                        args: &types,
-                        ret: self.ty,
-                        variadic: false,
-                        want: None,
-                        collation: 0,
-                    };
-                    f(&call, &[value])
+                    f(&self.call(eval, &types, self.ty), &[value])
                 }
             },
             (Method::Int128 { avg }, State::Int128 { count, sum }) => match (count, avg) {
@@ -951,6 +944,7 @@ pub(crate) fn window_aggref(call: &WindowFunc) -> Aggref {
         variadic: false,
         filter: call.filter.clone(),
         levels_up: 0,
+        collation: call.collation,
     }
 }
 

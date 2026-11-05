@@ -340,6 +340,7 @@ impl Analyzer<'_> {
             .at_opt(inner.location));
         }
         self.check_agg_place(level, "aggregate functions", at)?;
+        let collation = self.agg_collation(oid, &args[..nargs], at)?;
         let agg = Aggref {
             oid,
             kind,
@@ -352,6 +353,7 @@ impl Analyzer<'_> {
             variadic,
             filter,
             levels_up: level,
+            collation,
         };
         Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
     }

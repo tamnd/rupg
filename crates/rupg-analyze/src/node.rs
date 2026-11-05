@@ -382,8 +382,11 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push(')');
             write_args(&row.fields, out)?;
         }
-        ExprKind::MinMax { greatest, less, args } => {
+        ExprKind::MinMax { greatest, less, args, collation } => {
             out.push_str(&format!(" :greatest {greatest} :less {less}"));
+            if *collation != 0 {
+                out.push_str(&format!(" :inputcollid {collation}"));
+            }
             write_args(args, out)?;
         }
         ExprKind::NullIf { equal, args } => {
@@ -1196,6 +1199,12 @@ fn expr_of(item: &Item) -> Result<Expr> {
             greatest: f.flag("greatest")?,
             less: f.number("less")?,
             args: f.exprs("args")?,
+            collation: f
+                .get("inputcollid")
+                .ok()
+                .map(|i| atom(i).and_then(number))
+                .transpose()?
+                .unwrap_or(0),
         },
         "NULLIF" => ExprKind::NullIf { equal: f.number("equal")?, args: f.exprs("args")? },
         "DISTINCT" => ExprKind::Distinct {
@@ -1673,7 +1682,10 @@ mod tests {
                 ExprKind::JoinRow(Box::new(JoinRow { alias: None, names: vec![], fields: vec![] })),
                 oid::RECORD,
             ),
-            Expr::new(ExprKind::MinMax { greatest: true, less: 66, args: vec![var(1)] }, oid::INT4),
+            Expr::new(
+                ExprKind::MinMax { greatest: true, less: 66, args: vec![var(1)], collation: 0 },
+                oid::INT4,
+            ),
             Expr::new(ExprKind::NullIf { equal: 65, args: vec![var(1), var(2)] }, oid::INT4),
             Expr::new(
                 ExprKind::RowCompare(Box::new(RowCompare {

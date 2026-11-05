@@ -3083,7 +3083,9 @@ impl<'a> Eval<'a> {
                 }
                 Ok(Value::Null)
             }
-            ExprKind::MinMax { greatest, less, args } => self.min_max(*greatest, *less, args),
+            ExprKind::MinMax { greatest, less, args, collation } => {
+                self.min_max(*greatest, *less, args, *collation)
+            }
             ExprKind::RowCompare(rc) => self.row_compare(rc),
             ExprKind::NullIf { equal, args } => {
                 let [a, b] = args.as_slice() else {
@@ -3534,16 +3536,23 @@ impl<'a> Eval<'a> {
             return Ok(Value::Null);
         }
         let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
-        let kernel = kernel(f.oid, None)?;
-        let call = Call {
-            session: self.session,
-            args: &types,
-            ret,
-            variadic: f.variadic,
-            want: None,
-            collation: f.collation,
-        };
-        kernel(&call, &args)
+        self.collated(f.oid, &types, ret, f.variadic, f.collation, &args)
+    }
+
+    /// The kernel of the built-in function `func` with the collation `collation` as `fncollation`, which the kernels that order strings read.
+    fn collated(
+        &self,
+        func: u32,
+        types: &[u32],
+        ret: u32,
+        variadic: bool,
+        collation: u32,
+        args: &[Value],
+    ) -> Result<Value> {
+        let kernel = kernel(func, None)?;
+        let call =
+            Call { session: self.session, args: types, ret, variadic, want: None, collation };
+        kernel(&call, args)
     }
 
     /// [`Eval::func`] for a function that [`Cache::plain_kernel`] found: the kernel with the values of the arguments, or null for a strict function with a null argument.
@@ -4101,7 +4110,13 @@ impl<'a> Eval<'a> {
     }
 
     /// `GREATEST` and `LEAST`: the null arguments do not count.
-    fn min_max(&mut self, greatest: bool, less: u32, args: &[Expr]) -> Result<Value> {
+    fn min_max(
+        &mut self,
+        greatest: bool,
+        less: u32,
+        args: &[Expr],
+        collation: u32,
+    ) -> Result<Value> {
         let mut result = Value::Null;
         let mut ty = 0;
         for arg in args {
@@ -4118,7 +4133,12 @@ impl<'a> Eval<'a> {
             } else {
                 ([arg.ty, ty], [value.clone(), result.clone()])
             };
-            if self.call(less, &types, oid::BOOL, false, &pair)? == Value::Bool(true) {
+            let less = if collation == 0 {
+                self.call(less, &types, oid::BOOL, false, &pair)?
+            } else {
+                self.collated(less, &types, oid::BOOL, false, collation, &pair)?
+            };
+            if less == Value::Bool(true) {
                 (result, ty) = (value, arg.ty);
             }
         }

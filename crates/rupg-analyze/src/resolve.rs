@@ -1018,13 +1018,6 @@ impl Analyzer<'_> {
                 )
                 .at_opt(at));
             }
-            // `max` and `min` of strings order them, with the collation of their input.
-            if matches!(proc.name, "max" | "min") && self.icu_input(&args) != 0 {
-                return Err(crate::transform::not_yet(
-                    &format!("the aggregate {} in a collation of ICU", proc.name),
-                    at,
-                ));
-            }
             return self.aggregate_call(proc.oid, row.kind, args, parts, variadic, result, at);
         }
         if prokind != b'f' && !proc_call {

@@ -1361,11 +1361,11 @@ impl<'a> Fold<'a> {
                 Ok(self.case.last().cloned().flatten().unwrap_or_else(|| expr.clone()))
             }
             ExprKind::Coalesce(args) => self.coalesce(expr, args),
-            ExprKind::MinMax { greatest, less, args } => {
+            ExprKind::MinMax { greatest, less, args, collation } => {
                 let args = self.list(args)?;
                 let all = args.iter().all(|a| value(a).is_some());
-                let folded =
-                    with(expr, ExprKind::MinMax { greatest: *greatest, less: *less, args });
+                let (greatest, less, collation) = (*greatest, *less, *collation);
+                let folded = with(expr, ExprKind::MinMax { greatest, less, args, collation });
                 if all { self.evaluate(folded) } else { Ok(folded) }
             }
             // `eval_const_expressions` folds the fields, but not the comparison, and keeps the operator of each pair of fields.

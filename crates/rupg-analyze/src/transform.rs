@@ -177,14 +177,24 @@ impl Analyzer<'_> {
                     .map(|a| self.coerce_to_common(a, ty, construct))
                     .collect::<Result<Vec<_>>>()?;
                 let at = place(m.location);
-                if self.icu_input(&args) != 0 {
-                    return Err(not_yet(&format!("{construct} in a collation of ICU"), at));
-                }
                 let less = self.comparison(ty, at)?;
+                let collation = self.call_collation(less, &args, at)?;
+                // `exprTypmod` of a `MinMaxExpr`: the typmod of the arguments when they all have the same type and typmod.
+                let typmod = match args.first() {
+                    Some(first) if args.iter().all(|a| a.ty == ty && a.typmod == first.typmod) => {
+                        first.typmod
+                    }
+                    _ => -1,
+                };
                 Ok(Expr {
-                    kind: ExprKind::MinMax { greatest: m.op == MinMaxOp::IS_GREATEST, less, args },
+                    kind: ExprKind::MinMax {
+                        greatest: m.op == MinMaxOp::IS_GREATEST,
+                        less,
+                        args,
+                        collation,
+                    },
                     ty,
-                    typmod: -1,
+                    typmod,
                     location: at,
                 })
             }
@@ -281,6 +291,14 @@ impl Analyzer<'_> {
             return Err(not_yet(&format!("the function {name} in a collation of ICU"), at));
         }
         Ok(collation)
+    }
+
+    /// `inputcollid` of a call of the built-in aggregate `agg`, which its transition function reads, as [`Analyzer::call_collation`] gives it. An aggregate of `CREATE AGGREGATE` has none.
+    pub(crate) fn agg_collation(&self, agg: u32, args: &[Expr], at: Option<usize>) -> Result<u32> {
+        match rupg_pgcatalog::builtin::aggregate(agg) {
+            Some(row) => self.call_collation(row.transfn, args, at),
+            None => Ok(0),
+        }
     }
 
     /// [`Analyzer::collation_oid`], which also takes a deterministic collation of ICU with no rules when `icu` is true, for `COLLATE` in an expression.
