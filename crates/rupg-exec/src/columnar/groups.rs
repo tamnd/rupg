@@ -25,13 +25,32 @@ pub(super) const GROUP_ROWS: usize = 8;
 /// The fewest rows for each task, so that a small table does not pay for the tasks.
 pub(super) const TASK_ROWS: usize = 1 << 16;
 
-/// A key of `GROUP BY`: a column of integers or codes by its place in the columns of the scan, a column of integers that each value rounds down to a multiple of a step, or a constant word, with `None` for null.
-#[derive(Clone, Copy)]
+/// A key of `GROUP BY`: a column of integers or codes by its place in the columns of the scan, a column of integers that each value rounds down to a multiple of a step, a choice of a column or a constant word, or a constant word, with `None` for null.
+#[derive(Clone)]
 pub(super) enum Input {
     Column(usize),
     /// `date_trunc` of a column of timestamps to a unit of `step` microseconds. An infinite timestamp keeps its value, as in `timestamp_trunc`.
     Floor(usize, i64),
+    /// `CASE WHEN tests THEN column ELSE default END`: the word of the column `then` for a row that passes all the tests, and the word `default` for the other rows.
+    Case {
+        tests: Vec<(usize, Test)>,
+        then: usize,
+        default: Option<u64>,
+    },
     Const(Option<u64>),
+}
+
+impl Input {
+    /// The places of the columns that the key reads.
+    fn places(&self) -> Vec<usize> {
+        match self {
+            Input::Column(place) | Input::Floor(place, _) => vec![*place],
+            Input::Case { tests, then, .. } => {
+                tests.iter().map(|t| t.0).chain(std::iter::once(*then)).collect()
+            }
+            Input::Const(_) => Vec::new(),
+        }
+    }
 }
 
 /// How a call of an aggregate, or a base of calls, folds the rows of a group. Each column is a column of integers by its place, except the column of [`Fold::CountArg`], which can have any values.
@@ -203,24 +222,19 @@ impl Buf {
 
     /// The words of the key of the group `g`, with 0 after its words.
     #[inline]
-    fn key(&self, g: usize) -> [u64; 4] {
-        // Each arm copies a known number of words, so the copy is not a call of `memcpy`.
-        match self.keys[g * self.width..(g + 1) * self.width] {
-            [a] => [a, 0, 0, 0],
-            [a, b] => [a, b, 0, 0],
-            [a, b, c] => [a, b, c, 0],
-            [a, b, c, d] => [a, b, c, d],
-            _ => unreachable!("a key has 1 to 4 words"),
-        }
+    fn key<const W: usize>(&self, g: usize) -> [u64; W] {
+        // The loop has a known number of steps, so the copy is not a call of `memcpy`.
+        let words = &self.keys[g * self.width..(g + 1) * self.width];
+        std::array::from_fn(|i| words.get(i).copied().unwrap_or(0))
     }
 
     #[inline]
-    fn push(&mut self, key: &[u64; 4], first: u64) {
+    fn push<const W: usize>(&mut self, key: &[u64; W], first: u64) {
         match self.width {
             1 => self.keys.push(key[0]),
             2 => self.keys.extend_from_slice(&key[..2]),
             3 => self.keys.extend_from_slice(&key[..3]),
-            _ => self.keys.extend_from_slice(key),
+            width => self.keys.extend_from_slice(&key[..width]),
         }
         self.firsts.push(first);
     }
@@ -282,10 +296,10 @@ fn cell(fold: Fold, decoded: &[Option<Decoded>], i: usize) -> Cell {
 }
 
 /// Moves the groups of `local` into the buffers of their parts, and empties `local` and its table.
-fn flush(local: &mut Buf, table: &mut WordTable<4>, parts: &mut [Buf]) {
+fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut [Buf]) {
     for g in 0..local.len() {
-        let key = local.key(g);
-        let part = &mut parts[part_of(WordTable::<4>::hash(&key))];
+        let key = local.key::<W>(g);
+        let part = &mut parts[part_of(WordTable::<W>::hash(&key))];
         part.push(&key, local.firsts[g]);
         for (to, from) in part.states.iter_mut().zip(&local.states) {
             to.take(from, g);
@@ -637,7 +651,7 @@ fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
 }
 
 /// The groups of the vectors `units` of the columns `stored`, which have `rows` rows.
-fn scan_run(
+fn scan_run<const W: usize>(
     stored: &[Arc<Stored>],
     plan: &Plan,
     places: &[usize],
@@ -652,12 +666,12 @@ fn scan_run(
     let mut decoded: Vec<Option<Decoded>> = (0..stored.len()).map(|_| None).collect();
     let mut last = None;
     let mut sel: Vec<usize> = Vec::with_capacity(VECTOR);
-    let mut keys: Vec<[u64; 4]> = Vec::with_capacity(VECTOR);
+    let mut keys: Vec<[u64; W]> = Vec::with_capacity(VECTOR);
     let mut hashes: Vec<u64> = Vec::with_capacity(VECTOR);
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
     let mut local = Buf::new(&plan.folds, width + 1);
-    let mut table = WordTable::<4>::new(LOCAL);
+    let mut table = WordTable::<W>::new(LOCAL);
     // The rows that the table folded since it was last empty, and true when the rows go into the buffers with no table.
     let mut folded = 0;
     let mut direct = false;
@@ -673,9 +687,29 @@ fn scan_run(
         let base = (segment * ROWS + vector * VECTOR) as u64;
         last = sel.last().map(|&i| base + i as u64);
         keys.clear();
-        keys.resize(sel.len(), [0; 4]);
+        keys.resize(sel.len(), [0; W]);
         for (k, input) in plan.keys.iter().enumerate() {
             match *input {
+                Input::Case { ref tests, then, default } => {
+                    let Some(d) = decoded[then].as_ref() else { continue };
+                    let tested: Vec<&Decoded> =
+                        tests.iter().filter_map(|t| decoded[t.0].as_ref()).collect();
+                    if tested.len() < tests.len() {
+                        continue;
+                    }
+                    for (key, &i) in keys.iter_mut().zip(&sel) {
+                        let chosen = tests
+                            .iter()
+                            .zip(&tested)
+                            .all(|(t, d)| passes(&t.1, null(d, i), int(d, i)));
+                        match (chosen, default) {
+                            (true, _) if null(d, i) => key[width] |= 1 << k,
+                            (true, _) => key[k] = int(d, i) as u64,
+                            (false, Some(word)) => key[k] = word,
+                            (false, None) => key[width] |= 1 << k,
+                        }
+                    }
+                }
                 Input::Column(place) => {
                     let Some(d) = decoded[place].as_ref() else { continue };
                     for (key, &i) in keys.iter_mut().zip(&sel) {
@@ -703,7 +737,7 @@ fn scan_run(
             }
         }
         hashes.clear();
-        hashes.extend(keys.iter().map(WordTable::<4>::hash));
+        hashes.extend(keys.iter().map(WordTable::<W>::hash));
         for base_fold in first_base..plan.folds.len() {
             if let Fold::Sum(place) = plan.folds[base_fold]
                 && let Some(d) = decoded[place].as_ref()
@@ -775,22 +809,22 @@ fn scan_run(
 }
 
 /// The groups of one part from its buffers `bufs` of all the runs, which come in the order of the runs.
-fn merge(bufs: Vec<Buf>, folds: &[Fold], mins: &[bool], width: usize) -> Buf {
+fn merge<const W: usize>(bufs: Vec<Buf>, folds: &[Fold], mins: &[bool], width: usize) -> Buf {
     let mut merged = Buf::new(folds, width);
     let size: usize = bufs.iter().map(Buf::len).sum();
     // The part has at most `size` groups, so its buffers do not grow again.
     merged.reserve(size);
-    let mut table = WordTable::<4>::new(size);
+    let mut table = WordTable::<W>::new(size);
     let mut hashes = Vec::new();
     for from in bufs {
         hashes.clear();
-        hashes.extend((0..from.len()).map(|g| WordTable::<4>::hash(&from.key(g))));
+        hashes.extend((0..from.len()).map(|g| WordTable::<W>::hash(&from.key(g))));
         for (g, &hash) in hashes.iter().enumerate() {
             if let Some(&ahead) = hashes.get(g + PREFETCH) {
                 table.prefetch(ahead);
             }
             let next = merged.len() as u32;
-            let key = from.key(g);
+            let key = from.key::<W>(g);
             let (id, new) = table.id(&key, hash, next);
             if new {
                 merged.push(&key, from.firsts[g]);
@@ -822,10 +856,7 @@ pub(super) fn run(
     let mut places: Vec<usize> = plan
         .keys
         .iter()
-        .filter_map(|k| match k {
-            Input::Column(place) | Input::Floor(place, _) => Some(*place),
-            Input::Const(_) => None,
-        })
+        .flat_map(Input::places)
         .chain(plan.folds.iter().filter_map(|f| match f {
             Fold::CountArg(p) | Fold::Sum(p) | Fold::Min(p) | Fold::Max(p) => Some(*p),
             Fold::Count | Fold::None => None,
@@ -852,7 +883,13 @@ pub(super) fn run(
         .zip(&mut runs)
         .map(|(units, out)| {
             let places = &places;
-            Box::new(move || *out = Some(scan_run(stored, plan, places, units, rows))) as Job<'_>
+            Box::new(move || {
+                *out = Some(if plan.keys.len() < 4 {
+                    scan_run::<4>(stored, plan, places, units, rows)
+                } else {
+                    scan_run::<8>(stored, plan, places, units, rows)
+                });
+            }) as Job<'_>
         })
         .collect();
     tasks.run_all(work);
@@ -882,7 +919,12 @@ pub(super) fn run(
             let mins = &mins;
             Box::new(move || {
                 for (slot, bufs) in out.iter_mut().zip(bufs) {
-                    *slot = Some(merge(std::mem::take(bufs), &plan.folds, mins, width));
+                    let bufs = std::mem::take(bufs);
+                    *slot = Some(if width <= 4 {
+                        merge::<4>(bufs, &plan.folds, mins, width)
+                    } else {
+                        merge::<8>(bufs, &plan.folds, mins, width)
+                    });
                 }
             }) as Job<'_>
         })
@@ -962,11 +1004,12 @@ pub(super) fn run(
             Box::new(move || {
                 for (n, &(p, g)) in order.iter().enumerate() {
                     let (part, g) = (&parts[p as usize], g as usize);
-                    // A loop of at most 4 words, which costs less than a call of `memcpy` for each group.
-                    for (to, &word) in
-                        words[n * width..(n + 1) * width].iter_mut().zip(&part.key(g))
-                    {
-                        *to = word;
+                    // A loop of at most 8 words, which costs less than a call of `memcpy` for each group.
+                    let to = &mut words[n * width..(n + 1) * width];
+                    if width <= 4 {
+                        to.iter_mut().zip(&part.key::<4>(g)).for_each(|(to, &word)| *to = word);
+                    } else {
+                        to.iter_mut().zip(&part.key::<8>(g)).for_each(|(to, &word)| *to = word);
                     }
                     firsts[n] = part.firsts[g];
                     for (to, from) in columns.iter_mut().zip(&part.states) {

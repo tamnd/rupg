@@ -2668,15 +2668,7 @@ fn grouped(
             }
             base.extremes = extremes;
         }
-        let shapes: Vec<Shape> = keys
-            .iter()
-            .map(|key| match place_of(scan.exec, key) {
-                Some(place) if scan.exec.dict_of[place] != usize::MAX => {
-                    Shape::Code(scan.exec.dict_of[place])
-                }
-                _ => Shape::Int(key.ty),
-            })
-            .collect();
+        let shapes: Vec<Shape> = keys.iter().map(|key| key_shape(scan.exec, key)).collect();
         if let Some(places) = &hashing {
             hashes.reserve_exact(groups);
             for (g, words) in found.words.chunks(keys.len() + 1).enumerate() {
@@ -3332,7 +3324,7 @@ fn parallel_plan(
         .collect();
     let derived: Vec<Option<Derived>> =
         derived.into_iter().map(|d| d.map(|d| Derived { from: base_at[d.from], ..d })).collect();
-    if at > 3 {
+    if at > 7 {
         return None;
     }
     let keys = keys
@@ -3350,6 +3342,7 @@ fn parallel_plan(
                     _ => None,
                 }
             }
+            ExprKind::Case(case) => case_input(exec, case),
             _ => place(key)
                 .filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))
                 .map(groups::Input::Column),
@@ -3375,6 +3368,47 @@ fn parallel_plan(
     }
     let filters = conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()?;
     Some((groups::Plan { keys, folds, bases: bases.len(), filters }, derived))
+}
+
+/// The key of [`groups::run`] for `CASE WHEN tests THEN column ELSE constant END`, where each test is a test that the zones read, the column has integers or codes, and the constant is null, an integer, or a text in the dictionary of the column.
+fn case_input(exec: &Exec<'_>, case: &rupg_analyze::Case) -> Option<groups::Input> {
+    let [(cond, result)] = case.whens.as_slice() else { return None };
+    if case.arg.is_some() {
+        return None;
+    }
+    let conds = match &cond.kind {
+        ExprKind::Bool(BoolOp::And, args) => args.iter().collect(),
+        _ => vec![cond],
+    };
+    let tests = conds.into_iter().map(|c| exec.zone_test(c)).collect::<Option<Vec<_>>>()?;
+    let then =
+        place_of(exec, result).filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))?;
+    let dict = exec.dict_of[then];
+    let default = match &case.default.kind {
+        ExprKind::Const(v) if v.is_null() => None,
+        ExprKind::Const(Value::Text(text)) if dict != usize::MAX && exec.dicts[dict].is_text() => {
+            let code = exec.dicts[dict].find(text.as_bytes());
+            if code == MISSING {
+                return None;
+            }
+            Some(u64::from(code))
+        }
+        ExprKind::Const(v) if dict == usize::MAX => Some(int_of(v)? as u64),
+        _ => return None,
+    };
+    Some(groups::Input::Case { tests, then, default })
+}
+
+/// The shape of the words of the key `key` of [`groups::run`]: the codes of the dictionary of its column, or integers of its type.
+fn key_shape(exec: &Exec<'_>, key: &Expr) -> Shape {
+    let column = match &key.kind {
+        ExprKind::Case(case) => case.whens.first().and_then(|(_, result)| place_of(exec, result)),
+        _ => place_of(exec, key),
+    };
+    match column {
+        Some(place) if exec.dict_of[place] != usize::MAX => Shape::Code(exec.dict_of[place]),
+        _ => Shape::Int(key.ty),
+    }
 }
 
 /// The argument of the calls of `count(DISTINCT)` of `aggs`, when there is one and every call has the same argument.
