@@ -189,6 +189,10 @@ pub trait Env {
     fn check_function_bodies(&self) -> bool {
         true
     }
+    /// The `icu_validation_level` setting: the level of the messages about a locale of ICU that ICU does not know, or `disabled`.
+    fn icu_validation_level(&self) -> String {
+        "warning".into()
+    }
     /// The `default_table_access_method` setting: the table access method of a new table or materialized view with no `USING`.
     fn default_table_access_method(&self) -> String {
         "heap".into()

@@ -33,6 +33,7 @@ mod foreign;
 mod function;
 mod generated;
 mod grant;
+mod icutag;
 mod identity;
 mod index;
 mod jsonpath;
@@ -730,6 +731,10 @@ impl Env for SchemaEnv<'_> {
 
     fn check_function_bodies(&self) -> bool {
         self.env.check_function_bodies()
+    }
+
+    fn icu_validation_level(&self) -> String {
+        self.env.icu_validation_level()
     }
 
     fn default_table_access_method(&self) -> String {

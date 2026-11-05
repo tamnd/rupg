@@ -1,0 +1,249 @@
+!details
+> create table w (s text)
+CREATE TABLE
+> insert into w values ('a'), ('A'), ('b'), ('B'), ('ä'), ('Ä'), ('z'), ('Z'), ('å'), ('ö'), ('ab'), ('a b'), ('a-b'), ('a_b'), ('1'), ('10'), ('2'), ('résumé'), ('resume'), ('Resume'), ('cote'), ('côte'), ('coté'), ('côté'), ('ß'), ('ss'), (''), ('Æ'), ('ae'), ('x10'), ('x9'), ('é'), ('e'), ('ch'), ('cz'), ('h'), ('ñ'), ('n'), ('o'), ('ue'), ('ü'), ('oe'), ('llama'), ('luz'), ('mano')
+INSERT 0 45
+> create collation c01 (provider = icu, locale = 'en-u-kn-true')
+NOTICE 00000 using standard form "en-u-kn" for ICU locale "en-u-kn-true"
+CREATE COLLATION
+> create collation c02 (provider = icu, locale = 'de-DE')
+CREATE COLLATION
+> create collation c03 (provider = icu, locale = 'de_DE')
+NOTICE 00000 using standard form "de-DE" for ICU locale "de_DE"
+CREATE COLLATION
+> create collation c04 (provider = icu, locale = 'de@collation=phonebook')
+NOTICE 00000 using standard form "de-u-co-phonebk" for ICU locale "de@collation=phonebook"
+CREATE COLLATION
+> create collation c05 (provider = icu, locale = 'und')
+CREATE COLLATION
+> create collation c06 (provider = icu, locale = '')
+NOTICE 00000 using standard form "und" for ICU locale ""
+CREATE COLLATION
+> create collation c07 (provider = icu, locale = 'root')
+NOTICE 00000 using standard form "und" for ICU locale "root"
+CREATE COLLATION
+> create collation c08 (provider = icu, locale = 'xx')
+WARNING 22023 ICU locale "xx" has unknown language "xx"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> create collation c09 (provider = icu, locale = 'en-US-u-ks-level1')
+CREATE COLLATION
+> create collation c10 (provider = icu, locale = 'en-u-ka-shifted')
+CREATE COLLATION
+> create collation c11 (provider = icu, locale = 'en', deterministic = false)
+CREATE COLLATION
+> create collation c13 (provider = icu, locale = 'C')
+WARNING 22023 could not convert locale name "C" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 ICU locale "C" has unknown language "c"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> create collation c14 (provider = icu, locale = 'not a locale!!')
+WARNING 22023 could not convert locale name "not a locale!!" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 could not get language from ICU locale "not a locale!!": U_BUFFER_OVERFLOW_ERROR
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+ERROR 22023 could not open collator for locale "not a locale!!": U_ILLEGAL_ARGUMENT_ERROR
+> create collation c15 (provider = icu, locale = 'EN-us')
+NOTICE 00000 using standard form "en-US" for ICU locale "EN-us"
+CREATE COLLATION
+> create collation c16 (provider = icu, lc_collate = 'en')
+ERROR 42P17 parameter "locale" must be specified
+> create collation c17 (provider = icu, locale = 'en-u-kf-upper')
+CREATE COLLATION
+> create collation c18 (provider = icu, locale = 'es-u-co-trad')
+CREATE COLLATION
+> create collation c19 (provider = icu, locale = 'en_US.utf8')
+NOTICE 00000 using standard form "en-US" for ICU locale "en_US.utf8"
+CREATE COLLATION
+> create collation c20 (provider = icu, locale = 'sr-Latn')
+CREATE COLLATION
+> create collation c21 (provider = icu, locale = 'de-u-co-phonebk', version = '1')
+WARNING 01000 collation "c21" has version mismatch
+DETAIL The collation in the database was created using version 1, but the operating system provides version 153.121.44.8.
+HINT Rebuild all objects affected by this collation and run ALTER COLLATION public.c21 REFRESH VERSION, or build PostgreSQL with the right library version.
+CREATE COLLATION
+> create collation c22 (provider = icu, locale = 'zh-u-co-pinyin')
+CREATE COLLATION
+> create collation c23 (provider = ICU, locale = 'fr-CA')
+CREATE COLLATION
+> create collation if not exists c01 (provider = icu, locale = 'en')
+NOTICE 42710 collation "c01" already exists, skipping
+CREATE COLLATION
+> create collation d08 (provider = icu, locale = 'xx')
+WARNING 22023 ICU locale "xx" has unknown language "xx"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> create collation d13 (provider = icu, locale = 'C')
+WARNING 22023 could not convert locale name "C" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 ICU locale "C" has unknown language "c"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> create collation d14 (provider = icu, locale = 'not a locale!!')
+WARNING 22023 could not convert locale name "not a locale!!" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 could not get language from ICU locale "not a locale!!": U_BUFFER_OVERFLOW_ERROR
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+ERROR 22023 could not open collator for locale "not a locale!!": U_ILLEGAL_ARGUMENT_ERROR
+> create collation d21 (provider = icu, locale = 'de-u-co-phonebk', version = '1')
+WARNING 01000 collation "d21" has version mismatch
+DETAIL The collation in the database was created using version 1, but the operating system provides version 153.121.44.8.
+HINT Rebuild all objects affected by this collation and run ALTER COLLATION public.d21 REFRESH VERSION, or build PostgreSQL with the right library version.
+CREATE COLLATION
+> set icu_validation_level = error
+SET
+> create collation d30 (provider = icu, locale = 'xx')
+ERROR 22023 ICU locale "xx" has unknown language "xx"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+> create collation d31 (provider = icu, locale = 'C')
+ERROR 22023 could not convert locale name "C" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+> create collation d32 (provider = icu, locale = 'de_DE')
+NOTICE 00000 using standard form "de-DE" for ICU locale "de_DE"
+CREATE COLLATION
+> set icu_validation_level = disabled
+SET
+> create collation d33 (provider = icu, locale = 'xx')
+CREATE COLLATION
+> create collation d34 (provider = icu, locale = 'C')
+CREATE COLLATION
+> create collation d35 (provider = icu, locale = 'de_DE')
+NOTICE 00000 using standard form "de-DE" for ICU locale "de_DE"
+CREATE COLLATION
+> create collation d36 (provider = icu, locale = 'not a locale!!')
+ERROR 22023 could not open collator for locale "not a locale!!": U_ILLEGAL_ARGUMENT_ERROR
+> set icu_validation_level = notice
+SET
+> create collation d37 (provider = icu, locale = 'yy')
+NOTICE 22023 ICU locale "yy" has unknown language "yy"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> reset icu_validation_level
+RESET
+> create collation d38 (provider = icu, locale = 'sr_Latn_RS@collation=traditional;colStrength=primary')
+NOTICE 00000 using standard form "sr-Latn-RS-u-co-trad-ks-level1" for ICU locale "sr_Latn_RS@collation=traditional;colStrength=primary"
+CREATE COLLATION
+> create collation d39 (provider = icu, locale = 'en@colNumeric=yes')
+NOTICE 00000 using standard form "en-u-kn" for ICU locale "en@colNumeric=yes"
+CREATE COLLATION
+> create collation d40 (provider = icu, locale = 'abcdefghijkl')
+WARNING 22023 could not convert locale name "abcdefghijkl" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 could not get language from ICU locale "abcdefghijkl": U_STRING_NOT_TERMINATED_WARNING
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+ERROR 22023 could not open collator for locale "abcdefghijkl": U_ILLEGAL_ARGUMENT_ERROR
+> create collation d41 (provider = icu, locale = 'abcdefghijk')
+WARNING 22023 could not convert locale name "abcdefghijk" to language tag: U_ILLEGAL_ARGUMENT_ERROR
+WARNING 22023 ICU locale "abcdefghijk" has unknown language "abcdefghijk"
+HINT To disable ICU locale validation, set the parameter "icu_validation_level" to "disabled".
+CREATE COLLATION
+> create collation d42 (provider = icu, locale = 'en-u-co-emoji')
+CREATE COLLATION
+> create collation d43 (provider = icu, locale = 'iw')
+NOTICE 00000 using standard form "he" for ICU locale "iw"
+CREATE COLLATION
+> create collation d44 (provider = icu, locale = 'en-US-POSIX')
+NOTICE 00000 using standard form "en-US-u-va-posix" for ICU locale "en-US-POSIX"
+CREATE COLLATION
+> select collname, collprovider, collisdeterministic, collencoding, colllocale, collicurules, collversion from pg_collation where collname ~ '^[cd][0-9]' order by collname collate "C"
+fields collname@pg_collation.2:19:64:-1,collprovider@pg_collation.5:18:1:-1,collisdeterministic@pg_collation.6:16:1:-1,collencoding@pg_collation.7:23:4:-1,colllocale@pg_collation.10:25:-1:-1,collicurules@pg_collation.11:25:-1:-1,collversion@pg_collation.12:25:-1:-1
+row c01,i,t,-1,en-u-kn,NULL,153.121
+row c02,i,t,-1,de-DE,NULL,153.121
+row c03,i,t,-1,de-DE,NULL,153.121
+row c04,i,t,-1,de-u-co-phonebk,NULL,153.121.44.8
+row c05,i,t,-1,und,NULL,153.121
+row c06,i,t,-1,und,NULL,153.121
+row c07,i,t,-1,und,NULL,153.121
+row c08,i,t,-1,xx,NULL,153.121
+row c09,i,t,-1,en-US-u-ks-level1,NULL,153.121
+row c10,i,t,-1,en-u-ka-shifted,NULL,153.121
+row c11,i,f,-1,en,NULL,153.121
+row c13,i,t,-1,C,NULL,153.121
+row c15,i,t,-1,en-US,NULL,153.121
+row c17,i,t,-1,en-u-kf-upper,NULL,153.121
+row c18,i,t,-1,es-u-co-trad,NULL,153.121.44.8
+row c19,i,t,-1,en-US,NULL,153.121
+row c20,i,t,-1,sr-Latn,NULL,153.121.44.8
+row c21,i,t,-1,de-u-co-phonebk,NULL,1
+row c22,i,t,-1,zh-u-co-pinyin,NULL,153.121.44.8
+row c23,i,t,-1,fr-CA,NULL,153.121.44.8
+row d08,i,t,-1,xx,NULL,153.121
+row d13,i,t,-1,C,NULL,153.121
+row d21,i,t,-1,de-u-co-phonebk,NULL,1
+row d32,i,t,-1,de-DE,NULL,153.121
+row d33,i,t,-1,xx,NULL,153.121
+row d34,i,t,-1,C,NULL,153.121
+row d35,i,t,-1,de-DE,NULL,153.121
+row d37,i,t,-1,yy,NULL,153.121
+row d38,i,t,-1,sr-Latn-RS-u-co-trad-ks-level1,NULL,153.121.44.8
+row d39,i,t,-1,en-u-kn,NULL,153.121
+row d41,i,t,-1,abcdefghijk,NULL,153.121
+row d42,i,t,-1,en-u-co-emoji,NULL,153.121.44.8
+row d43,i,t,-1,he,NULL,153.121.44.8
+row d44,i,t,-1,en-US-u-va-posix,NULL,153.121.44.8
+SELECT 34
+> select string_agg(s, '|' order by s collate d38) from w
+fields string_agg:25:-1:-1
+row |1|10|2|A|a|Ä|ä|å|a b|a_b|a-b|ab|ae|Æ|B|b|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|Resume|resume|résumé|ss|ß|ü|ue|x10|x9|Z|z
+SELECT 1
+> select string_agg(s, '|' order by s collate d39) from w
+fields string_agg:25:-1:-1
+row |1|2|10|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x9|x10|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate d42) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c13) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c08) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c01) from w
+fields string_agg:25:-1:-1
+row |1|2|10|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x9|x10|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c02) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c04) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|a b|a_b|a-b|ab|ae|ä|Ä|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|oe|ö|resume|Resume|résumé|ss|ß|ue|ü|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c05) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c09) from w
+fields string_agg:25:-1:-1
+row |1|10|2|A|a|Ä|ä|å|a b|a_b|a-b|ab|ae|Æ|B|b|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|Resume|resume|résumé|ss|ß|ü|ue|x10|x9|Z|z
+SELECT 1
+> select string_agg(s, '|' order by s collate c10) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a-b|a_b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c15) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c17) from w
+fields string_agg:25:-1:-1
+row |1|10|2|A|a|å|Ä|ä|a b|a_b|a-b|ab|ae|Æ|B|b|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|Resume|resume|résumé|ss|ß|ü|ue|x10|x9|Z|z
+SELECT 1
+> select string_agg(s, '|' order by s collate c18) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|cote|coté|côte|côté|cz|ch|e|é|h|luz|llama|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c21) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|a b|a_b|a-b|ab|ae|ä|Ä|Æ|b|B|ch|cote|coté|côte|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|oe|ö|resume|Resume|résumé|ss|ß|ue|ü|x10|x9|z|Z
+SELECT 1
+> select string_agg(s, '|' order by s collate c23) from w
+fields string_agg:25:-1:-1
+row |1|10|2|a|A|å|ä|Ä|a b|a_b|a-b|ab|ae|Æ|b|B|ch|cote|côte|coté|côté|cz|e|é|h|llama|luz|mano|n|ñ|o|ö|oe|resume|Resume|résumé|ss|ß|ü|ue|x10|x9|z|Z
+SELECT 1
+> drop collation c01
+DROP COLLATION
+> select count(*) from pg_collation where collname = 'c01'
+fields count:20:8:-1
+row 0
+SELECT 1

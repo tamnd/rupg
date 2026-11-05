@@ -1,4 +1,4 @@
-//! `CREATE COLLATION`, as `DefineCollation` of `collationcmds.c` and `CollationCreate` of `pg_collation.c` run it. A collation of ICU is not supported yet.
+//! `CREATE COLLATION`, as `DefineCollation` of `collationcmds.c` and `CollationCreate` of `pg_collation.c` run it. A collation of ICU with rules is not supported yet.
 
 use rupg_catalog::Collation;
 use rupg_common::encoding::encoding_to_char;
@@ -10,7 +10,7 @@ use super::drop::quote_identifier;
 use super::reloptions::def_boolean;
 use super::sequence::conflicting;
 use super::tsearch::{def_name, def_string, qualified_name};
-use super::{Definer, not_yet};
+use super::{Definer, Message, icutag, not_yet};
 use crate::coerce::AtOpt;
 use crate::typename::{names, place};
 
@@ -91,15 +91,43 @@ fn check_libc_locales(collate: &str, ctype: &str) -> Result<()> {
     Ok(())
 }
 
+/// `pg_ucol_open`: ICU cannot open a collator for a locale whose language does not fit the buffer of `uloc_getLanguage`.
+fn open_collator(locale: &str) -> Result<()> {
+    if icutag::language(locale).is_err() {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("could not open collator for locale \"{locale}\": U_ILLEGAL_ARGUMENT_ERROR"),
+        ));
+    }
+    Ok(())
+}
+
+/// The warning of `pg_newlocale_from_collation` for a collation whose recorded version is not the version of the library.
+fn version_mismatch(name: &str, schema: &str, version: &str, actual: &str) -> Error {
+    let qualified = format!("{}.{}", quote_identifier(schema), quote_identifier(name));
+    Error::new(SqlState::WARNING, format!("collation \"{name}\" has version mismatch"))
+        .with_detail(format!(
+            "The collation in the database was created using version {version}, but the operating system provides version {actual}."
+        ))
+        .with_hint(format!(
+            "Rebuild all objects affected by this collation and run ALTER COLLATION {qualified} REFRESH VERSION, or build PostgreSQL with the right library version."
+        ))
+}
+
 /// `get_collation_actual_version`: `1` for each locale of the built-in provider, none for `C`, `POSIX` and the names that start with `C.` of the C library, and the version of the C library for the other locales of the C library.
 fn actual_version(provider: u8, locale: &str) -> Option<String> {
     match provider {
         b'b' => Some("1".to_string()),
         b'c' if c_locale(locale) || locale.starts_with("C.") => None,
         b'c' => rupg_platform::os::libc_version(),
-        _ => rupg_pgcatalog::icu::locales()
-            .find(|icu| icu.tag == locale)
-            .map(|icu| icu.version.to_string()),
+        _ => {
+            let version = if icutag::tailored(locale) {
+                rupg_pgcatalog::icu::TAILORED_VERSION
+            } else {
+                rupg_pgcatalog::icu::ROOT_VERSION
+            };
+            Some(version.to_string())
+        }
     }
 }
 
@@ -196,9 +224,14 @@ impl Definer<'_, '_> {
             Some(from) => self.copied_collation(from)?,
             None => self.provider_collation(&options)?,
         };
+        let locale = if new.provider == b'c' { &new.libc_locale } else { &new.locale };
+        let locale = locale.clone().unwrap_or_default();
+        if new.provider == b'i' {
+            open_collator(&locale)?;
+        }
+        let actual = actual_version(new.provider, &locale);
         if new.version.is_none() {
-            let locale = if new.provider == b'c' { &new.libc_locale } else { &new.locale };
-            new.version = actual_version(new.provider, locale.as_deref().unwrap_or_default());
+            new.version = actual.clone();
         }
         new.name = name.to_string();
         new.namespace = namespace;
@@ -210,8 +243,80 @@ impl Definer<'_, '_> {
             let collate = new.libc_locale.as_deref().unwrap_or_default();
             check_libc_locales(collate, new.ctype.as_deref().unwrap_or_default())?;
         }
+        // `pg_newlocale_from_collation` checks the version of the new collation.
+        let mismatch = match (&new.version, &actual) {
+            (Some(version), Some(actual)) if version != actual => {
+                Some(version_mismatch(&new.name, &self.schema_name(new.namespace), version, actual))
+            }
+            _ => None,
+        };
         let collation = self.catalog.create_user_collation(new);
         self.collect(None, rupg_catalog::ObjRef::new(rupg_catalog::PG_COLLATION, collation));
+        if let Some(warning) = mismatch {
+            self.flush();
+            self.messages.push(Message::Warning(warning));
+        }
+        Ok(())
+    }
+
+    /// The `LOCALE` of a collation of ICU, as `DefineCollation` takes it: the language tag of `icu_language_tag` with a notice when it differs, and then the checks of `icu_validate_locale` at the level of `icu_validation_level`.
+    fn icu_locale(&mut self, given: String) -> Result<String> {
+        let level = self.an.env.icu_validation_level();
+        let mut locale = given;
+        match icutag::language_tag(&locale) {
+            Ok(tag) if tag != locale => {
+                self.notice(
+                    SqlState::SUCCESSFUL_COMPLETION,
+                    format!("using standard form \"{tag}\" for ICU locale \"{locale}\""),
+                );
+                locale = tag;
+            }
+            Ok(_) => {}
+            Err(name) => self.icu_message(
+                &level,
+                Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("could not convert locale name \"{locale}\" to language tag: {name}"),
+                ),
+            )?,
+        }
+        let hint = "To disable ICU locale validation, set the parameter \"icu_validation_level\" to \"disabled\".";
+        match icutag::language(&locale) {
+            Err(name) => self.icu_message(
+                &level,
+                Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("could not get language from ICU locale \"{locale}\": {name}"),
+                )
+                .with_hint(hint),
+            )?,
+            Ok(lang) if !icutag::known_language(&lang) => self.icu_message(
+                &level,
+                Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("ICU locale \"{locale}\" has unknown language \"{lang}\""),
+                )
+                .with_hint(hint),
+            )?,
+            Ok(_) => {}
+        }
+        Ok(locale)
+    }
+
+    /// A message of the checks of a locale of ICU at the level `level` of `icu_validation_level`: an error, a warning, a notice, or nothing for `disabled` and for the levels that do not go to the client.
+    fn icu_message(&mut self, level: &str, error: Error) -> Result<()> {
+        match level {
+            "error" => return Err(error),
+            "warning" => {
+                self.flush();
+                self.messages.push(Message::Warning(error));
+            }
+            "notice" | "info" => {
+                self.flush();
+                self.messages.push(Message::Notice(error));
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -229,7 +334,7 @@ impl Definer<'_, '_> {
     }
 
     /// The collation of `PROVIDER`, `LOCALE`, `LC_COLLATE`, `LC_CTYPE`, `DETERMINISTIC`, `RULES` and `VERSION`.
-    fn provider_collation(&self, options: &Options<'_>) -> Result<Collation> {
+    fn provider_collation(&mut self, options: &Options<'_>) -> Result<Collation> {
         let deterministic = match options.deterministic {
             Some(def) => def_boolean(def_name(def), def.arg.as_ref())?,
             None => true,
@@ -279,23 +384,26 @@ impl Definer<'_, '_> {
                 }
             }
             _ => {
-                if locale.is_none() {
-                    return Err(missing("locale"));
-                }
-                return Err(not_yet("CREATE COLLATION with the provider icu", None));
+                let given = locale.take().ok_or_else(|| missing("locale"))?;
+                locale = Some(self.icu_locale(given)?);
             }
         }
-        if !deterministic {
+        if !deterministic && provider != b'i' {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "nondeterministic collations not supported with this provider",
             ));
         }
-        if rules.is_some() {
+        if rules.is_some() && provider != b'i' {
             return Err(invalid("ICU rules cannot be specified unless locale provider is ICU"));
+        }
+        if rules.is_some() {
+            return Err(not_yet("CREATE COLLATION with ICU rules", None));
         }
         let encoding = match provider {
             b'b' => builtin_encoding(locale.as_deref().unwrap_or_default()),
+            // An ICU collation is for each encoding, as `initdb` makes them.
+            b'i' => -1,
             _ => {
                 let collate = collate.as_deref().unwrap_or_default();
                 check_encoding_locale(collate, ctype.as_deref().unwrap_or_default())?;

@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use icu_collator::options::CollatorOptions;
+use icu_collator::options::{AlternateHandling, CaseLevel, CollatorOptions, MaxVariable, Strength};
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
 use icu_locale_core::Locale;
 
@@ -43,13 +43,40 @@ fn by_locale(locale: &str) -> Option<Collator> {
     if let Some(&collator) = cache.get(locale) {
         return collator;
     }
-    let collator = Locale::try_from_str(locale).ok().and_then(|locale| {
-        let prefs = CollatorPreferences::from(&locale);
-        CollatorBorrowed::try_new(prefs, CollatorOptions::default()).ok()
-    });
+    // ICU opens the root collator for a name that is not a language tag, such as `C`.
+    let parsed = Locale::try_from_str(locale).unwrap_or(Locale::UNKNOWN);
+    let prefs = CollatorPreferences::from(&parsed);
+    let collator = CollatorBorrowed::try_new(prefs, options(&parsed)).ok();
     let collator = collator.map(|c| Collator(Box::leak(Box::new(c))));
     cache.insert(locale.to_owned(), collator);
     collator
+}
+
+/// The options of the collator that the keywords `ks`, `ka`, `kc` and `kv` of a locale give, as `ucol_open` reads them. `co`, `kf` and `kn` are preferences of the locale.
+fn options(locale: &Locale) -> CollatorOptions {
+    let mut options = CollatorOptions::default();
+    for (key, value) in locale.extensions.unicode.keywords.iter() {
+        let value = value.to_string();
+        match (key.as_str(), value.as_str()) {
+            ("ks", "level1") => options.strength = Some(Strength::Primary),
+            ("ks", "level2") => options.strength = Some(Strength::Secondary),
+            ("ks", "level3") => options.strength = Some(Strength::Tertiary),
+            ("ks", "level4") => options.strength = Some(Strength::Quaternary),
+            ("ks", "identic") => options.strength = Some(Strength::Identical),
+            ("ka", "shifted") => options.alternate_handling = Some(AlternateHandling::Shifted),
+            ("ka", "noignore") => {
+                options.alternate_handling = Some(AlternateHandling::NonIgnorable);
+            }
+            ("kc", "" | "true") => options.case_level = Some(CaseLevel::On),
+            ("kc", "false") => options.case_level = Some(CaseLevel::Off),
+            ("kv", "space") => options.max_variable = Some(MaxVariable::Space),
+            ("kv", "punct") => options.max_variable = Some(MaxVariable::Punctuation),
+            ("kv", "symbol") => options.max_variable = Some(MaxVariable::Symbol),
+            ("kv", "currency") => options.max_variable = Some(MaxVariable::Currency),
+            _ => {}
+        }
+    }
+    options
 }
 
 /// The collator of the collation `collation`, or `None` when the collation orders strings by their bytes or is not a deterministic collation of the ICU provider.
