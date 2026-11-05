@@ -2523,8 +2523,7 @@ impl Connection {
                     late.extend(self.trigger_notices());
                     self.notices(&mut late, text, &[], out);
                     for row in sent.iter().flatten() {
-                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
-                        out.data_row(&values);
+                        out.data_row_of(row.iter().map(Option::as_deref));
                     }
                     if let Some((binary, columns)) = copying {
                         copy::copy_out_response(out, binary, columns);
@@ -2572,8 +2571,7 @@ impl Connection {
                     out.row_description(&fields);
                     self.notices(&mut late, text, &[], out);
                     for row in &rows {
-                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
-                        out.data_row(&values);
+                        out.data_row_of(row.iter().map(Option::as_deref));
                     }
                     out.command_tag(tag, count);
                 }
@@ -2583,8 +2581,7 @@ impl Connection {
                     out.row_description(&fields);
                     self.notices(&mut late, text, &[], out);
                     for row in &rows {
-                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
-                        out.data_row(&values);
+                        out.data_row_of(row.iter().map(Option::as_deref));
                     }
                     out.command_tag(CommandTag::Fetch, rows.len() as u64);
                 }
