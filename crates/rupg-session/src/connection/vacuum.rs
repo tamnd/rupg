@@ -331,7 +331,10 @@ impl Connection {
             all
         };
         let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
+        // `vacuum_rel` takes `ShareUpdateExclusiveLock`, and `AccessExclusiveLock` for `FULL`, which writes a new file.
+        let mode = if vacuum.is_some_and(|parsed| parsed.full) { 8 } else { 4 };
         for (relid, columns) in relids {
+            rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
             if let Some(parsed) = vacuum
                 && let Some(name) = parallel_temp(&catalog, relid, parsed)
             {
