@@ -331,7 +331,9 @@ pub(crate) enum Use {
     None,
     /// The function orders two strings with `varstr_cmp`, which the kernels of `rupg-func` do in a collation of ICU.
     Order,
-    /// The function reads the collation in a way that rupg does not do yet for ICU: the case of the letters, or the classes of the characters of a regular expression.
+    /// The function maps the case of the letters in the language of the collation, as `upper`, `lower`, `initcap` and `casefold` do, which the kernels of `rupg-func` do in a collation of ICU.
+    Case,
+    /// The function reads the collation in a way that rupg does not do yet for ICU: the classes of the characters of a regular expression, or `ILIKE`.
     Unsupported,
 }
 
@@ -384,10 +386,10 @@ pub(crate) fn collation_use(func: u32) -> Use {
     if order {
         return Use::Order;
     }
-    let unsupported = src.contains("regex")
-        || src.contains("iclike")
-        || src.contains("icnlike")
-        || matches!(src, "upper" | "lower" | "initcap" | "casefold");
+    if matches!(src, "upper" | "lower" | "initcap" | "casefold") {
+        return Use::Case;
+    }
+    let unsupported = src.contains("regex") || src.contains("iclike") || src.contains("icnlike");
     if unsupported { Use::Unsupported } else { Use::None }
 }
 

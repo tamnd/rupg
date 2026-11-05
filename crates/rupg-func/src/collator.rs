@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use icu_collator::options::{AlternateHandling, CaseLevel, CollatorOptions, MaxVariable, Strength};
 use icu_collator::{CollatorBorrowed, CollatorPreferences};
-use icu_locale_core::Locale;
+use icu_locale_core::{LanguageIdentifier, Locale};
 
 use crate::Session;
 
@@ -93,4 +93,20 @@ pub fn collator(session: &dyn Session, collation: u32) -> Option<Collator> {
         "" | "root" => by_locale("und"),
         locale => by_locale(locale),
     }
+}
+
+/// The language of the collation `collation` when it is a collation of the ICU provider, for `u_strToUpper`, `u_strToLower`, `u_strToTitle` and `u_strFoldCase`, which read the language of the locale of the collation. `None` for a collation of another provider.
+pub(crate) fn case_language(session: &dyn Session, collation: u32) -> Option<LanguageIdentifier> {
+    if collation == 0 {
+        return None;
+    }
+    if collation == UNICODE_COLLATION_OID {
+        return Some(LanguageIdentifier::UNKNOWN);
+    }
+    let row = session.catalog()?.collation(collation)?;
+    if row.provider != b'i' {
+        return None;
+    }
+    let locale = row.locale.as_deref().unwrap_or("");
+    Some(Locale::try_from_str(locale).map_or(LanguageIdentifier::UNKNOWN, |l| l.id))
 }

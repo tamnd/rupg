@@ -1,0 +1,75 @@
+!details
+> select upper('istanbul ǆ ß' collate "tr-x-icu"), upper('istanbul ǆ ß' collate "en-x-icu"), upper('istanbul ǆ ß' collate "C"), upper('istanbul' collate "az-x-icu")
+fields upper:25:-1:-1,upper:25:-1:-1,upper:25:-1:-1,upper:25:-1:-1
+row İSTANBUL Ǆ SS,ISTANBUL Ǆ SS,ISTANBUL ǆ ß,İSTANBUL
+SELECT 1
+> select lower('İSTANBUL IΣ ΑΣ' collate "tr-x-icu"), lower('İSTANBUL IΣ ΑΣ' collate "en-x-icu"), lower('İSTANBUL' collate "C"), lower('ÀÉ' collate "C")
+fields lower:25:-1:-1,lower:25:-1:-1,lower:25:-1:-1,lower:25:-1:-1
+row istanbul ıς ας,i̇stanbul iς ας,İstanbul,ÀÉ
+SELECT 1
+> select upper('άέή ΐ' collate "el-x-icu"), upper('άέή ΐ' collate "en-x-icu"), lower('Ì' collate "lt-x-icu"), upper('i̇' collate "lt-x-icu")
+fields upper:25:-1:-1,upper:25:-1:-1,lower:25:-1:-1,upper:25:-1:-1
+row ΑΕΗ Ϊ,ΆΈΉ Ϊ́,i̇̀,I
+SELECT 1
+> select initcap('hello wORLD ǆemal 3rd o''neil can''t foo-bar ﬁx' collate "en-x-icu"), initcap('hello wORLD ǆemal 3rd o''neil can''t foo-bar ﬁx'), initcap('istanbul ijssel' collate "tr-x-icu"), initcap('ijssel IJSSEL' collate "nl-x-icu")
+fields initcap:25:-1:-1,initcap:25:-1:-1,initcap:25:-1:-1,initcap:25:-1:-1
+row Hello World ǅemal 3rd O'neil Can't Foo-Bar Fix,Hello World ǆEmal 3rd O'Neil Can'T Foo-Bar ﬁX,İstanbul İjssel,IJssel IJssel
+SELECT 1
+> select initcap('a.b,c  d_e f1g 1abc ´a «x» hello.world e-mail' collate "en-x-icu"), initcap('ΣΑΣ σας' collate "el-x-icu"), initcap('ǳ ǲx' collate "en-x-icu")
+fields initcap:25:-1:-1,initcap:25:-1:-1,initcap:25:-1:-1
+row A.b,C  D_e F1g 1abc ´A «X» Hello.world E-Mail,Σας Σας,ǲ ǲx
+SELECT 1
+> select casefold('İSTANBUL ß Σ ǅ ﬁ' collate "tr-x-icu"), casefold('İSTANBUL ß Σ ǅ ﬁ' collate "en-x-icu"), casefold('ABC ß' collate "C"), casefold('I' collate "az-x-icu")
+fields casefold:25:-1:-1,casefold:25:-1:-1,casefold:25:-1:-1,casefold:25:-1:-1
+row istanbul ss σ ǆ fi,i̇stanbul ss σ ǆ fi,abc ß,ı
+SELECT 1
+> select upper(x), lower(x), initcap(x), casefold(x) from (values ('ﬀ ŉ İ' collate "und-x-icu"), (null)) v(x)
+fields upper:25:-1:-1,lower:25:-1:-1,initcap:25:-1:-1,casefold:25:-1:-1
+row FF ʼN İ,ﬀ ŉ i̇,Ff ʼN İ,ff ʼn i̇
+row NULL,NULL,NULL,NULL
+SELECT 2
+> select upper('a'::char(3) collate "tr-x-icu") || '|', lower('İ'::varchar collate "tr-x-icu"), upper('i'::name collate "tr-x-icu")
+fields ?column?:25:-1:-1,lower:25:-1:-1,upper:25:-1:-1
+row A|,i,İ
+SELECT 1
+> create collation trk (provider = icu, locale = 'tr-TR')
+CREATE COLLATION
+> select upper('i' collate trk), lower('I' collate trk), initcap('istanbul' collate trk), casefold('I' collate trk)
+fields upper:25:-1:-1,lower:25:-1:-1,initcap:25:-1:-1,casefold:25:-1:-1
+row İ,ı,İstanbul,ı
+SELECT 1
+> create table t as select s collate "tr-x-icu" as s from (values ('iı'), ('İI'), (null)) v(s)
+SELECT 3
+> select upper(s), lower(s), casefold(s), initcap(s), upper(s collate "C") from t order by s collate "C"
+fields upper:25:-1:-1,lower:25:-1:-1,casefold:25:-1:-1,initcap:25:-1:-1,upper:25:-1:-1
+row İI,iı,iı,İı,Iı
+row İI,iı,iı,İı,İI
+row NULL,NULL,NULL,NULL,NULL
+SELECT 3
+> select pg_typeof(upper(s)), length(upper('ß' collate "de-x-icu")), octet_length(lower('İ' collate "en-x-icu")) from t limit 1
+fields pg_typeof:2206:4:-1,length:23:4:-1,octet_length:23:4:-1
+row text,2,3
+SELECT 1
+> select upper(s), initcap(s) from (select 'ijssel ǆemal' collate "nl-x-icu" as s union all select 'dzień dobry') v order by 1
+fields upper:25:-1:-1,initcap:25:-1:-1
+row DZIEŃ DOBRY,Dzień Dobry
+row IJSSEL ǄEMAL,IJssel ǅemal
+SELECT 2
+> prepare p(text) as select upper($1 collate "tr-x-icu"), lower($1 collate "tr-x-icu")
+PREPARE
+> execute p('Iıi')
+fields upper:25:-1:-1,lower:25:-1:-1
+row IIİ,ııi
+SELECT 1
+> create view vu as select upper(s) as u, casefold(s) as f from t
+CREATE VIEW
+> select * from vu order by u collate "C", f collate "C"
+fields u@vu.1:25:-1:-1,f@vu.2:25:-1:-1
+row İI,iı
+row İI,iı
+row NULL,NULL
+SELECT 3
+> select upper('x' collate "unicode"), lower('İ' collate "unicode"), initcap('hello world' collate "unicode")
+fields upper:25:-1:-1,lower:25:-1:-1,initcap:25:-1:-1
+row X,i̇,Hello World
+SELECT 1
