@@ -4513,6 +4513,7 @@ mod agg;
 mod analyze;
 mod columnar;
 mod cursor;
+pub use cursor::Locking;
 mod fold;
 mod hashed;
 mod insert;

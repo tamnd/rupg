@@ -45,6 +45,16 @@ B> SELECT i FROM ut ORDER BY i FOR UPDATE SKIP LOCKED
 fields i@ut.1:23:4:-1
 row 2
 SELECT 1
+B> SELECT i FROM ut ORDER BY i LIMIT 1 FOR UPDATE SKIP LOCKED
+fields i@ut.1:23:4:-1
+row 2
+SELECT 1
+B> SELECT i FROM ut ORDER BY i OFFSET 1 LIMIT 1 FOR UPDATE SKIP LOCKED
+fields i@ut.1:23:4:-1
+SELECT 0
+B> SELECT i FROM ut ORDER BY i LIMIT -1 FOR UPDATE SKIP LOCKED
+fields i@ut.1:23:4:-1
+ERROR 2201W LIMIT must not be negative
 B> UPDATE ut SET k = 6 WHERE i = 2
 UPDATE 1
 A> COMMIT
@@ -77,7 +87,7 @@ B> SELECT i FROM ut WHERE i = 1 FOR UPDATE NOWAIT
 fields i@ut.1:23:4:-1
 ERROR 55P03 could not obtain lock on row in relation "ut"
 B> DELETE FROM ut WHERE i = 1
-ERROR 55P03 canceling statement due to lock timeout (waiting for ShareLock on transaction 678
+ERROR 55P03 canceling statement due to lock timeout (waiting for ShareLock on transaction 680
 while deleting tuple (0,4) in relation "ut")
 A> ROLLBACK
 ROLLBACK

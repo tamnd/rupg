@@ -51,9 +51,9 @@ impl Plan {
         &self.marks
     }
 
-    /// `ExecInitLockRows` for a `SELECT` with a locking clause: the plan of [`Plan::cursor`], whose rows end with the `tableoid` and the `ctid` of the row of each table with a row mark, and the strength and the wait policy of the lock of each table, in the order of [`Plan::marks`]. `None` for a query with no row mark on a table.
+    /// `ExecInitLockRows` for a `SELECT` with a locking clause: the plan of [`Plan::cursor`], whose rows end with the `tableoid` and the `ctid` of the row of each table with a row mark, and the strength and the wait policy of the lock of each table, in the order of [`Plan::marks`], and the values of `OFFSET` and `LIMIT`. `None` for a query with no row mark on a table.
     #[must_use]
-    pub fn locking(&self) -> Option<(Plan, Vec<(i32, i32)>)> {
+    pub fn locking(&self) -> Option<Locking> {
         let query = &self.query;
         if query.write.is_some() {
             return None;
@@ -64,8 +64,55 @@ impl Plan {
             .filter(|m| query.relations.get(m.relation).is_some_and(plain))
             .map(|m| (m.strength.0, m.wait.0))
             .collect();
-        (!locks.is_empty()).then(|| (self.cursor(), locks))
+        if locks.is_empty() {
+            return None;
+        }
+        let mut plan = self.cursor();
+        // `LockRows` is below `Limit`: a row that `SKIP LOCKED` skips does not count. With no `SKIP LOCKED` and no `WITH TIES`, the `Limit` stays in the plan, which then reads no more rows than it gives.
+        let skip = locks.iter().any(|&(_, wait)| {
+            rupg_sql::nodes::LockWaitPolicy(wait) == rupg_sql::nodes::LockWaitPolicy::LockWaitSkip
+        });
+        let limits = (skip
+            && !query.with_ties
+            && (query.offset.is_some() || query.limit.is_some()))
+        .then(|| {
+            let cursor = Arc::make_mut(&mut plan.query);
+            let null = || Expr::new(ExprKind::Const(rupg_types::Value::Null), oid::INT8);
+            let targets = [cursor.offset.take(), cursor.limit.take()].map(|expr| Target {
+                name: String::new(),
+                expr: expr.unwrap_or_else(null),
+                origin: None,
+                junk: false,
+            });
+            let query = Query {
+                targets: targets.into(),
+                params: query.params.clone(),
+                ctes: query.ctes.clone(),
+                recursive: query.recursive,
+                ..Query::default()
+            };
+            Plan {
+                query: Arc::new(query),
+                written: Arc::clone(&self.written),
+                marks: Vec::new(),
+                run: None,
+                row_security: None,
+                reads: Arc::default(),
+            }
+        });
+        Some(Locking { plan, locks, limits })
     }
+}
+
+/// The plan of a `SELECT` with a locking clause, from [`Plan::locking`].
+#[derive(Debug)]
+pub struct Locking {
+    /// The plan of [`Plan::cursor`], with no `OFFSET` and `LIMIT` when [`Locking::limits`] has them.
+    pub plan: Plan,
+    /// The strength and the wait policy of the lock of each table, in the order of [`Plan::marks`].
+    pub locks: Vec<(i32, i32)>,
+    /// A plan whose one row is the value of `OFFSET` and the value of `LIMIT` of the query, which apply to the rows that the locks keep, or `None` for a query with no `OFFSET` and `LIMIT`.
+    pub limits: Option<Plan>,
 }
 
 /// A target that is a system column of the relation `relation`.
