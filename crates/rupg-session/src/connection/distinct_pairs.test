@@ -93,3 +93,43 @@ row 3,7,280
 row 2,7,279
 row 9,7,279
 SELECT 3
+> SELECT count(DISTINCT s) FROM dp
+fields count:20:8:-1
+row 9
+SELECT 1
+> SELECT count(DISTINCT v), count(DISTINCT v) AS w FROM dp WHERE g < 5
+fields count:20:8:-1,w:20:8:-1
+row 600,600
+SELECT 1
+> SELECT count(DISTINCT v - 400) FROM dp
+fields count:20:8:-1
+row 800
+SELECT 1
+> SELECT count(DISTINCT g - 3) FROM dp WHERE v IS NULL
+fields count:20:8:-1
+row 7
+SELECT 1
+> CREATE TABLE dq (g int, v bigint, s text)
+CREATE TABLE
+> INSERT INTO dq SELECT i % 5, CASE WHEN i % 13 = 0 THEN NULL ELSE ((i::bigint * 7919) % 90001) - 30000 END, 't' || (i % 977) FROM generate_series(1, 140000) i
+INSERT 0 140000
+> SELECT count(DISTINCT v) FROM dq
+fields count:20:8:-1
+row 86924
+SELECT 1
+> SELECT count(DISTINCT v) FROM dq WHERE g = 2
+fields count:20:8:-1
+row 25846
+SELECT 1
+> SELECT count(DISTINCT s), count(DISTINCT s) AS t FROM dq
+fields count:20:8:-1,t:20:8:-1
+row 977,977
+SELECT 1
+> SELECT count(DISTINCT v) FROM dq WHERE g > 9
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(DISTINCT g) FROM dq WHERE v IS NULL
+fields count:20:8:-1
+row 5
+SELECT 1
