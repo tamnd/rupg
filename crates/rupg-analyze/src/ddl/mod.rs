@@ -124,6 +124,15 @@ const PG_TOAST_NAMESPACE: u32 = 99;
 /// `BOOTSTRAP_SUPERUSERID`, the owner of the temporary schemas.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
+/// `ShareUpdateExclusiveLock`, the lock of `VACUUM`, `ANALYZE` and the statements with `CONCURRENTLY`.
+const SHARE_UPDATE_EXCLUSIVE: u8 = 4;
+
+/// `ShareLock`, the lock of the table of `CREATE INDEX` and `REINDEX`.
+const SHARE: u8 = 5;
+
+/// `ShareRowExclusiveLock`, the lock of `CREATE TRIGGER` and of the table that a new foreign key references.
+const SHARE_ROW_EXCLUSIVE: u8 = 6;
+
 /// `AccessExclusiveLock`, the lock of a relation that a statement changes or drops.
 const ACCESS_EXCLUSIVE: u8 = 8;
 
@@ -1166,6 +1175,14 @@ impl Definer<'_, '_> {
     fn warning(&mut self, state: SqlState, message: String) {
         self.flush();
         self.messages.push(Message::Warning(Error::new(state, message)));
+    }
+
+    /// `LockRelationOid`: the transaction holds the lock of the relation `oid` of the user in `mode` until it ends. An object of the system takes no lock.
+    fn lock(&self, found: Found, mode: u8) -> Result<()> {
+        match found {
+            Found::User(oid) => self.an.env.relation_lock(oid, mode),
+            Found::Builtin(_) => Ok(()),
+        }
     }
 
     /// `CheckTableNotInUse`: the statement `stmt` cannot change the relation `oid` while an active query of the session has it open, or while the transaction has events of its `AFTER` triggers that did not fire yet.

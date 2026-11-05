@@ -347,6 +347,11 @@ impl Definer<'_, '_> {
 
     /// `reindex_index`: the index moves to the tablespace of `TABLESPACE`, then gets a new file. An index of the system cannot move.
     fn reindex_one(&mut self, index: u32, verbose: bool, tablespace: Option<u32>) -> Result<()> {
+        // `ShareLock` on the table, which lets reads go on, and `AccessExclusiveLock` on the index.
+        if let Some(table) = self.index_table(index) {
+            self.an.env.relation_lock(table, super::SHARE)?;
+        }
+        self.an.env.relation_lock(index, super::ACCESS_EXCLUSIVE)?;
         if let Some(tablespace) = tablespace {
             if self.is_toast(index) {
                 let name = self.catalog.relation(index).map(|r| r.name.clone()).unwrap_or_default();
@@ -423,6 +428,8 @@ impl Definer<'_, '_> {
         for &index in indexes {
             // The new index takes the tablespace of `TABLESPACE`, except an index of a TOAST table.
             let table = self.index_table(index).unwrap_or_default();
+            self.an.env.relation_lock(table, super::SHARE_UPDATE_EXCLUSIVE)?;
+            self.an.env.relation_lock(index, super::SHARE_UPDATE_EXCLUSIVE)?;
             if let Some(tablespace) = options.tablespace_oid
                 && self.catalog.relation(table).is_some_and(|r| r.kind != RelKind::Toast)
             {

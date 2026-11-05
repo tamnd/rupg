@@ -100,6 +100,7 @@ impl Definer<'_, '_> {
         let at = place(con.location);
         let rv = con.pktable.as_deref().cloned().unwrap_or_default();
         let found = self.lookup_relation(&rv)?;
+        self.lock(found, super::SHARE_ROW_EXCLUSIVE)?;
         let pk_name = relname(&rv).to_string();
         let kind = self.kind_of(found);
         if kind == b'i' || kind == b'I' {

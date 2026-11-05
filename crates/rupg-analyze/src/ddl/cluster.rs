@@ -514,6 +514,7 @@ impl Definer<'_, '_> {
     ) -> Result<()> {
         let Some(rel) = self.catalog.relation(table) else { return Ok(()) };
         let (name, kind, toast) = (rel.name.clone(), rel.kind, rel.toast);
+        self.an.env.relation_lock(table, super::ACCESS_EXCLUSIVE)?;
         let populated = rel.view.as_ref().is_none_or(|v| v.populated);
         if command == "REPACK" {
             let invalid: Vec<String> = self
