@@ -919,7 +919,10 @@ pub(super) fn run(
         .map(|(units, out)| {
             let places = &places;
             Box::new(move || {
-                *out = Some(if plan.keys.len() < 4 {
+                // A key of fewer words has smaller slots, so more of the table stays in the cache, and a probe hashes and compares fewer words.
+                *out = Some(if plan.keys.len() < 2 {
+                    scan_run::<2>(stored, plan, places, units, rows)
+                } else if plan.keys.len() < 4 {
                     scan_run::<4>(stored, plan, places, units, rows)
                 } else {
                     scan_run::<8>(stored, plan, places, units, rows)
@@ -955,7 +958,9 @@ pub(super) fn run(
             Box::new(move || {
                 for (slot, bufs) in out.iter_mut().zip(bufs) {
                     let bufs = std::mem::take(bufs);
-                    *slot = Some(if width <= 4 {
+                    *slot = Some(if width <= 2 {
+                        merge::<2>(bufs, &plan.folds, mins, width)
+                    } else if width <= 4 {
                         merge::<4>(bufs, &plan.folds, mins, width)
                     } else {
                         merge::<8>(bufs, &plan.folds, mins, width)
@@ -1045,7 +1050,9 @@ pub(super) fn run(
                     let (part, g) = (&parts[p as usize], g as usize);
                     // A loop of at most 8 words, which costs less than a call of `memcpy` for each group.
                     let to = &mut words[n * width..(n + 1) * width];
-                    if width <= 4 {
+                    if width <= 2 {
+                        to.iter_mut().zip(&part.key::<2>(g)).for_each(|(to, &word)| *to = word);
+                    } else if width <= 4 {
                         to.iter_mut().zip(&part.key::<4>(g)).for_each(|(to, &word)| *to = word);
                     } else {
                         to.iter_mut().zip(&part.key::<8>(g)).for_each(|(to, &word)| *to = word);
