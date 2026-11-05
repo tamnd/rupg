@@ -7838,6 +7838,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_compare.test")));
     }
 
+    /// `GREATEST`, `LEAST`, `max` and `min` in a collation of ICU: of `text`, `varchar` and `bpchar` with an explicit `COLLATE` and of a column of a table in a collation of ICU, with `GROUP BY`, `FILTER`, `DISTINCT`, a window, a view, a prepared statement, a subquery, the numeric order of `kn`, and the plan of `max` and `min` that reads the first row of a sort, with an index that orders the bytes. `connection/icu_minmax.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_minmax() {
+        big_stack(|| script(include_str!("connection/icu_minmax.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {

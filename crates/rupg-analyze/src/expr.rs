@@ -56,8 +56,8 @@ pub enum ExprKind {
     CaseTest,
     /// `CoalesceExpr`: the first argument that is not null.
     Coalesce(Vec<Expr>),
-    /// `MinMaxExpr`: `GREATEST` or `LEAST`, with the function of the `<` operator of the type.
-    MinMax { greatest: bool, less: u32, args: Vec<Expr> },
+    /// `MinMaxExpr`: `GREATEST` or `LEAST`, with the function of the `<` operator of the type. `collation` is `inputcollid` when it is a collation of ICU, which orders the strings as the collator does, or 0, as in [`Func::collation`].
+    MinMax { greatest: bool, less: u32, args: Vec<Expr>, collation: u32 },
     /// `NullIfExpr`: null when the function of the `=` operator gives true, or else the first argument.
     NullIf { equal: u32, args: Vec<Expr> },
     /// `DistinctExpr`: `IS DISTINCT FROM`, or `IS NOT DISTINCT FROM` when `not` is true, with the function of the `=` operator.
@@ -318,6 +318,8 @@ pub struct Aggref {
     pub filter: Option<Box<Expr>>,
     /// `agglevelsup`: 0 for an aggregate of the query that has the call, 1 for an aggregate of the query outside it, and so on. The arguments of an aggregate of an outer query read only the columns of that query and of the queries outside it.
     pub levels_up: usize,
+    /// `inputcollid` when it is a collation of ICU and the transition function orders strings, as `max` and `min` of `text` do, or 0, as in [`Func::collation`].
+    pub collation: u32,
 }
 
 /// A call of `GROUPING`, as `GroupingFunc`. The result has a bit for each argument, with the bit of the last argument as the lowest bit. A bit is 1 when the grouping set of the group does not have the argument.
@@ -702,6 +704,8 @@ pub struct WindowFunc {
     pub filter: Option<Box<Expr>>,
     /// `ignore_nulls`: the clause `RESPECT NULLS` or `IGNORE NULLS` of the call.
     pub nulls: NullTreatment,
+    /// `inputcollid` of an aggregate, as in [`Aggref::collation`], or 0.
+    pub collation: u32,
 }
 
 /// The null treatment of a call of a window function, as `ignore_nulls`.
@@ -1041,6 +1045,7 @@ impl Expr {
                     variadic,
                     filter,
                     levels_up,
+                    collation,
                 } = &**a;
                 let all = |x: &[Expr], y: &[Expr]| {
                     x.len() == y.len() && x.iter().zip(y).all(|(x, y)| x.same(y))
@@ -1051,6 +1056,7 @@ impl Expr {
                     && *star == b.star
                     && *variadic == b.variadic
                     && *levels_up == b.levels_up
+                    && *collation == b.collation
                     && *order == b.order
                     && *distinct == b.distinct
                     && all(direct, &b.direct)

@@ -1,8 +1,8 @@
 //! `preprocess_minmax_aggregates` of `planagg.c`: the form of a query whose aggregate calls are each `min` or `max` of one table, with a subquery for each call that reads the first value in the order of the aggregate, which an index can give.
 
 use rupg_analyze::{
-    BoolOp, Expr, ExprKind, FromItem, MinMax, Query, SortGroup, SubLink, SubLinkKind, Target,
-    equality_for_ordering,
+    Aggref, BoolOp, Expr, ExprKind, FromItem, MinMax, Query, SortGroup, SubLink, SubLinkKind,
+    Target, equality_for_ordering,
 };
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
@@ -104,7 +104,7 @@ fn minmax(query: &Query) -> Option<MinMax> {
         let sortop = builtin::aggregate(agg.oid).map_or(0, |a| a.sortop);
         let (eq, reverse) = equality_for_ordering(sortop)?;
         aggs.push(
-            [reverse, !reverse].map(|nulls_first| subquery(query, arg, sortop, eq, nulls_first)),
+            [reverse, !reverse].map(|nulls_first| subquery(query, agg, sortop, eq, nulls_first)),
         );
     }
     let link = |at: usize| {
@@ -149,7 +149,8 @@ fn minmax(query: &Query) -> Option<MinMax> {
 }
 
 /// `build_minmax_path`: the subquery of an aggregate call, which reads the argument of the call from the rows of the query where it is not null, in the order of the sort operator, with `LIMIT 1`. A column of a query outside is one more level up.
-fn subquery(query: &Query, arg: &Expr, sortop: u32, eq: u32, nulls_first: bool) -> Query {
+fn subquery(query: &Query, agg: &Aggref, sortop: u32, eq: u32, nulls_first: bool) -> Query {
+    let arg = &agg.args[0];
     let mut sub = query.clone();
     sub.each_expr_mut(0, &mut |e, depth| {
         e.each_mut(depth, &mut |e, depth| {
@@ -205,7 +206,8 @@ fn subquery(query: &Query, arg: &Expr, sortop: u32, eq: u32, nulls_first: bool) 
         equal: function(eq),
         nulls_first,
         hashable: false,
-        collation: 0,
+        // The sort of `max` and `min` in a collation of ICU orders the strings as the collator does.
+        collation: agg.collation,
     }];
     sub.offset = None;
     sub.limit = Some(Expr::new(ExprKind::Const(Value::Int8(1)), oid::INT8));

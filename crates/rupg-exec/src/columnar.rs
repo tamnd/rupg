@@ -1321,6 +1321,7 @@ fn unsupported(expr: &Expr) -> bool {
                     ExprKind::Func(f) => f.collation != 0,
                     ExprKind::Agg(agg) => {
                         agg.levels_up != 0
+                            || agg.collation != 0
                             || agg.kind != b'n'
                             || !agg.order.is_empty()
                             || agg.filter.is_some()

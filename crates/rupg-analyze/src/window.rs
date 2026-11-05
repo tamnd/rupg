@@ -318,6 +318,10 @@ impl Analyzer<'_> {
             }
         };
         self.has_windows = true;
+        let collation = match aggregate {
+            Some(_) => self.agg_collation(proc.oid, &args, at)?,
+            None => 0,
+        };
         let call = WindowFunc {
             oid: proc.oid,
             args,
@@ -326,6 +330,7 @@ impl Analyzer<'_> {
             agg: aggregate.is_some(),
             filter: parts.filter.map(Box::new),
             nulls: parts.nulls,
+            collation,
         };
         Ok(Expr { kind: ExprKind::Window(Box::new(call)), ty, typmod: -1, location: at })
     }

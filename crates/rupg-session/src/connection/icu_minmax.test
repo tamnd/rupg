@@ -1,0 +1,142 @@
+!details
+> create table t (g int, s text, c char(3))
+CREATE TABLE
+> insert into t values (1, 'a', 'a'), (1, 'B', 'B'), (2, 'b', 'b'), (2, 'A', 'A'), (1, 'ä', 'ä'), (2, 'z', 'z'), (1, 'Z', 'Z'), (2, '10', '10'), (1, '9', '9'), (2, null, null)
+INSERT 0 10
+> select greatest('a' collate "en-x-icu", 'B'), least('a' collate "en-x-icu", 'B'), greatest('a', 'B' collate "C"), least('a', 'B')
+fields greatest:25:-1:-1,least:25:-1:-1,greatest:25:-1:-1,least:25:-1:-1
+row B,a,a,B
+SELECT 1
+> select greatest('ä', 'z', 'b' collate "sv-x-icu"), greatest('ä', 'z', 'b' collate "de-x-icu"), least(null, 'B' collate "en-x-icu", 'a')
+fields greatest:25:-1:-1,greatest:25:-1:-1,least:25:-1:-1
+row ä,z,a
+SELECT 1
+> select greatest('a'::char(2) collate "en-x-icu", 'B'::char(2)), least('a'::varchar collate "en-x-icu", 'B'::varchar)
+fields greatest:1042:-1:6,least:1043:-1:-1
+row B ,a
+SELECT 1
+> select greatest('a'::varchar(3), 'b'::varchar(3)), least('a'::char(2), 'b'), greatest(c, c) from t where g = 2 and s = 'b'
+fields greatest:1043:-1:7,least:1042:-1:-1,greatest:1042:-1:7
+row b,a ,b  
+SELECT 1
+> select s, greatest(s collate "en-x-icu", 'b') from t order by s collate "C"
+fields s@t.2:25:-1:-1,greatest:25:-1:-1
+row 10,b
+row 9,b
+row A,b
+row B,B
+row Z,Z
+row a,b
+row b,b
+row z,z
+row ä,b
+row NULL,b
+SELECT 10
+> select max(s collate "en-x-icu"), min(s collate "en-x-icu"), max(s collate "C"), min(s collate "C") from t
+fields max:25:-1:-1,min:25:-1:-1,max:25:-1:-1,min:25:-1:-1
+row Z,10,ä,10
+SELECT 1
+> select max(s collate "sv-x-icu"), min(s collate "sv-x-icu"), max(s collate "de-x-icu") from t
+fields max:25:-1:-1,min:25:-1:-1,max:25:-1:-1
+row ä,10,Z
+SELECT 1
+> select max(c collate "en-x-icu"), min(c collate "en-x-icu") from t
+fields max:1042:-1:-1,min:1042:-1:-1
+row Z  ,10 
+SELECT 1
+> select g, max(s collate "en-x-icu"), min(s collate "en-x-icu"), max(s) from t group by g order by g
+fields g@t.1:23:4:-1,max:25:-1:-1,min:25:-1:-1,max:25:-1:-1
+row 1,Z,9,ä
+row 2,z,10,z
+SELECT 2
+> select g, max(s collate "en-x-icu") filter (where s <> 'z') from t group by g order by g
+fields g@t.1:23:4:-1,max:25:-1:-1
+row 1,Z
+row 2,b
+SELECT 2
+> select max(distinct s collate "en-x-icu"), count(distinct s) from t
+fields max:25:-1:-1,count:20:8:-1
+row Z,9
+SELECT 1
+> select s, max(s collate "en-x-icu") over (partition by g), min(s collate "en-x-icu") over (order by s collate "C" rows between 1 preceding and 1 following) from t order by s collate "C"
+fields s@t.2:25:-1:-1,max:25:-1:-1,min:25:-1:-1
+row 10,z,10
+row 9,Z,10
+row A,z,9
+row B,Z,A
+row Z,Z,a
+row a,Z,a
+row b,z,a
+row z,z,ä
+row ä,Z,ä
+row NULL,z,ä
+SELECT 10
+> create collation num (provider = icu, locale = 'en-u-kn-true')
+NOTICE 00000 using standard form "en-u-kn" for ICU locale "en-u-kn-true"
+CREATE COLLATION
+> select max(s collate num), min(s collate num), greatest('10', '9' collate num) from t
+fields max:25:-1:-1,min:25:-1:-1,greatest:25:-1:-1
+row Z,9,10
+SELECT 1
+> create table t2 as select g, s collate "en-x-icu" as s from t
+SELECT 10
+> select max(s), min(s), greatest(min(s), 'b') from t2
+fields max:25:-1:-1,min:25:-1:-1,greatest:25:-1:-1
+row Z,10,b
+SELECT 1
+> select g, max(s) from t2 group by g order by g
+fields g@t2.1:23:4:-1,max:25:-1:-1
+row 1,Z
+row 2,z
+SELECT 2
+> create index ts on t (s)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> select max(s collate "en-x-icu"), min(s collate "en-x-icu") from t
+fields max:25:-1:-1,min:25:-1:-1
+row Z,10
+SELECT 1
+> select max(s), min(s) from t
+fields max:25:-1:-1,min:25:-1:-1
+row ä,10
+SELECT 1
+> reset enable_seqscan
+RESET
+> create view v as select greatest(s collate "en-x-icu", 'b') as x, max(s collate "en-x-icu") over () as m from t
+CREATE VIEW
+> select x, m from v order by x collate "C"
+fields x@v.1:25:-1:-1,m@v.2:25:-1:-1
+row B,Z
+row Z,Z
+row b,Z
+row b,Z
+row b,Z
+row b,Z
+row b,Z
+row b,Z
+row b,Z
+row z,Z
+SELECT 10
+> prepare p (text) as select greatest($1 collate "en-x-icu", 'B'), least($1, 'B' collate "en-x-icu")
+PREPARE
+> execute p ('a')
+fields greatest:25:-1:-1,least:25:-1:-1
+row B,a
+SELECT 1
+> select max(s) from (select s collate "en-x-icu" as s from t) q
+fields max:25:-1:-1
+row Z
+SELECT 1
+> select (select max(s collate "en-x-icu") from t t3 where t3.g = t.g) from t where s = 'a'
+fields max:25:-1:-1
+row Z
+SELECT 1
+> drop view v
+DROP VIEW
+> drop table t2
+DROP TABLE
+> drop table t
+DROP TABLE
+> drop collation num
+DROP COLLATION
