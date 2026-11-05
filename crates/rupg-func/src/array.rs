@@ -653,6 +653,10 @@ fn array_sort(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             .collect()
     };
     let elem = if array.dims.len() == 1 { element_type(ty)? } else { ty };
+    let collator = match call.collation {
+        0 => None,
+        collation => crate::collator(call.session, collation),
+    };
     let mut failed = None;
     items.sort_by(|a, b| match (a, b) {
         (None, None) => std::cmp::Ordering::Equal,
@@ -660,7 +664,8 @@ fn array_sort(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (Some(_), None) if nulls_first => std::cmp::Ordering::Greater,
         (Some(_), None) => std::cmp::Ordering::Less,
-        (Some(x), Some(y)) => match crate::compare::compare(elem, x, elem, y) {
+        (Some(x), Some(y)) => match crate::compare::compare_in(collator.as_ref(), elem, x, elem, y)
+        {
             Ok(order) if descending => order.reverse(),
             Ok(order) => order,
             Err(e) => {
