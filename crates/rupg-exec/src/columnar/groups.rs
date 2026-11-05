@@ -8,7 +8,7 @@ use rupg_common::Result;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::zone::{Test, Verdict};
 
-use super::{Decoded, DecodedData, WordTable, decode, passes};
+use super::{Decoded, DecodedData, FxMap, WordTable, decode, passes};
 
 /// The number of parts of the hashes of the keys.
 const PARTS: usize = 256;
@@ -25,10 +25,12 @@ pub(super) const GROUP_ROWS: usize = 8;
 /// The fewest rows for each task, so that a small table does not pay for the tasks.
 pub(super) const TASK_ROWS: usize = 1 << 16;
 
-/// A key of `GROUP BY`: a column of integers or codes by its place in the columns of the scan, or a constant word, with `None` for null.
+/// A key of `GROUP BY`: a column of integers or codes by its place in the columns of the scan, a column of integers that each value rounds down to a multiple of a step, or a constant word, with `None` for null.
 #[derive(Clone, Copy)]
 pub(super) enum Input {
     Column(usize),
+    /// `date_trunc` of a column of timestamps to a unit of `step` microseconds. An infinite timestamp keeps its value, as in `timestamp_trunc`.
+    Floor(usize, i64),
     Const(Option<u64>),
 }
 
@@ -324,13 +326,60 @@ fn select<'p>(
     sel.extend(0..count);
     for &&(place, ref test) in tests.iter() {
         let d = decode(&stored[place], segment, vector)?;
-        sel.retain(|&i| passes(test, null(&d, i), int(&d, i)));
+        keep(test, &d, sel);
         decoded[place] = Some(d);
         if sel.is_empty() {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Keeps the rows of `sel` whose values in `d` pass `test`. The kind of the test and the form of the values are found once for the vector and not once for each row, and the loop keeps a row with no branch, since a branch on a condition that some rows pass and some do not is often wrong.
+fn keep(test: &Test, d: &Decoded, sel: &mut Vec<usize>) {
+    let DecodedData::Int(v) = &d.data else {
+        retain(sel, |i| passes(test, null(d, i), int(d, i)));
+        return;
+    };
+    let c = |key: &u64| rupg_summary::key::int_of(*key);
+    match (test, d.nulls.as_deref()) {
+        (Test::IsNull, None) => sel.clear(),
+        (Test::IsNotNull, None) => {}
+        (Test::IsNull | Test::IsNotNull, Some(_)) => {
+            retain(sel, |i| passes(test, null(d, i), 0));
+        }
+        (Test::Eq(k), n) => compare(v, n, sel, |x| x == c(k)),
+        (Test::Ne(k), n) => compare(v, n, sel, |x| x != c(k)),
+        (Test::Lt(k), n) => compare(v, n, sel, |x| x < c(k)),
+        (Test::Le(k), n) => compare(v, n, sel, |x| x <= c(k)),
+        (Test::Gt(k), n) => compare(v, n, sel, |x| x > c(k)),
+        (Test::Ge(k), n) => compare(v, n, sel, |x| x >= c(k)),
+        (Test::In(keys), n) => {
+            let values: Vec<i64> = keys.iter().map(c).collect();
+            compare(v, n, sel, |x| values.contains(&x));
+        }
+    }
+}
+
+/// Keeps the rows of `sel` whose values in `v` are not null by `nulls` and pass `test`.
+#[inline]
+fn compare(v: &[i64], nulls: Option<&[bool]>, sel: &mut Vec<usize>, test: impl Fn(i64) -> bool) {
+    match nulls {
+        None => retain(sel, |i| test(v[i])),
+        Some(nulls) => retain(sel, |i| !nulls[i] & test(v[i])),
+    }
+}
+
+/// Keeps the rows of `sel` that `keep` gives true for, in their order. Each row is written, and the end of the kept rows moves only when the row is kept.
+#[inline]
+fn retain(sel: &mut Vec<usize>, keep: impl Fn(usize) -> bool) {
+    let mut kept = 0;
+    for j in 0..sel.len() {
+        let i = sel[j];
+        sel[kept] = i;
+        kept += usize::from(keep(i));
+    }
+    sel.truncate(kept);
 }
 
 /// The number of the values that are not null of the key of `plan`, which is its one key and a column, in the rows of the scan that pass its filters, and the first of these rows. Each task reads a run of the vectors, and puts each value that is not the value of the row before it into one of [`PARTS`] buffers by its hash. Then each task counts the values of some parts, and the counts of the parts add up, since a value is in one part. `None` for a plan of other keys.
@@ -424,6 +473,156 @@ pub(super) fn distinct(
     Ok(Some((counts.iter().sum(), first)))
 }
 
+/// The pairs of a group and a value of one run of vectors, by the part of the hash of the value; the values of the group of the null key; the first row of each group with a key that is not null; the first row of the group of the null key; and the last row of the run that passes the filters.
+type Pairs = (Vec<Vec<(u64, u64)>>, Vec<u64>, FxMap<u64, u64>, Option<u64>, Option<u64>);
+
+/// The groups of `plan` and the number of the values that are not null of its second key in each group, when the first key of the plan is the one key of `GROUP BY` and the second key is the argument of `count(DISTINCT)`. Each task reads a run of the vectors, keeps the first row of each group, and puts each pair of a group and a value that is not the pair of the row before it into one of [`PARTS`] buffers by the hash of the value. Then each task sorts the pairs of some parts, and counts the pairs that are not the same as the pair before them for each group. The groups are in the order of their first rows, as [`run`] gives them, with one count for each of the `calls` calls. `None` for a plan of other keys.
+pub(super) fn distinct_groups(
+    tasks: &dyn Tasks,
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    rows: usize,
+    segments: usize,
+    calls: usize,
+) -> Result<Option<Found>> {
+    let [Input::Column(key), Input::Column(place)] = plan.keys[..] else { return Ok(None) };
+    let units = units_of(rows, segments);
+    let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len().max(1));
+    let chunk = units.len().div_ceil(jobs).max(1);
+    let mut runs: Vec<Option<Result<Pairs>>> = Vec::new();
+    runs.resize_with(units.len().div_ceil(chunk), || None);
+    let work: Vec<Job<'_>> = units
+        .chunks(chunk)
+        .zip(&mut runs)
+        .map(|(units, out)| {
+            Box::new(move || {
+                *out = Some((|| {
+                    let mut parts: Vec<Vec<(u64, u64)>> = vec![Vec::new(); PARTS];
+                    let mut nulls = Vec::new();
+                    let mut firsts: FxMap<u64, u64> = FxMap::default();
+                    let mut null_first = None;
+                    let mut last = None;
+                    let mut decoded: Vec<Option<Decoded>> =
+                        (0..stored.len()).map(|_| None).collect();
+                    let mut sel = Vec::with_capacity(VECTOR);
+                    let mut tests = Vec::with_capacity(plan.filters.len());
+                    // The group and the value of the row before, with `None` for null.
+                    let mut previous: Option<(Option<u64>, Option<u64>)> = None;
+                    for &unit in units {
+                        if !select(stored, plan, rows, unit, &mut tests, &mut sel, &mut decoded)? {
+                            continue;
+                        }
+                        let g = match decoded[key].take() {
+                            Some(d) => d,
+                            None => decode(&stored[key], unit.0, unit.1)?,
+                        };
+                        let d = match decoded[place].take() {
+                            Some(d) => d,
+                            None if place == key => decode(&stored[key], unit.0, unit.1)?,
+                            None => decode(&stored[place], unit.0, unit.1)?,
+                        };
+                        let base = (unit.0 * ROWS + unit.1 * VECTOR) as u64;
+                        last = sel.last().map(|&i| base + i as u64).or(last);
+                        for &i in &sel {
+                            let group = (!null(&g, i)).then(|| int(&g, i) as u64);
+                            let value = (!null(&d, i)).then(|| int(&d, i) as u64);
+                            // In ClickBench, most rows have the `RegionID` and the `UserID` of the row before them.
+                            if previous == Some((group, value)) {
+                                continue;
+                            }
+                            previous = Some((group, value));
+                            let row = base + i as u64;
+                            match group {
+                                Some(group) => {
+                                    firsts.entry(group).or_insert(row);
+                                }
+                                None => null_first = null_first.or(Some(row)),
+                            }
+                            match (group, value) {
+                                (Some(group), Some(v)) => parts[part_of(v)].push((group, v)),
+                                (None, Some(v)) => nulls.push(v),
+                                (_, None) => {}
+                            }
+                        }
+                    }
+                    Ok((parts, nulls, firsts, null_first, last))
+                })());
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let runs: Vec<Pairs> = runs.into_iter().flatten().collect::<Result<_>>()?;
+    let last = runs.iter().filter_map(|r| r.4).max();
+    let null_first = runs.iter().filter_map(|r| r.3).min();
+    let mut firsts: FxMap<u64, u64> = FxMap::default();
+    let mut nulls = Vec::new();
+    let mut by_part: Vec<Vec<Vec<(u64, u64)>>> =
+        (0..PARTS).map(|_| Vec::with_capacity(runs.len())).collect();
+    for (parts, run_nulls, run_firsts, ..) in runs {
+        for (group, first) in run_firsts {
+            let at = firsts.entry(group).or_insert(first);
+            *at = (*at).min(first);
+        }
+        nulls.extend(run_nulls);
+        for (to, part) in by_part.iter_mut().zip(parts) {
+            to.push(part);
+        }
+    }
+    let per = PARTS.div_ceil(jobs);
+    let mut counts: Vec<Vec<(u64, i64)>> = vec![Vec::new(); by_part.len().div_ceil(per)];
+    let work: Vec<Job<'_>> = by_part
+        .chunks_mut(per)
+        .zip(&mut counts)
+        .map(|(parts, out)| {
+            Box::new(move || {
+                let mut all = Vec::new();
+                for part in parts {
+                    all.clear();
+                    for run in part.iter() {
+                        all.extend_from_slice(run);
+                    }
+                    all.sort_unstable();
+                    all.dedup();
+                    for pair in all.chunk_by(|a, b| a.0 == b.0) {
+                        out.push((pair[0].0, i64::try_from(pair.len()).unwrap_or(i64::MAX)));
+                    }
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let mut sums: FxMap<u64, i64> = FxMap::default();
+    for (group, n) in counts.into_iter().flatten() {
+        *sums.entry(group).or_insert(0) += n;
+    }
+    nulls.sort_unstable();
+    nulls.dedup();
+    let mut order: Vec<(u64, Option<u64>)> =
+        firsts.into_iter().map(|(group, first)| (first, Some(group))).collect();
+    order.extend(null_first.map(|first| (first, None)));
+    order.sort_unstable();
+    let mut words = Vec::with_capacity(order.len() * 2);
+    let mut found_firsts = Vec::with_capacity(order.len());
+    let mut found_counts = Vec::with_capacity(order.len());
+    for &(first, group) in &order {
+        words.extend_from_slice(&[group.unwrap_or(0), u64::from(group.is_none())]);
+        found_firsts.push(first);
+        found_counts.push(match group {
+            Some(group) => sums.get(&group).copied().unwrap_or(0),
+            None => i64::try_from(nulls.len()).unwrap_or(i64::MAX),
+        });
+    }
+    // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
+    let trailing = last.is_some() && found_firsts.last() != last.as_ref();
+    Ok(Some(Found {
+        words,
+        firsts: found_firsts,
+        states: (0..calls).map(|_| Folded::Count(found_counts.clone())).collect(),
+        extremes: Vec::new(),
+        trailing,
+    }))
+}
+
 /// The values of each part of the hashes for one run of vectors, and the first row of the run with a value.
 type Values = (Vec<Vec<u64>>, Option<u64>);
 
@@ -484,6 +683,18 @@ fn scan_run(
                             key[width] |= 1 << k;
                         } else {
                             key[k] = int(d, i) as u64;
+                        }
+                    }
+                }
+                Input::Floor(place, step) => {
+                    let Some(d) = decoded[place].as_ref() else { continue };
+                    for (key, &i) in keys.iter_mut().zip(&sel) {
+                        if null(d, i) {
+                            key[width] |= 1 << k;
+                        } else {
+                            let v = int(d, i);
+                            let infinite = v == i64::MIN || v == i64::MAX;
+                            key[k] = if infinite { v } else { v - v.rem_euclid(step) } as u64;
                         }
                     }
                 }
@@ -612,7 +823,7 @@ pub(super) fn run(
         .keys
         .iter()
         .filter_map(|k| match k {
-            Input::Column(place) => Some(*place),
+            Input::Column(place) | Input::Floor(place, _) => Some(*place),
             Input::Const(_) => None,
         })
         .chain(plan.folds.iter().filter_map(|f| match f {
