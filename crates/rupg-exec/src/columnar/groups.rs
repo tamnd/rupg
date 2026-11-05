@@ -5,6 +5,7 @@ use std::sync::Arc;
 use rupg_column::segment::ROWS;
 use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::Result;
+use rupg_kernels::hash::prefetch;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::zone::{Test, Verdict};
 
@@ -228,6 +229,25 @@ impl Buf {
         // The loop has a known number of steps, so the copy is not a call of `memcpy`.
         let words = &self.keys[g * self.width..(g + 1) * self.width];
         std::array::from_fn(|i| words.get(i).copied().unwrap_or(0))
+    }
+
+    /// Starts the reads of the key, the first row and the states of the group `g`.
+    #[inline]
+    fn prefetch(&self, g: usize) {
+        if let Some(word) = self.keys.get(g * self.width) {
+            prefetch(word);
+        }
+        if let Some(first) = self.firsts.get(g) {
+            prefetch(first);
+        }
+        for state in &self.states {
+            match state {
+                Folded::Count(v) => v.get(g).map(prefetch),
+                Folded::Sum(v) => v.get(g).map(prefetch),
+                Folded::Extreme(v) => v.get(g).map(prefetch),
+                Folded::None => None,
+            };
+        }
     }
 
     #[inline]
@@ -1016,6 +1036,10 @@ pub(super) fn run(
             let parts = &parts;
             Box::new(move || {
                 for (n, &(p, g)) in order.iter().enumerate() {
+                    // Each group of the run comes from one of many parts, so the processor cannot predict the next reads.
+                    if let Some(&(p, g)) = order.get(n + PREFETCH) {
+                        parts[p as usize].prefetch(g as usize);
+                    }
                     let (part, g) = (&parts[p as usize], g as usize);
                     // A loop of at most 8 words, which costs less than a call of `memcpy` for each group.
                     let to = &mut words[n * width..(n + 1) * width];

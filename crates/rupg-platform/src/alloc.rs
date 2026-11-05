@@ -217,6 +217,41 @@ pub fn trim() {
     }
 }
 
+/// The size of a large page of the memory on Linux on x86-64 and on most ARM systems.
+const LARGE_PAGE: usize = 2 << 20;
+
+/// The fewest bytes of a vector of [`large_vec`] that ask for large pages. A smaller block fits in the cache of addresses of the processor with small pages.
+const LARGE_VEC: usize = 4 * LARGE_PAGE;
+
+/// A vector of `len` copies of `value`, whose memory the system can give in large pages. Random reads of a large table, such as the hash table of `GROUP BY`, then miss the cache of addresses of the processor less often. Each miss of that cache reads the tables of the pages, and in a virtual machine these reads cost more. A vector of fewer than [`LARGE_VEC`] bytes, or a system with no large pages, gets small pages.
+pub fn large_vec<T: Clone>(len: usize, value: T) -> Vec<T> {
+    let mut v: Vec<T> = Vec::with_capacity(len);
+    let bytes = len.saturating_mul(size_of::<T>());
+    if bytes >= LARGE_VEC {
+        // The advice comes before the first write, so that the first write of each large page can get a large page. Pages that an earlier use of the block wrote stay small until the kernel joins them.
+        advise_large(v.as_mut_ptr().cast::<u8>(), bytes);
+    }
+    v.resize(len, value);
+    v
+}
+
+/// Asks the system to give the large pages inside the `len` bytes at `start` as large pages.
+#[cfg(all(target_os = "linux", not(miri)))]
+fn advise_large(start: *mut u8, len: usize) {
+    let from = start.addr().next_multiple_of(LARGE_PAGE);
+    let end = (start.addr() + len) / LARGE_PAGE * LARGE_PAGE;
+    if from < end {
+        // SAFETY: MADV_HUGEPAGE only tells the kernel which size of page to use for the range. It does not change the bytes of the range, and the range is inside a block that the caller owns. A failure leaves small pages.
+        unsafe {
+            libc::madvise(start.with_addr(from).cast(), end - from, libc::MADV_HUGEPAGE);
+        }
+    }
+}
+
+/// Other systems give the pages that they give.
+#[cfg(not(all(target_os = "linux", not(miri))))]
+fn advise_large(_start: *mut u8, _len: usize) {}
+
 /// The counts of the thread at a point in time.
 #[derive(Clone, Copy, Debug)]
 pub struct Mark {
@@ -243,6 +278,15 @@ impl Mark {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_large_vec_has_its_copies_of_the_value() {
+        for len in [0, 1, 1000, LARGE_VEC / 24 + 3, 3 * LARGE_VEC / 24] {
+            let v = large_vec(len, (7_u64, 9_u32, 11_u64));
+            assert_eq!(v.len(), len);
+            assert!(v.iter().all(|&x| x == (7, 9, 11)), "{len}");
+        }
+    }
 
     #[test]
     fn counts_without_the_allocator_are_zero() {
