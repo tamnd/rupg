@@ -424,11 +424,15 @@ impl Analyzer<'_> {
             let Some(Node::SortBy(by)) = item else {
                 return Err(Error::internal("an item of ORDER BY that is not SortBy"));
             };
+            self.sort_collate =
+                kind == Kind::OrderBy && matches!(by.node, Some(Node::CollateClause(_)));
             let target = if sql99 {
-                self.target_sql99(by.node.as_ref(), targets, kind)?
+                self.target_sql99(by.node.as_ref(), targets, kind)
             } else {
-                self.target_sql92(by.node.as_ref(), targets, Kind::OrderBy)?
+                self.target_sql92(by.node.as_ref(), targets, Kind::OrderBy)
             };
+            self.sort_collate = false;
+            let target = target?;
             self.add_sort(by, target, targets, &mut sort)?;
         }
         Ok(sort)

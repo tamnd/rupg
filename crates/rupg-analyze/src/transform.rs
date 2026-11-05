@@ -36,6 +36,14 @@ fn bytewise(collation: &rupg_catalog::Collation) -> bool {
     }
 }
 
+/// `UNICODE_COLLATION_OID`: the collation `unicode` of ICU with the root locale.
+const UNICODE_COLLATION_OID: u32 = 963;
+
+/// True for a deterministic collation of ICU with no rules of its own, which a sort can order by.
+fn sortable(collation: &rupg_catalog::Collation) -> bool {
+    collation.provider == b'i' && collation.deterministic && collation.icu_rules.is_none()
+}
+
 /// An error for an expression that the analyzer does not take yet.
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
@@ -200,6 +208,7 @@ impl Analyzer<'_> {
             Node::SQLValueFunction(f) => self.transform_sql_value(f),
             Node::A_ArrayExpr(a) => self.transform_array(a, 0, 0, -1),
             Node::CollateClause(c) => {
+                let sort = std::mem::take(&mut self.sort_collate);
                 let arg = self.transform(c.arg.as_ref())?;
                 let at = place(c.location);
                 if !types::collatable(arg.ty) && arg.ty != oid::UNKNOWN {
@@ -209,7 +218,10 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                let collation = self.collation_oid(&c.collname, at)?;
+                self.sort_collate = sort;
+                let collation = self.collation_oid(&c.collname, at);
+                self.sort_collate = false;
+                let collation = collation?;
                 let (ty, typmod) = (arg.ty, arg.typmod);
                 let mut expr = Expr::new(ExprKind::Collate(Box::new(arg), collation), ty).at(at);
                 expr.typmod = typmod;
@@ -253,12 +265,15 @@ impl Analyzer<'_> {
                 return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
             }
             if namespace == crate::PG_CATALOG_NAMESPACE && OTHER_COLLATIONS.contains(&name) {
+                if self.sort_collate && name == "unicode" {
+                    return Ok(UNICODE_COLLATION_OID);
+                }
                 return Err(not_yet(&format!("collation \"{name}\""), at));
             }
             if let Some(found) =
                 self.env.catalog().and_then(|c| c.collation_by_name(namespace, name))
             {
-                if bytewise(found) {
+                if bytewise(found) || (self.sort_collate && sortable(found)) {
                     return Ok(found.oid);
                 }
                 return Err(not_yet(&format!("collation \"{name}\""), at));

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ORDER BY x COLLATE "xx-x-icu"`, and the `ORDER BY` of an aggregate, order strings as ICU does for a deterministic collation of the ICU provider, with ICU4X (#1356).
 - `SELECT ... FOR UPDATE SKIP LOCKED` with `LIMIT` and `OFFSET` counts only the rows that it locks, as the `LockRows` node of PostgreSQL runs below `Limit` (#1354).
 - `SELECT ... FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE` lock the rows of their tables, and `UPDATE`, `DELETE` and `INSERT ... ON CONFLICT DO UPDATE` wait for these locks. `NOWAIT` and `SKIP LOCKED` work (#1352).
 - `VACUUM FULL` takes `AccessExclusiveLock` on each relation, and `VACUUM` with no list takes `ShareUpdateExclusiveLock` on each relation, as in PostgreSQL (#1350).

@@ -13,6 +13,8 @@ categories.workspace = true
 readme.workspace = true
 
 [dependencies]
+icu_collator.workspace = true
+icu_locale_core.workspace = true
 md-5.workspace = true
 rupg-analyze.workspace = true
 rupg-catalog.workspace = true
