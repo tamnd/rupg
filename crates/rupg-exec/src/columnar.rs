@@ -1738,8 +1738,18 @@ pub(crate) fn run(
             Ok(found.len() < needed)
         })?;
         let tables = scan::kept_tables(query, found, &kept);
-        let (rows, _) =
-            project(query, params, session, cache, &tables, needed, None, offset, count)?;
+        let (rows, _) = project(
+            query,
+            params,
+            session,
+            cache,
+            &tables,
+            needed,
+            query.having.as_ref(),
+            None,
+            offset,
+            count,
+        )?;
         (rows, tables, false)
     };
     drop(tables);
@@ -1894,7 +1904,7 @@ fn top(
     Ok(rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX)).collect())
 }
 
-/// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `HAVING`. It gives true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done: with a `LIMIT` and many groups, the targets of `ORDER BY` run for each group, and the other targets only for the groups that `LIMIT` keeps, when they cannot fail.
+/// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `having`: the `HAVING` of the query, or `None` when the groups passed it before. It gives true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done: with a `LIMIT` and many groups, the targets of `ORDER BY` run for each group, and the other targets only for the groups that `LIMIT` keeps, when they cannot fail.
 #[allow(clippy::too_many_arguments)]
 fn project(
     query: &Query,
@@ -1903,6 +1913,7 @@ fn project(
     cache: &Cache,
     tables: &scan::Tables,
     needed: usize,
+    having: Option<&Expr>,
     groups: Option<Groups<'_>>,
     offset: usize,
     count: Option<usize>,
@@ -1935,7 +1946,7 @@ fn project(
                 // The calls that the targets of `ORDER BY` and `HAVING` read.
                 let mut read: Vec<*const Aggref> = Vec::new();
                 let exprs = query.targets.iter().zip(&sorted).filter(|(_, s)| **s);
-                for expr in exprs.map(|(t, _)| &t.expr).chain(&query.having) {
+                for expr in exprs.map(|(t, _)| &t.expr).chain(having) {
                     expr.find(0, &mut |e, _| {
                         if let ExprKind::Agg(agg) = &e.kind {
                             read.push(std::ptr::from_ref(&**agg));
@@ -1944,8 +1955,7 @@ fn project(
                     });
                 }
                 // With no `HAVING` and only calls in `ORDER BY`, the rows of the sort take the results of the calls with no evaluation.
-                let direct: Option<Vec<Option<usize>>> = query
-                    .having
+                let direct: Option<Vec<Option<usize>>> = having
                     .is_none()
                     .then(|| {
                         query
@@ -2015,7 +2025,7 @@ fn project(
                     }
                     eval.tuple = tuple(g);
                     eval.group = Group { aggs: results.group(g, Some(&read))?, ..Group::default() };
-                    if let Some(having) = &query.having
+                    if let Some(having) = having
                         && eval.eval(having)? != Value::Bool(true)
                     {
                         continue;
@@ -2044,7 +2054,7 @@ fn project(
                 crate::interrupt(session, n)?;
                 eval.tuple = tuple(g);
                 eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
-                if let Some(having) = &query.having
+                if let Some(having) = having
                     && eval.eval(having)? != Value::Bool(true)
                 {
                     continue;
@@ -2082,20 +2092,49 @@ fn project(
     Ok((out, false))
 }
 
-/// True when each target that `ORDER BY` does not have cannot fail for a group: a column, a constant, a parameter, an aggregate, or a key of `GROUP BY`, which ran for each group.
-fn top_safe(query: &Query) -> bool {
-    fn safe(expr: &Expr, query: &Query) -> bool {
-        match &expr.kind {
-            ExprKind::Var(_) | ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::Agg(_) => true,
-            ExprKind::Relabel(arg, _) => safe(arg, query),
-            _ => query.group.iter().any(|g| query.targets[g.target].expr == *expr),
-        }
+/// True when a target cannot fail for a group: a column, a constant, a parameter, an aggregate, or a key of `GROUP BY`, which ran for each group.
+fn safe(expr: &Expr, query: &Query) -> bool {
+    match &expr.kind {
+        ExprKind::Var(_) | ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::Agg(_) => true,
+        ExprKind::Relabel(arg, _) => safe(arg, query),
+        _ => query.group.iter().any(|g| query.targets[g.target].expr == *expr),
     }
+}
+
+/// True when each target that `ORDER BY` does not have cannot fail for a group.
+fn top_safe(query: &Query) -> bool {
     query
         .targets
         .iter()
         .enumerate()
         .all(|(t, target)| query.sort.iter().any(|s| s.target == t) || safe(&target.expr, query))
+}
+
+/// True when `HAVING` can run before the first rows of the groups: it reads only the results of the aggregates, constants and parameters, no target can fail, and each group gives one row. Then the groups that pass come first, and the scan reads the first rows of only those groups.
+fn having_first(query: &Query) -> bool {
+    fn of_aggs(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Agg(_) | ExprKind::Const(_) | ExprKind::Param(_) => true,
+            ExprKind::Func(_)
+            | ExprKind::Relabel(..)
+            | ExprKind::Collate(..)
+            | ExprKind::CoerceViaIo(..)
+            | ExprKind::Bool(..)
+            | ExprKind::NullTest(..)
+            | ExprKind::BooleanTest(..)
+            | ExprKind::Coalesce(_)
+            | ExprKind::MinMax { .. }
+            | ExprKind::NullIf { .. }
+            | ExprKind::Distinct { .. } => {
+                expr.find_child(&mut |child| (!of_aggs(child)).then_some(())).is_none()
+            }
+            _ => false,
+        }
+    }
+    query.having.as_ref().is_some_and(of_aggs)
+        && !query.group.is_empty()
+        && crate::set_levels(&query.targets).is_empty()
+        && query.targets.iter().all(|target| safe(&target.expr, query))
 }
 
 /// The scan of the vectors of the table with the conditions of `WHERE`.
@@ -2562,7 +2601,10 @@ fn grouped(
     // With `LIMIT` and no sort, the result has the first groups of the order, so the scan also keeps the place of the first row of each group, and reads the values only for those groups.
     let first_groups =
         if keys.is_empty() || top.is_some() { None } else { first_groups(query, offset, count) };
-    let lazy = top.is_some() || first_groups.is_some();
+    // With `HAVING` of only aggregates, the scan also keeps the place of the first row of each group, and reads the values only for the groups that pass.
+    let having_first =
+        !keys.is_empty() && top.is_none() && first_groups.is_none() && having_first(query);
+    let lazy = top.is_some() || first_groups.is_some() || having_first;
     let mut spots: Vec<[u32; 3]> = Vec::new();
     // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
     let mut hashing = plan_keys(scan.exec.session, query);
@@ -3111,7 +3153,7 @@ fn grouped(
         Some(key) => distinct_top(session, &results, key, offset)?,
         None => None,
     };
-    let order = if quick.is_some() {
+    let mut order = if quick.is_some() {
         Vec::new()
     } else {
         // With `ORDER BY` of a count, the order has only the groups that change the heap of [`count_top`], which keeps the same groups as with the full order.
@@ -3151,11 +3193,6 @@ fn grouped(
         read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
         first_rows = Firsts::Of(wanted);
     }
-    let mut kept = vec![false; scan.exec.types.len()];
-    for &column in kept_columns {
-        kept[column] = true;
-    }
-    let tables = scan::kept_tables(query, firsts, &kept);
     // With no sort, the limit of the query takes the first groups, and the groups after them are not evaluated, as `LIMIT` over `HashAggregate` does.
     let needed = match count {
         Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
@@ -3163,6 +3200,41 @@ fn grouped(
         }
         _ => usize::MAX,
     };
+    if having_first && let Some(having) = &query.having {
+        // `HAVING` runs once for each group in the order of the groups, up to the groups that the limit needs, as in the projection.
+        let mut read: Vec<*const Aggref> = Vec::new();
+        having.find(0, &mut |e, _| {
+            if let ExprKind::Agg(agg) = &e.kind {
+                read.push(std::ptr::from_ref(&**agg));
+            }
+            None::<()>
+        });
+        let mut eval = Eval::new(params, session, &empty, cache, &[]);
+        eval.tuple = &[scan::NONE];
+        let mut passed = Vec::new();
+        for (n, &g) in order.iter().enumerate() {
+            if passed.len() >= needed {
+                break;
+            }
+            crate::interrupt(session, n)?;
+            eval.group = Group { aggs: results.group(g, Some(&read))?, ..Group::default() };
+            if eval.eval(having)? == Value::Bool(true) {
+                passed.push(g);
+            }
+        }
+        drop(eval);
+        order = passed;
+        let mut wanted = order.clone();
+        wanted.sort_unstable();
+        firsts = vec![Vec::new(); wanted.len()];
+        read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+        first_rows = Firsts::Of(wanted);
+    }
+    let mut kept = vec![false; scan.exec.types.len()];
+    for &column in kept_columns {
+        kept[column] = true;
+    }
+    let tables = scan::kept_tables(query, firsts, &kept);
     let (rows, ordered) = project(
         query,
         params,
@@ -3170,6 +3242,7 @@ fn grouped(
         cache,
         &tables,
         needed,
+        if having_first { None } else { query.having.as_ref() },
         Some((order, results, first_rows, chosen)),
         offset,
         count,
