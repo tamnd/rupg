@@ -81,6 +81,8 @@ struct Dfa {
     closed: Vec<Vec<(u8, u32, bool)>>,
     /// For each closed state and ASCII character, the closure with the mask 0 of the step, with [`MATCHED`] set when it has `Match`, or [`UNKNOWN`].
     fast: Vec<u32>,
+    /// For each closed state and ASCII character, as [`Dfa::fast`] with the mask of the end of the string, for the last character of a walk with no constraint of words or lines.
+    last: Vec<u32>,
     /// For each closed state, the ASCII characters whose step with the mask 0 gives the same state with no `Match`, by bit.
     loops: Vec<u128>,
     /// The steps of the closed states after the characters.
@@ -130,6 +132,7 @@ impl Dfa {
         self.states.push(pcs);
         self.closed.push(Vec::new());
         self.fast.extend([UNKNOWN; 128]);
+        self.last.extend([UNKNOWN; 128]);
         self.loops.push(0);
         self.same.push(0);
         self.skips.push(0);
@@ -371,9 +374,9 @@ impl Program {
     }
 
     /// [`Program::ends`] with the DFA. The threads of the backtracking machine reach the same pairs of instruction and position, so the ends are the same.
-    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize, ends: &mut [bool]) {
+    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize, ends: &mut [u64]) {
         self.walk(dfa, s, start, |pos| {
-            ends[pos] = true;
+            ends[pos / 64] |= 1 << (pos % 64);
             false
         });
     }
@@ -405,6 +408,33 @@ impl Program {
         let ends_only = self.asserts == 0 || (self.asserts & 0xf0 == 0 && !self.nlanch);
         let mut pos = start;
         while pos < s.len() {
+            if ends_only {
+                // The steps that the DFA knows for ASCII characters before the last character, with no other work. A step that keeps a state goes to the full loop when the state still learns or when each character keeps it, so that the walk can skip the characters.
+                let last = s.len() - 1;
+                while pos < last && (state != dead || dfa.restart) {
+                    let c = s[pos];
+                    if c >= 128 {
+                        break;
+                    }
+                    let known = dfa.fast[state as usize * 128 + c as usize];
+                    if known == UNKNOWN {
+                        break;
+                    }
+                    if known == state {
+                        let at = state as usize;
+                        if dfa.skips[at] < LEARN
+                            || (dfa.loops[at] == u128::MAX && dfa.same[at] == 3)
+                        {
+                            break;
+                        }
+                    }
+                    state = known & !MATCHED;
+                    pos += 1;
+                    if known & MATCHED != 0 && hit(pos) {
+                        return Some(pos);
+                    }
+                }
+            }
             if state == dead && !dfa.restart {
                 break;
             }
@@ -428,6 +458,7 @@ impl Program {
             let mask = if ends_only && pos + 1 < s.len() { 0 } else { self.mask(s, pos + 1) };
             let key = if c >= 128 && self.wide_same(dfa, state) { WIDE } else { c };
             let known = match c {
+                0..128 if mask != 0 && ends_only => dfa.last[state as usize * 128 + c as usize],
                 _ if mask != 0 => UNKNOWN,
                 0..128 => dfa.fast[state as usize * 128 + c as usize],
                 _ => dfa.wide.get(&(state, key)).copied().unwrap_or(UNKNOWN),
@@ -435,6 +466,11 @@ impl Program {
             let matched = if known == UNKNOWN && mask != 0 {
                 let next = self.step(dfa, state, c);
                 let (closed, matched) = self.closure(dfa, next, mask);
+                if ends_only && c < 128 {
+                    // With no constraint of words or lines, the mask is the same at each end of a string.
+                    dfa.last[state as usize * 128 + c as usize] =
+                        closed | if matched { MATCHED } else { 0 };
+                }
                 state = closed;
                 matched
             } else if known == UNKNOWN {
@@ -611,12 +647,14 @@ impl Program {
         (from..=last).find(|&start| search.run(0, start, None, visited.as_mut(), None))
     }
 
-    /// The ends of the matches from `start` into `ends`, which has an item for each position and no true item: the item at a position becomes true when a match ends there.
-    pub(super) fn ends(&self, s: &[u32], start: usize, ends: &mut [bool]) {
+    /// The ends of the matches from `start` into `ends`, which has a bit for each position and no bit set: the bit of a position becomes set when a match ends there.
+    pub(super) fn ends(&self, s: &[u32], start: usize, ends: &mut [u64]) {
         if let Some(dfa) = &self.dfa {
             return self.dfa_ends(&mut dfa.borrow_mut(), s, start, ends);
         }
-        ends.copy_from_slice(&self.track_ends(s, start));
+        for (pos, _) in self.track_ends(s, start).iter().enumerate().filter(|(_, end)| **end) {
+            ends[pos / 64] |= 1 << (pos % 64);
+        }
     }
 
     /// [`Program::ends`] with the backtracking machine.
@@ -859,8 +897,11 @@ mod tests {
                     }
                     for start in 0..=s.len() {
                         let want = program.track_ends(&s, start);
-                        let mut got = vec![false; s.len() + 1];
-                        program.dfa_ends(&mut dfa.borrow_mut(), &s, start, &mut got);
+                        let mut bits = vec![0; super::super::tree::words(s.len())];
+                        program.dfa_ends(&mut dfa.borrow_mut(), &s, start, &mut bits);
+                        let got: Vec<bool> = (0..=s.len())
+                            .map(|pos| bits[pos / 64] >> (pos % 64) & 1 != 0)
+                            .collect();
                         assert_eq!(got, want, "{pattern} on {string:?} from {start}");
                     }
                 }

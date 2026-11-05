@@ -2,6 +2,7 @@
 //!
 //! The parser gives a tree of nodes, and this module builds from it the tree of `parse`, `parsebranch` and `parseqatom`, with the same flags of preference. Each node of the tree has its own program, which the dissection runs in place of the DFA of the node: the program tells where a match of the node can end. A back reference in such a program is the text of its group without the constraints, as `dupnfa` and `removeconstraints` make it. Thus the program accepts more than the node, and the dissection checks each back reference.
 
+use std::cell::RefCell;
 use std::hash::BuildHasherDefault;
 
 use super::exec::{FxMap, Program};
@@ -114,7 +115,15 @@ pub(super) struct Tree {
     progs: Vec<Program>,
     groups: usize,
     icase: bool,
+    /// The map and the arena of the last [`Dissect`] of [`Tree::find`], which the next search uses again with no allocation.
+    scratch: RefCell<Scratch>,
 }
+
+/// The ends of the programs of a dissection: the place of each program and start in the arena, and the arena.
+type Scratch = (FxMap<(usize, usize), usize>, Vec<u64>);
+
+/// The largest arena that [`Tree::scratch`] keeps, in words.
+const MAX_SCRATCH: usize = 1 << 20;
 
 /// The state of the builder of a tree.
 struct Builder {
@@ -296,7 +305,13 @@ impl Tree {
         let mut root = builder.parse(&parsed.node)?;
         let mut progs = Vec::new();
         builder.finish(&mut root, &mut progs, parsed)?;
-        Ok(Tree { root, progs, groups: parsed.groups, icase: parsed.cflags & flags::ICASE != 0 })
+        Ok(Tree {
+            root,
+            progs,
+            groups: parsed.groups,
+            icase: parsed.cflags & flags::ICASE != 0,
+            scratch: RefCell::default(),
+        })
     }
 
     /// `cfindloop`: the leftmost match from `from` for a pattern with back references. The search finds the first end of a match of the program of the root, then tries each start up to that end. When no start gives a match, the search goes on after the end, but only while that position is before the end of the text, so a match that starts at the end of the text is found only by the first search.
@@ -327,7 +342,20 @@ impl Tree {
 
     /// `cfindloop`: the positions of the leftmost match that starts at `begin`, the longest or the shortest as the root prefers.
     pub(super) fn find(&self, s: &[u32], begin: usize) -> Option<Groups> {
-        let mut d = Dissect::new(self, s, vec![None; self.groups + 1]);
+        let (mut ends, mut arena) = std::mem::take(&mut *self.scratch.borrow_mut());
+        ends.clear();
+        arena.clear();
+        let mut d = Dissect { tree: self, s, ends, arena, pmatch: vec![None; self.groups + 1] };
+        let found = self.find_in(&mut d, begin);
+        if d.arena.capacity() <= MAX_SCRATCH {
+            *self.scratch.borrow_mut() = (d.ends, d.arena);
+        }
+        found
+    }
+
+    /// [`Tree::find`] with the state of a dissection.
+    fn find_in<'a>(&'a self, d: &mut Dissect<'a>, begin: usize) -> Option<Groups> {
+        let s = d.s;
         let root = &self.root;
         let shorter = root.flags & SHORTER != 0;
         let (mut estart, mut estop) = (begin, s.len());
@@ -340,7 +368,7 @@ impl Tree {
             d.pmatch.fill(None);
             if d.dissect(root, begin, end) {
                 d.pmatch[0] = Some((begin, end));
-                return Some(d.pmatch);
+                return Some(std::mem::take(&mut d.pmatch));
             }
             if shorter {
                 if end == estop {
@@ -363,26 +391,26 @@ struct Dissect<'a> {
     s: &'a [u32],
     /// The ends of the matches of each program from each start.
     ends: FxMap<(usize, usize), usize>,
-    /// The ends of each program and start in [`Dissect::ends`], one item for each position of the text, from the place that the map gives.
-    arena: Vec<bool>,
+    /// The ends of each program and start in [`Dissect::ends`], one bit for each position of the text, from the word that the map gives.
+    arena: Vec<u64>,
     pmatch: Groups,
 }
 
 impl<'a> Dissect<'a> {
     fn new(tree: &'a Tree, s: &'a [u32], pmatch: Groups) -> Self {
         let ends = FxMap::with_capacity_and_hasher(8, BuildHasherDefault::default());
-        let arena = Vec::with_capacity(8 * (s.len() + 1));
+        let arena = Vec::with_capacity(8 * words(s.len()));
         Dissect { tree, s, ends, arena, pmatch }
     }
 
-    /// The ends of the matches of a node from a start.
-    fn ends(&mut self, sub: &Sub, begin: usize) -> &[bool] {
-        let width = self.s.len() + 1;
+    /// The ends of the matches of a node from a start, one bit for each position.
+    fn ends(&mut self, sub: &Sub, begin: usize) -> &[u64] {
+        let width = words(self.s.len());
         let at = match self.ends.get(&(sub.id, begin)) {
             Some(&at) => at,
             None => {
                 let at = self.arena.len();
-                self.arena.resize(at + width, false);
+                self.arena.resize(at + width, 0);
                 self.tree.progs[sub.id].ends(self.s, begin, &mut self.arena[at..]);
                 self.ends.insert((sub.id, begin), at);
                 at
@@ -393,19 +421,51 @@ impl<'a> Dissect<'a> {
 
     /// `longest`: the last end of a match of the node from `begin` that is not after `limit`.
     fn longest(&mut self, sub: &Sub, begin: usize, limit: usize) -> Option<usize> {
+        if limit < begin {
+            return None;
+        }
         let ends = self.ends(sub, begin);
-        (begin..=limit).rev().find(|&p| ends[p])
+        let (low, high) = (begin / 64, limit / 64);
+        for at in (low..=high).rev() {
+            let mut word = ends[at];
+            if at == high {
+                word &= u64::MAX >> (63 - limit % 64);
+            }
+            if at == low {
+                word &= u64::MAX << (begin % 64);
+            }
+            if word != 0 {
+                return Some(at * 64 + 63 - word.leading_zeros() as usize);
+            }
+        }
+        None
     }
 
     /// `shortest`: the first end of a match of the node from `begin` from `min` to `max`.
     fn shortest(&mut self, sub: &Sub, begin: usize, min: usize, max: usize) -> Option<usize> {
+        if max < min {
+            return None;
+        }
         let ends = self.ends(sub, begin);
-        (min..=max).find(|&p| ends[p])
+        let (low, high) = (min / 64, max / 64);
+        for (at, &word) in ends.iter().enumerate().take(high + 1).skip(low) {
+            let mut word = word;
+            if at == high {
+                word &= u64::MAX >> (63 - max % 64);
+            }
+            if at == low {
+                word &= u64::MAX << (min % 64);
+            }
+            if word != 0 {
+                return Some(at * 64 + word.trailing_zeros() as usize);
+            }
+        }
+        None
     }
 
     /// True when the node matches the text from `begin` to `end`.
     fn spans(&mut self, sub: &Sub, begin: usize, end: usize) -> bool {
-        self.ends(sub, begin)[end]
+        self.ends(sub, begin)[end / 64] >> (end % 64) & 1 != 0
     }
 
     /// `zaptreesubs`: no positions for the groups of the node.
@@ -635,6 +695,11 @@ impl<'a> Dissect<'a> {
         }
         false
     }
+}
+
+/// The number of words of a set of bits with a bit for each position of a text of `len` characters, from 0 to `len`.
+pub(super) fn words(len: usize) -> usize {
+    len / 64 + 1
 }
 
 /// The number of matches up to `max`, where `max` can be `DUPINF`.
