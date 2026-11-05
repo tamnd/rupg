@@ -5,6 +5,7 @@
 //! Lifted from `crates/rudb-pgwire/src/names.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::error::{Level, ProtocolError};
 use crate::startup::NAME_LIMIT;
@@ -13,6 +14,39 @@ const INVALID_SQL_STATEMENT_NAME: &str = "26000";
 const INVALID_CURSOR_NAME: &str = "34000";
 const DUPLICATE_CURSOR: &str = "42P03";
 const DUPLICATE_PREPARED_STATEMENT: &str = "42P05";
+
+/// A hasher for names that reads 8 bytes at a time, which costs less than SipHash on each `Bind` and `Execute`. A client can only slow its own session with names that collide.
+#[derive(Default)]
+struct NameHasher(u64);
+
+impl NameHasher {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+impl Hasher for NameHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.add(u64::from_le_bytes(*word));
+        }
+        for &byte in rest {
+            self.add(u64::from(byte));
+        }
+    }
+
+    fn write_usize(&mut self, word: usize) {
+        self.add(word as u64);
+    }
+}
+
+/// A map by name with [`NameHasher`].
+type Names<V> = HashMap<Box<[u8]>, V, BuildHasherDefault<NameHasher>>;
 
 /// The part of a name that PostgreSQL compares.
 fn key(name: &[u8]) -> &[u8] {
@@ -29,9 +63,9 @@ fn show(name: &[u8]) -> std::borrow::Cow<'_, str> {
 #[derive(Debug, Clone)]
 pub struct Statements<S> {
     unnamed: Option<S>,
-    named: HashMap<Box<[u8]>, S>,
+    named: Names<S>,
     /// The insert number of each named statement. In one bucket of the hash table, the older entry comes first.
-    born: HashMap<Box<[u8]>, u64>,
+    born: Names<u64>,
     inserts: u64,
     /// The `max_bucket` of the hash table of `prepare.c`, which starts with 32 buckets. Each `HASH_ENTER` on a table with more entries than `max_bucket` adds one bucket, and the table never gets smaller.
     max_bucket: u32,
@@ -41,8 +75,8 @@ impl<S> Default for Statements<S> {
     fn default() -> Statements<S> {
         Statements {
             unnamed: None,
-            named: HashMap::new(),
-            born: HashMap::new(),
+            named: Names::default(),
+            born: Names::default(),
             inserts: 0,
             max_bucket: 31,
         }
@@ -178,12 +212,12 @@ fn missing_statement(name: &[u8]) -> ProtocolError {
 /// The portals of a session: the unnamed portal, the named portals of `Bind`, and the cursors of `DECLARE`, which share one namespace. `Execute` can run a cursor, and `FETCH` can read a portal of `Bind`.
 #[derive(Debug, Clone)]
 pub struct Portals<P> {
-    portals: HashMap<Box<[u8]>, P>,
+    portals: Names<P>,
 }
 
 impl<P> Default for Portals<P> {
     fn default() -> Portals<P> {
-        Portals { portals: HashMap::new() }
+        Portals { portals: Names::default() }
     }
 }
 
