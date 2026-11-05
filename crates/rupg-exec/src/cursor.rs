@@ -50,6 +50,22 @@ impl Plan {
     pub fn marks(&self) -> &[u32] {
         &self.marks
     }
+
+    /// `ExecInitLockRows` for a `SELECT` with a locking clause: the plan of [`Plan::cursor`], whose rows end with the `tableoid` and the `ctid` of the row of each table with a row mark, and the strength and the wait policy of the lock of each table, in the order of [`Plan::marks`]. `None` for a query with no row mark on a table.
+    #[must_use]
+    pub fn locking(&self) -> Option<(Plan, Vec<(i32, i32)>)> {
+        let query = &self.query;
+        if query.write.is_some() {
+            return None;
+        }
+        let locks: Vec<(i32, i32)> = query
+            .row_marks
+            .iter()
+            .filter(|m| query.relations.get(m.relation).is_some_and(plain))
+            .map(|m| (m.strength.0, m.wait.0))
+            .collect();
+        (!locks.is_empty()).then(|| (self.cursor(), locks))
+    }
 }
 
 /// A target that is a system column of the relation `relation`.

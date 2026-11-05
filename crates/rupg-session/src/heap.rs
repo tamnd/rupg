@@ -167,6 +167,66 @@ struct State {
     loading: HashMap<u32, Vec<(u32, u32)>>,
     /// The empty buffer of the log of the last commit. A commit writes its log while the heap is locked, so a buffer that keeps its size lets it write with no new memory.
     log_buffer: Vec<u8>,
+    /// The row locks of `FOR UPDATE` and the other locking clauses: the transactions that lock each version, by the OID of the database, the OID of the table and the ID of the version, with the strongest strength of each (spec/11 section 11.7). A lock stays in memory only and goes at the end of its transaction.
+    row_locks: RowLocks,
+}
+
+/// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
+pub(crate) type RowStrength = u8;
+
+/// `LockTupleNoKeyExclusive`: the lock of `FOR NO KEY UPDATE`, which an `UPDATE` that changes no key column takes.
+pub(crate) const NO_KEY_UPDATE: RowStrength = 3;
+
+/// `LockTupleExclusive`: the lock of `FOR UPDATE`, which a `DELETE` and an `UPDATE` of a key column take.
+pub(crate) const UPDATE: RowStrength = 4;
+
+/// The conflicts of the row locks, as `tupleLockExtraInfo` gives them: `KEY SHARE` conflicts only with `UPDATE`, `SHARE` with `NO KEY UPDATE` and `UPDATE`, and the two updates with all the strengths.
+fn row_conflict(held: RowStrength, wanted: RowStrength) -> bool {
+    held + wanted > UPDATE
+}
+
+/// The row locks of [`State::row_locks`] by the version.
+type RowLocks = HashMap<(u32, u32, u64), Vec<(u32, RowStrength)>>;
+
+/// The transaction in progress other than `xid` that holds a lock on the version `tid` of the table `key` that conflicts with `strength`, or `None`.
+fn row_holder(
+    (locks, running): (&RowLocks, &BTreeSet<u32>),
+    key: (u32, u32),
+    tid: u64,
+    (xid, strength): (u32, RowStrength),
+) -> Option<u32> {
+    if locks.is_empty() {
+        return None;
+    }
+    locks
+        .get(&(key.0, key.1, tid))?
+        .iter()
+        .find(|&&(locker, held)| {
+            locker != xid && row_conflict(held, strength) && running.contains(&locker)
+        })
+        .map(|&(locker, _)| locker)
+}
+
+/// `HeapDetermineColumnsInfo` for the key columns: true when the new values `new` change a column of a unique index of `unique` with no expression and no predicate, which a foreign key can reference.
+fn changes_key(unique: &[Unique], old: &[Value], new: &[Value]) -> bool {
+    unique
+        .iter()
+        .filter(|index| index.derived.is_none())
+        .flat_map(|index| &index.columns)
+        .any(|&column| old.get(column) != new.get(column))
+}
+
+/// The result of [`Heap::lock_row`].
+#[derive(Debug, PartialEq)]
+pub(crate) enum RowLocked {
+    /// The transaction holds the lock.
+    Done,
+    /// The transaction `holder` is in progress and holds a lock that conflicts, or changed the version.
+    Wait(u32),
+    /// In `READ COMMITTED`, a transaction that committed after the snapshot changed the row. The statement must run again with a new snapshot.
+    Again,
+    /// The version went, or the transaction deleted it: the row is not locked.
+    Gone,
 }
 
 /// A table that a transaction in progress changed, for the log of its commit.
@@ -178,6 +238,17 @@ struct Touched {
 }
 
 impl State {
+    /// The row locks of the transaction `xid` go at its end.
+    fn unlock_rows(&mut self, xid: u32) {
+        if self.row_locks.is_empty() {
+            return;
+        }
+        self.row_locks.retain(|_, lockers| {
+            lockers.retain(|&(locker, _)| locker != xid);
+            !lockers.is_empty()
+        });
+    }
+
     /// `GetOldestNonRemovableTransactionId`: a version that a transaction before the horizon deleted, when that transaction is not in progress, is dead to each snapshot that a session holds or takes later.
     fn horizon(&self) -> u32 {
         self.running
@@ -2482,6 +2553,48 @@ impl Heap {
         }
     }
 
+    /// `heap_lock_tuple` for the transaction `xid`: a lock of the strength `strength` on the version `tid` of the table `relation`, which the snapshot of the view sees. A lock that the transaction holds with a weaker strength becomes stronger.
+    ///
+    /// # Errors
+    ///
+    /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed.
+    pub(crate) fn lock_row(
+        &self,
+        (relation, tid): (u32, u64),
+        view: &View,
+        (xid, strength): (u32, RowStrength),
+    ) -> Result<RowLocked> {
+        let mut state = self.state();
+        let State { tables, running, row_locks, .. } = &mut *state;
+        let key = (view.database, relation);
+        // A foreign table has no versions in the heap, and its rows take no lock.
+        let Some(table) = tables.get_mut(&key) else { return Ok(RowLocked::Done) };
+        let Some(at) = table.find(tid) else { return Ok(RowLocked::Done) };
+        let version = &table.versions[at];
+        match version.xmax {
+            0 => {}
+            xmax if xmax == xid => return Ok(RowLocked::Gone),
+            xmax if running.contains(&xmax) => return Ok(RowLocked::Wait(xmax)),
+            _ if view.serializable => {
+                let what = if version.next == 0 { "delete" } else { "update" };
+                return Err(Error::new(
+                    SqlState::T_R_SERIALIZATION_FAILURE,
+                    format!("could not serialize access due to concurrent {what}"),
+                ));
+            }
+            _ => return Ok(RowLocked::Again),
+        }
+        if let Some(holder) = row_holder((&*row_locks, &**running), key, tid, (xid, strength)) {
+            return Ok(RowLocked::Wait(holder));
+        }
+        let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
+        match lockers.iter_mut().find(|(locker, _)| *locker == xid) {
+            Some((_, held)) => *held = (*held).max(strength),
+            None => lockers.push((xid, strength)),
+        }
+        Ok(RowLocked::Done)
+    }
+
     /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again. When the change is done, `applied` has the index in `changes` of each row that changed, for `RETURNING`.
     ///
     /// # Errors
@@ -2505,7 +2618,8 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, toast_oids, combos, .. } = &mut *state;
+        let State { tables, running, rechecks: pending, toast_oids, combos, row_locks, .. } =
+            &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
@@ -2535,6 +2649,18 @@ impl Heap {
                 }
                 _ => return Ok(Changed::Again),
             }
+            // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
+            if !row_locks.is_empty() {
+                let strength = match &values {
+                    Some(new) if !changes_key(unique, &version.values, new) => NO_KEY_UPDATE,
+                    _ => UPDATE,
+                };
+                let locks = (&*row_locks, &**running);
+                let key = (view.database, relation);
+                if let Some(holder) = row_holder(locks, key, tid, (view.xid, strength)) {
+                    return Ok(Changed::Wait { holder, tid });
+                }
+            }
             if found.iter().any(|(old, ..)| *old == tid) {
                 continue;
             }
@@ -2553,6 +2679,17 @@ impl Heap {
             let next = values.map_or(0, |v| {
                 table.add(kept.next(), made, v, (unique, &keys), Some(old), toast_oids)
             });
+            // `compute_new_xmax_infomask`: the new version keeps the locks of the transactions in progress, so a `FOR KEY SHARE` holds after an `UPDATE` of the other columns. The old version keeps them too, for a rollback of the update.
+            if next != 0 && !row_locks.is_empty() {
+                let (database, relation) = (view.database, relation);
+                if let Some(lockers) = row_locks.get(&(database, relation, old)) {
+                    let kept: Vec<_> =
+                        lockers.iter().copied().filter(|(x, _)| running.contains(x)).collect();
+                    if !kept.is_empty() {
+                        row_locks.insert((database, relation, next), kept);
+                    }
+                }
+            }
             if let Some(at) = table.find(old) {
                 let version = &mut table.versions[at];
                 version.xmax = view.xid;
@@ -3058,6 +3195,7 @@ impl Heap {
         state.owners.remove(&xid);
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
+        state.unlock_rows(xid);
     }
 
     /// `RecordTransactionAbort`: the rows that the transaction inserted go, and the rows that it deleted stay.
@@ -3091,6 +3229,7 @@ impl Heap {
         state.owners.remove(&xid);
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
+        state.unlock_rows(xid);
     }
 
     /// `AbortSubTransaction` for the rows: the versions that the commands of `xid` from `command` on inserted go, and the versions that they deleted stay. A transaction has no transaction IDs for its subtransactions, so the command of each change tells the changes of the subtransaction from the changes before it.
