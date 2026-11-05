@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Comparisons of arrays in a collation of ICU (`<`, `<=`, `>`, `>=`, `btarraycmp`, `array_larger`, `array_smaller`, `max`, `min`, `GREATEST`, `LEAST` and a sort) and `array_sort` order the strings of the elements as the ICU collator does, as in PostgreSQL (#1371).
 - A scan of the column store tests a text column against a constant text or a parameter with `=` and `<>` on the codes of the dictionary, in the tasks of the server and in the vector scan. A `GROUP BY` finds its groups in the tasks only when the plan estimates at least two rows that pass the conditions for each group (#1370).
 - A `GROUP BY` with a sort puts the rows in a hash table and sorts only one row of each group, and the keys of a sort compare `character` values and the `=` of the integer, date, time and text types with no call (#1369).
 - A plan reads the size of an index and the range of a column from the frozen columns of a table, so that the scan after the plan does not freeze the table again. A point read that thaws a table keeps its frozen columns, and the next freeze takes them back when no row changed. A freeze that fails waits until the table has twice as many versions (#1367).

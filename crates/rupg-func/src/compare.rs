@@ -415,12 +415,23 @@ pub(crate) fn span(period: &rupg_types::Interval) -> i128 {
 
 /// `array_cmp`: the elements in order, a null element above the others, then the number of elements, the number of dimensions, the lengths and the lower bounds.
 fn array_order(left: u32, a: &Array<Value>, right: u32, b: &Array<Value>) -> Result<Ordering> {
+    array_order_by(left, a, right, b, None)
+}
+
+/// `array_cmp` with the elements in a collation of ICU when `collator` is set.
+fn array_order_by(
+    left: u32,
+    a: &Array<Value>,
+    right: u32,
+    b: &Array<Value>,
+    collator: Option<&crate::Collator>,
+) -> Result<Ordering> {
     for (x, y) in a.values.iter().zip(&b.values) {
         let order = match (x, y) {
             (None, None) => Ordering::Equal,
             (None, Some(_)) => Ordering::Greater,
             (Some(_), None) => Ordering::Less,
-            (Some(x), Some(y)) => compare(left, x, right, y)?,
+            (Some(x), Some(y)) => compare_in(collator, left, x, right, y)?,
         };
         if order.is_ne() {
             return Ok(order);
@@ -463,17 +474,33 @@ fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
         let b = Value::Array(Box::new(anyarray_array(any, call.session)?));
         return order(call, &[a.clone(), b]);
     }
-    // `varstr_cmp` in a collation of ICU, for `text`, `varchar`, `bpchar` and `name`. A `bpchar` value compares without its trailing spaces, as `bpcharcmp` does.
-    if let (Value::Text(x), Value::Text(y)) = (a, b)
-        && call.collation != 0
-        && let Some(collator) = crate::collator(call.session, call.collation)
-    {
-        let trim = |ty: u32, s: &'_ str| -> usize {
-            if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
-        };
-        return Ok(collator.compare(&x[..trim(left, x)], &y[..trim(right, y)]));
+    let collator = match call.collation {
+        0 => None,
+        collation => crate::collator(call.session, collation),
+    };
+    compare_in(collator.as_ref(), left, a, right, b)
+}
+
+/// [`compare`] in a collation of ICU when `collator` is set: `varstr_cmp` for strings of `text`, `varchar`, `bpchar` and `name`, and `array_cmp` with its elements in the collation. A `bpchar` value compares without its trailing spaces, as `bpcharcmp` does.
+pub(crate) fn compare_in(
+    collator: Option<&crate::Collator>,
+    left: u32,
+    a: &Value,
+    right: u32,
+    b: &Value,
+) -> Result<Ordering> {
+    let trim = |ty: u32, s: &'_ str| -> usize {
+        if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
+    };
+    match (collator, a, b) {
+        (Some(collator), Value::Text(x), Value::Text(y)) => {
+            Ok(collator.compare(&x[..trim(left, x)], &y[..trim(right, y)]))
+        }
+        (Some(_), Value::Array(x), Value::Array(y)) => {
+            array_order_by(element(left), x, element(right), y, collator)
+        }
+        _ => compare(left, a, right, b),
     }
-    compare(left, a, right, b)
 }
 
 /// The error of `array_cmp` for two arrays whose element types differ.

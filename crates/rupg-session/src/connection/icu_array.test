@@ -1,0 +1,153 @@
+!details
+> create table a (id int, v text[], w varchar[], c char(2)[])
+CREATE TABLE
+> insert into a values (1, '{a,b}', '{a}', '{a}'), (2, '{B}', '{B}', '{B}'), (3, '{a,B}', '{a,B}', '{a,B}'), (4, '{ä}', '{ä}', '{ä}'), (5, '{z}', '{z}', '{z}'), (6, '{a,NULL}', '{NULL}', '{NULL}'), (7, '{A}', '{A}', '{A}'), (8, null, null, null), (9, '{a}', '{a}', '{a}')
+INSERT 0 9
+> select array['a'] < array['B'] collate "en-x-icu", array['a'] < array['B'] collate "C", array['a', 'b'] collate "en-x-icu" > array['a', 'B'], array['a', 'b'] > array['a', 'B']
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t
+SELECT 1
+> select btarraycmp(array['a', 'b'], array['a', 'B'] collate "en-x-icu"), btarraycmp(array['a', 'b'], array['a', 'B']), btarraycmp(array['ä'] collate "sv-x-icu", array['z']), btarraycmp(array['ä'] collate "de-x-icu", array['z'])
+fields btarraycmp:23:4:-1,btarraycmp:23:4:-1,btarraycmp:23:4:-1,btarraycmp:23:4:-1
+row -1,1,1,-1
+SELECT 1
+> select array_larger(array['a'], array['B'] collate "en-x-icu"), array_smaller(array['a'], array['B'] collate "en-x-icu"), array_larger(array['a'], array['B']), array_smaller(array['ä'] collate "sv-x-icu", array['z'])
+fields array_larger:1009:-1:-1,array_smaller:1009:-1:-1,array_larger:1009:-1:-1,array_smaller:1009:-1:-1
+row {B},{a},{a},{z}
+SELECT 1
+> select array['a', null] < array['a', 'B'] collate "en-x-icu", array['a'] < array['a', 'B'] collate "en-x-icu", array['b'] <= array['B'] collate "en-x-icu", array['b'] >= array['B'] collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f
+SELECT 1
+> select array['a ']::char(2)[] < array['B']::char(2)[] collate "en-x-icu", btarraycmp(array['a ']::char(2)[], array['a']::char(2)[] collate "en-x-icu"), array['a']::varchar[] < array['B']::varchar[] collate "en-x-icu"
+fields ?column?:16:1:-1,btarraycmp:23:4:-1,?column?:16:1:-1
+row t,0,t
+SELECT 1
+> select greatest(array['a'], array['B'], array['Z'] collate "C"), greatest(array['a'], array['B'], array['A'] collate "en-x-icu"), least(array['a'], array['B'] collate "en-x-icu")
+fields greatest:1009:-1:-1,greatest:1009:-1:-1,least:1009:-1:-1
+row {a},{B},{a}
+SELECT 1
+> select id, v from a order by v collate "en-x-icu", id
+fields id@a.1:23:4:-1,v@a.2:1009:-1:-1
+row 9,{a}
+row 1,{a,b}
+row 3,{a,B}
+row 6,{a,NULL}
+row 7,{A}
+row 4,{ä}
+row 2,{B}
+row 5,{z}
+row 8,NULL
+SELECT 9
+> select id, v from a order by v collate "en-x-icu" desc, id
+fields id@a.1:23:4:-1,v@a.2:1009:-1:-1
+row 8,NULL
+row 5,{z}
+row 2,{B}
+row 4,{ä}
+row 7,{A}
+row 6,{a,NULL}
+row 3,{a,B}
+row 1,{a,b}
+row 9,{a}
+SELECT 9
+> select id, w from a order by w collate "sv-x-icu", id
+fields id@a.1:23:4:-1,w@a.3:1015:-1:-1
+row 1,{a}
+row 9,{a}
+row 3,{a,B}
+row 7,{A}
+row 2,{B}
+row 5,{z}
+row 4,{ä}
+row 6,{NULL}
+row 8,NULL
+SELECT 9
+> select id, c from a order by c collate "en-x-icu" nulls first, id
+fields id@a.1:23:4:-1,c@a.4:1014:-1:6
+row 8,NULL
+row 1,{"a "}
+row 9,{"a "}
+row 3,{"a ","B "}
+row 7,{"A "}
+row 4,{"ä "}
+row 2,{"B "}
+row 5,{"z "}
+row 6,{NULL}
+SELECT 9
+> select max(v collate "en-x-icu"), min(v collate "en-x-icu"), max(v), min(v), max(w collate "en-x-icu"), min(c collate "en-x-icu") from a
+fields max:1009:-1:-1,min:1009:-1:-1,max:1009:-1:-1,min:1009:-1:-1,max:1015:-1:-1,min:1014:-1:-1
+row {z},{a},{ä},{A},{NULL},{"a "}
+SELECT 1
+> select id from a where v collate "en-x-icu" > array['a', 'b'] order by id
+fields id@a.1:23:4:-1
+row 2
+row 3
+row 4
+row 5
+row 6
+row 7
+SELECT 6
+> select id, max(v collate "en-x-icu") over (order by id) from a order by id
+fields id@a.1:23:4:-1,max:1009:-1:-1
+row 1,{a,b}
+row 2,{B}
+row 3,{B}
+row 4,{B}
+row 5,{z}
+row 6,{z}
+row 7,{z}
+row 8,{z}
+row 9,{z}
+SELECT 9
+> select array_sort(array['b', 'A', 'a', 'B', 'ä', 'z'] collate "en-x-icu"), array_sort(array['b', 'A', 'a', 'B', 'ä', 'z']), array_sort(array['b', 'ä', 'z'] collate "sv-x-icu", true), array_sort(array['b', null, 'A'] collate "en-x-icu", false, true)
+fields array_sort:1009:-1:-1,array_sort:1009:-1:-1,array_sort:1009:-1:-1,array_sort:1009:-1:-1
+row {a,A,ä,b,B,z},{A,B,a,b,z,ä},{ä,z,b},{NULL,A,b}
+SELECT 1
+> select array_sort(array[['b', 'x'], ['B', 'y'], ['a', 'z']] collate "en-x-icu"), array_sort(array[['b', 'x'], ['B', 'y'], ['a', 'z']])
+fields array_sort:1009:-1:-1,array_sort:1009:-1:-1
+row {{a,z},{b,x},{B,y}},{{B,y},{a,z},{b,x}}
+SELECT 1
+> create table b as select id, v collate "en-x-icu" as v from a
+SELECT 9
+> select id from b order by v, id
+fields id@b.1:23:4:-1
+row 9
+row 1
+row 3
+row 6
+row 7
+row 4
+row 2
+row 5
+row 8
+SELECT 9
+> select id from b where v < array['b'] order by id
+fields id@b.1:23:4:-1
+row 1
+row 3
+row 4
+row 6
+row 7
+row 9
+SELECT 6
+> select distinct v from b order by v
+fields v@b.2:1009:-1:-1
+row {a}
+row {a,b}
+row {a,B}
+row {a,NULL}
+row {A}
+row {ä}
+row {B}
+row {z}
+row NULL
+SELECT 9
+> select v collate "en-x-icu" < any (array[array['B'], array['b']]) from a where id = 1
+ERROR 42883 operator does not exist: text[] < text at 29
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> select array['a'] < array[1]
+ERROR 42883 operator does not exist: text[] < integer[] at 19
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
