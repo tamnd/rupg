@@ -632,7 +632,7 @@ impl<'a> Deparser<'a> {
                     self.close();
                 }
             }
-            ExprKind::ScalarArrayOp { func, any, args } => {
+            ExprKind::ScalarArrayOp { func, any, args, .. } => {
                 self.open();
                 self.paren(&args[0], true, e)?;
                 let element = builtin::type_by_oid(args[1].ty).map_or(0, |t| t.elem);

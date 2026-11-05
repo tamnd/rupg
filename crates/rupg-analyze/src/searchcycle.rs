@@ -375,7 +375,10 @@ pub(crate) fn rewrite(
         let eq = builtin::operator_by_oid(RECORD_EQ_OP).map_or(0, |o| o.code);
         let path_var = var(0, path, oid::RECORD_ARRAY, -1);
         let args = vec![row(row_of(&c.columns, columns)), path_var];
-        let found = Expr::new(ExprKind::ScalarArrayOp { func: eq, any: true, args }, oid::BOOL);
+        let found = Expr::new(
+            ExprKind::ScalarArrayOp { func: eq, any: true, args, collation: 0 },
+            oid::BOOL,
+        );
         let case = Case {
             arg: None,
             whens: vec![(found, c.value.clone())],

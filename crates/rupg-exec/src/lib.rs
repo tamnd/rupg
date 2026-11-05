@@ -3117,7 +3117,9 @@ impl<'a> Eval<'a> {
                 };
                 Ok(Value::Bool(distinct != *not))
             }
-            ExprKind::ScalarArrayOp { func, any, args } => self.scalar_array_op(*func, *any, args),
+            ExprKind::ScalarArrayOp { func, any, args, collation } => {
+                self.scalar_array_op(*func, *any, args, *collation)
+            }
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
             ExprKind::Row(args, _) => {
                 let values = args.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
@@ -4149,14 +4151,23 @@ impl<'a> Eval<'a> {
     fn row_compare(&mut self, rc: &RowCompare) -> Result<Value> {
         let mut order = 0;
         for (op, &compare) in rc.ops.iter().zip(&rc.compares) {
-            let ExprKind::Func(Func { args, .. }) = &op.kind else {
+            let ExprKind::Func(Func { args, collation, .. }) = &op.kind else {
                 return Err(Error::internal("a row comparison that is not an operator"));
             };
             let [left, right] = args.as_slice() else {
                 return Err(Error::internal("a row comparison operator needs two arguments"));
             };
             let pair = [self.eval(left)?, self.eval(right)?];
-            order = match self.call(compare, &[left.ty, right.ty], oid::INT4, false, &pair)? {
+            let types = [left.ty, right.ty];
+            // `inputcollids`: the comparison of each pair of fields has the collation of its operator.
+            let order_of = if *collation == 0 {
+                self.call(compare, &types, oid::INT4, false, &pair)?
+            } else if pair.iter().any(Value::is_null) {
+                Value::Null
+            } else {
+                self.collated(compare, &types, oid::INT4, false, *collation, &pair)?
+            };
+            order = match order_of {
                 Value::Int4(order) => order,
                 Value::Null => return Ok(Value::Null),
                 _ => return Err(Error::internal("a comparison function that is not int4")),
@@ -4169,7 +4180,13 @@ impl<'a> Eval<'a> {
     }
 
     /// `x op ANY (array)` and `x op ALL (array)`, as `ExecEvalScalarArrayOp` gives them.
-    fn scalar_array_op(&mut self, func: u32, any: bool, args: &[Expr]) -> Result<Value> {
+    fn scalar_array_op(
+        &mut self,
+        func: u32,
+        any: bool,
+        args: &[Expr],
+        collation: u32,
+    ) -> Result<Value> {
         let [left, right] = args else {
             return Err(Error::internal("ANY and ALL need two arguments"));
         };
@@ -4193,8 +4210,13 @@ impl<'a> Eval<'a> {
             let result = match item {
                 None if is_strict => None,
                 item => {
-                    let item = item.clone().unwrap_or(Value::Null);
-                    self.call(func, &types, oid::BOOL, false, &[scalar.clone(), item])?.as_bool()
+                    let pair = [scalar.clone(), item.clone().unwrap_or(Value::Null)];
+                    let result = if collation == 0 {
+                        self.call(func, &types, oid::BOOL, false, &pair)?
+                    } else {
+                        self.collated(func, &types, oid::BOOL, false, collation, &pair)?
+                    };
+                    result.as_bool()
                 }
             };
             match result {

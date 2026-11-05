@@ -47,7 +47,7 @@ fn binary_tid(expr: &Expr, r: usize) -> Option<u32> {
 /// `RestrictInfoIsTidQual`: `ctid = value`, `ctid = ANY (array)` and `CURRENT OF` of the table `r`.
 fn tid_qual(expr: &Expr, r: usize) -> bool {
     match &expr.kind {
-        ExprKind::ScalarArrayOp { func, any: true, args } => {
+        ExprKind::ScalarArrayOp { func, any: true, args, .. } => {
             let [left, array] = args.as_slice() else { return false };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
             is_ctid(left, r)

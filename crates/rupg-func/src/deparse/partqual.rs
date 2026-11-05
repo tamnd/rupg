@@ -232,6 +232,7 @@ fn list_qual(
             func: op.code,
             any: true,
             args: vec![key_argument(column), array],
+            collation: 0,
         }))
     } else {
         let ops = elems.into_iter().map(|e| op_clause(column, EQUAL, e));

@@ -306,7 +306,9 @@ pub(crate) fn selectivity_by(expr: &Expr, est: &dyn Estimate) -> f64 {
             };
             if *not { sel } else { 1.0 - sel }
         }
-        ExprKind::ScalarArrayOp { func, any, args } => array_selectivity(*func, *any, args, est),
+        ExprKind::ScalarArrayOp { func, any, args, .. } => {
+            array_selectivity(*func, *any, args, est)
+        }
         // `rowcomparesel`: the operator of the first pair.
         ExprKind::RowCompare(rc) => rc.ops.first().map_or(INEQ_SEL, each),
         // `CURRENT OF` gives at most one row of its table.
@@ -1392,7 +1394,7 @@ pub(crate) fn qual_costs<'a>(
             out.1 += sub.per_call;
             return;
         }
-        if let ExprKind::ScalarArrayOp { func, any, args } = &expr.kind {
+        if let ExprKind::ScalarArrayOp { func, any, args, .. } = &expr.kind {
             let (startup, per_row) = array_op_cost(*func, *any, args);
             out.0 += startup;
             out.1 += per_row;
@@ -1416,7 +1418,7 @@ pub(crate) fn qual_costs<'a>(
 /// The cost of the node of an expression for each row, without its children, in units of `cpu_operator_cost`, as `cost_qual_eval_walker` adds it. A call costs its `procost`, and `x op ANY (array)` costs its operator for half of the items of the array, or one hash and one comparison for a constant array of 9 items or more.
 pub fn node_cost(expr: &Expr) -> f64 {
     match &expr.kind {
-        ExprKind::ScalarArrayOp { func, any, args } => {
+        ExprKind::ScalarArrayOp { func, any, args, .. } => {
             array_op_cost(*func, *any, args).1 / CPU_OPERATOR
         }
         _ => expr.own_cost(),

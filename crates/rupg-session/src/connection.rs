@@ -7850,6 +7850,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_minmax.test")));
     }
 
+    /// `ANY` and `ALL` with an order and the comparison of rows in a collation of ICU: of `text` and `bpchar` with an explicit `COLLATE` on either side, a column of a table in a collation of ICU, a different collation for each field of a row, a null field, `NOT`, the numeric order of `kn`, a view, a prepared statement, and indexes that order the bytes. `connection/icu_any_row.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_any_row() {
+        big_stack(|| script(include_str!("connection/icu_any_row.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {
