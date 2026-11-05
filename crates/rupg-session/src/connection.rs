@@ -4318,6 +4318,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/group_none_tasks.test")));
     }
 
+    /// The tasks of the server and the vector scan test a text column of codes against a constant text on the codes, with the result of Postgres for a null, an empty text, a text that the table does not have, a text of a later insert and a parameter.
+    #[test]
+    fn text_filter_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/text_filter_tasks.test")));
+    }
+
     /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.
     #[test]
     fn group_code_places() {

@@ -2402,20 +2402,11 @@ impl Scan<'_, '_> {
                     if *verdict == Verdict::All {
                         continue;
                     }
-                    // A condition that the zones test runs on the decoded integers of its column, with no copy of the values of the rows.
+                    // A condition that the zones test runs on the decoded integers or codes of its column, with no copy of the values of the rows.
                     if let Some((place, test)) = test {
                         self.exec.decode(&mut batch, *place)?;
-                        if let Some(Decoded { data: DecodedData::Int(values), nulls }) =
-                            &batch.decoded[*place]
-                        {
-                            next.clear();
-                            let null = |i: u32| nulls.as_ref().is_some_and(|n| n[i as usize]);
-                            next.extend(
-                                sel.iter()
-                                    .copied()
-                                    .filter(|&i| passes(test, null(i), values[i as usize])),
-                            );
-                            std::mem::swap(&mut sel, &mut next);
+                        if let Some(decoded) = &batch.decoded[*place] {
+                            groups::keep(test, decoded, &mut sel);
                             continue;
                         }
                     }
@@ -2463,6 +2454,34 @@ impl Exec<'_> {
             ExprKind::NullTest(arg, is_null) => {
                 let place = place(arg)?;
                 Some((place, if *is_null { Test::IsNull } else { Test::IsNotNull }))
+            }
+            // A text column of codes equal or not equal to a constant text: the test is on the code of the text, as in the vector `texteq` of the scan. The zones of codes hold ranks of the sorted base, and the rank of a base code is the code, so the zones test the code. A text that is not in the dictionary has the code `MISSING`, which no row has.
+            ExprKind::Func(func)
+                if !func.retset && matches!(src(func.oid), "texteq" | "textne") =>
+            {
+                fn text<'a>(e: &'a Expr, params: &'a [Value]) -> Option<&'a [u8]> {
+                    let value = match &e.kind {
+                        ExprKind::Const(value) => value,
+                        ExprKind::Param(n) => params.get(n.wrapping_sub(1))?,
+                        _ => return None,
+                    };
+                    match value {
+                        Value::Text(t) => Some(t.as_bytes()),
+                        _ => None,
+                    }
+                }
+                let [a, b] = func.args.as_slice() else { return None };
+                let (place, text) = match (place(a), text(b, self.params)) {
+                    (Some(p), Some(t)) => (p, t),
+                    _ => (place(b)?, text(a, self.params)?),
+                };
+                let stored = &self.stored[place];
+                if stored.kind != Kind::Text || stored.kind.store() != Store::Code {
+                    return None;
+                }
+                let code = stored.dict.as_ref()?.find(text);
+                let key = rupg_summary::key::int(i64::from(code));
+                Some((place, if src(func.oid) == "texteq" { Test::Eq(key) } else { Test::Ne(key) }))
             }
             ExprKind::Func(func) if !func.retset => {
                 let src = src(func.oid);
@@ -2653,20 +2672,21 @@ fn grouped(
         // The summary answers some segments of a scan with no keys, which the tasks then do not read again.
         Some(tasks) if scan.open && !scan.answered.contains(&true) => {
             let estimate = session_groups(session, query);
-            (estimate.saturating_mul(groups::GROUP_ROWS) <= rows)
-                .then(|| {
-                    parallel_plan(
-                        scan.exec,
-                        &keys,
-                        &aggs,
-                        &bases,
-                        scan.conds,
-                        rows,
-                        tasks.parallelism(),
-                    )
-                })
-                .flatten()
-                .map(|plan| (tasks, plan))
+            (estimate.saturating_mul(groups::GROUP_ROWS) <= rows
+                && estimate.saturating_mul(groups::GROUP_INPUT) <= session_input(session, query))
+            .then(|| {
+                parallel_plan(
+                    scan.exec,
+                    &keys,
+                    &aggs,
+                    &bases,
+                    scan.conds,
+                    rows,
+                    tasks.parallelism(),
+                )
+            })
+            .flatten()
+            .map(|plan| (tasks, plan))
         }
         _ => None,
     };
@@ -3776,6 +3796,15 @@ fn session_groups(session: &dyn Session, query: &Query) -> usize {
         .hash_tables(query)
         .and_then(|t| t.group.as_ref().map(|g| g.groups as usize))
         .unwrap_or(0)
+}
+
+/// The rows that the hash table of the groups of the plan reads by the estimate of the plan, or `usize::MAX` when the plan has no such table.
+fn session_input(session: &dyn Session, query: &Query) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    session
+        .hash_tables(query)
+        .and_then(|t| t.group.as_ref().map(|g| g.input as usize))
+        .unwrap_or(usize::MAX)
 }
 
 /// The places in `GROUP BY` and the types of the keys of the hash table of the `HashAggregate` of the plan, or `None` when the plan has no such table.

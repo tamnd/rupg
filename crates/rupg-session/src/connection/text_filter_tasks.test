@@ -1,0 +1,83 @@
+> CREATE TABLE tf (u int, s text, k int)
+CREATE TABLE
+> INSERT INTO tf SELECT i, CASE WHEN i % 11 = 0 THEN NULL WHEN i % 5 = 0 THEN '' ELSE 'p' || (i % 97) END, i % 13 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> INSERT INTO tf SELECT 300000 + i, 'new' || (i % 3), i % 13 FROM generate_series(1, 5000) i
+INSERT 0 5000
+> ANALYZE tf
+ANALYZE
+> SELECT count(*) FROM tf WHERE s <> ''
+fields count:20:8:-1
+row 223182
+SELECT 1
+> SELECT count(*) FROM tf WHERE s = 'p5'
+fields count:20:8:-1
+row 2249
+SELECT 1
+> SELECT count(*), sum(u) FROM tf WHERE s = 'absent'
+fields count:20:8:-1,sum:20:8:-1
+row 0,NULL
+SELECT 1
+> SELECT count(*) FROM tf WHERE s <> 'absent'
+fields count:20:8:-1
+row 277728
+SELECT 1
+> SELECT count(*) FROM tf WHERE 'new1' = s
+fields count:20:8:-1
+row 1667
+SELECT 1
+> SELECT k, count(*) FROM tf WHERE s <> '' GROUP BY k ORDER BY k
+fields k@tf.3:23:4:-1,count:20:8:-1
+row 0,17167
+row 1,17168
+row 2,17169
+row 3,17169
+row 4,17168
+row 5,17168
+row 6,17169
+row 7,17167
+row 8,17169
+row 9,17168
+row 10,17166
+row 11,17167
+row 12,17167
+SELECT 13
+> SELECT s, count(*) FROM tf WHERE s <> '' AND k = 3 GROUP BY s ORDER BY 2 DESC, 1 LIMIT 5
+fields s@tf.2:25:-1:-1,count:20:8:-1
+row p13,175
+row p49,175
+row p85,175
+row p10,174
+row p14,174
+SELECT 5
+> SELECT u FROM tf WHERE s = 'new2' ORDER BY u DESC LIMIT 3
+fields u@tf.1:23:4:-1
+row 305000
+row 304997
+row 304994
+SELECT 3
+> SELECT count(*) FROM tf WHERE s = NULL
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(DISTINCT s) FROM tf WHERE s <> 'p1'
+fields count:20:8:-1
+row 100
+SELECT 1
+> SELECT min(u), max(u) FROM tf WHERE s = '' AND u > 1000
+fields min:23:4:-1,max:23:4:-1
+row 1005,300000
+SELECT 1
+> SELECT k, count(*) FROM tf WHERE s = 'absent' GROUP BY k
+fields k@tf.3:23:4:-1,count:20:8:-1
+SELECT 0
+> PREPARE p(text) AS SELECT count(*) FROM tf WHERE s = $1
+PREPARE
+> EXECUTE p('p7')
+fields count:20:8:-1
+row 2251
+SELECT 1
+> EXECUTE p('nothing')
+fields count:20:8:-1
+row 0
+SELECT 1

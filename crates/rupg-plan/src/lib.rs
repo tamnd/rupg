@@ -397,6 +397,8 @@ pub struct Table<'q> {
 pub struct HashTable {
     /// `numGroups`.
     pub groups: f64,
+    /// The rows that the node reads by the estimate of the plan: the `plan_rows` of its first child.
+    pub input: f64,
     /// The targets of the keys in the order of the hash. For a set operation, the columns.
     pub keys: Vec<usize>,
     /// For `INTERSECT` and `EXCEPT`, true when the table has the rows of the right side.
