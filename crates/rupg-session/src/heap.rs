@@ -5,7 +5,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{self, AtomicU32};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use rupg_analyze::{Derived, Unique};
 use rupg_column::segment::{Kind, ROWS};
@@ -125,7 +125,8 @@ const LOG_BUFFER: usize = 1 << 20;
 /// The rows of the tables of all the databases, and the transactions that are in progress.
 #[derive(Debug, Default)]
 pub(crate) struct Heap {
-    state: Mutex<State>,
+    /// The state of the heap. A point read of a key whose table needs no change takes a read lock, so that the point reads of many sessions do not wait for each other. Each other use takes the write lock.
+    state: RwLock<State>,
     /// The snapshot of the state, which each change of `nextXid`, of the transactions in progress or of `latestCompletedXid` writes while the state is locked, or `None` until the first change. [`Heap::held_snapshot_in`] takes it and sets the `xmin` of a session under this lock only, so that a statement does not wait for the state. A horizon reads the `xmin` of the sessions under this lock too, so it sees each `xmin` that a snapshot before it set, and a later snapshot is newer than the horizon.
     published: Mutex<Option<Snapshot>>,
     /// The tasks of the server, which encode the columns of a load at the same time, or `None` to encode them on the thread of the session.
@@ -1812,8 +1813,13 @@ impl Heap {
         self.tasks = tasks;
     }
 
-    fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    fn state(&self) -> RwLockWriteGuard<'_, State> {
+        self.state.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A read lock of the state, for a read that does not change it.
+    fn state_read(&self) -> RwLockReadGuard<'_, State> {
+        self.state.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The lock of [`Heap::published`]. A thread that holds the state takes it after the state.
@@ -1836,7 +1842,7 @@ impl Heap {
         table: (u32, u32),
         unique: &[Unique],
         derive: Derive<'_>,
-    ) -> Result<(MutexGuard<'_, State>, Vec<usize>)> {
+    ) -> Result<(RwLockWriteGuard<'_, State>, Vec<usize>)> {
         // The maps that this call makes, by the place of the key in `unique`, with the address of the values of each version whose key the map has, as an abort and a new try of a write can give a new version the ID of an old one.
         let mut made: Vec<(usize, KeyMap, HashMap<u64, usize>)> = Vec::new();
         loop {
@@ -2155,6 +2161,37 @@ impl Heap {
         key: &[Value],
         mut each: impl FnMut(&Version, &HashMap<u64, u32>) -> T,
     ) -> Option<Vec<T>> {
+        // A table with its versions in memory and a map of the key needs no change for a key with at most one version, so the read lock is sufficient. A key with more versions prunes its list under the write lock.
+        {
+            let state = self.state_read();
+            let Some(table) = state.tables.0.get(&(view.database, relation)) else {
+                return Some(Vec::new());
+            };
+            let ready = table.cold.is_none() && table.frozen.is_none();
+            let map = table.keys.iter().find(|map| {
+                !map.stale
+                    && map.derived.is_none()
+                    && map.columns == columns
+                    && map.types == types
+                    && map.nulls_not_distinct == nulls_not_distinct
+            });
+            if ready && let Some(map) = map {
+                let Some(hash) = map.hash_key(key) else {
+                    return Some(Vec::new());
+                };
+                let found = map.hashes.get(&hash).map_or(&[][..], Tids::as_slice);
+                if let [] | [_] = found {
+                    return Some(
+                        found
+                            .iter()
+                            .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
+                            .filter(|version| visible(version, view))
+                            .map(|version| each(version, &table.combos))
+                            .collect(),
+                    );
+                }
+            }
+        }
         let mut guard = self.state();
         let state = &mut *guard;
         let horizon = {
@@ -3468,7 +3505,7 @@ impl Heap {
             }
             state.tables.0.insert(key, table);
         }
-        Ok(Heap { state: Mutex::new(state), published: Mutex::default(), tasks: None })
+        Ok(Heap { state: RwLock::new(state), published: Mutex::default(), tasks: None })
     }
 
     /// The versions of a table whose values are in encoded columns.
