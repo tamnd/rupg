@@ -225,3 +225,64 @@ SELECT 3
 fields count:20:8:-1
 row 26878
 SELECT 1
+> CREATE TABLE gc (a int, b int, c int, e int, r text, u text)
+CREATE TABLE
+> INSERT INTO gc SELECT i % 3, i % 4, CASE WHEN i % 17 = 0 THEN NULL ELSE i % 5 END, i % 2, CASE WHEN i % 19 = 0 THEN NULL WHEN i % 23 = 0 THEN '' ELSE 'r' || (i % 7) END, 'u' || (i % 11) FROM generate_series(1, 150000) i
+INSERT 0 150000
+> SELECT a, b, c, CASE WHEN (a = 0 AND b = 1) THEN r ELSE '' END AS s, u, count(*) AS n FROM gc GROUP BY 1, 2, 3, 4, 5 ORDER BY n DESC, 1, 2, 3, 4, 5 LIMIT 6
+fields a@gc.1:23:4:-1,b@gc.2:23:4:-1,c@gc.3:23:4:-1,s:25:-1:-1,u@gc.6:25:-1:-1,n:20:8:-1
+row 0,0,0,,u4,215
+row 0,0,1,,u3,215
+row 0,0,1,,u8,215
+row 0,0,2,,u0,215
+row 0,0,2,,u6,215
+row 0,0,3,,u4,215
+SELECT 6
+> SELECT a, b, c, CASE WHEN (a = 0 AND b = 1) THEN r ELSE '' END AS s, u, count(*) AS n FROM gc GROUP BY 1, 2, 3, 4, 5 ORDER BY n, 1, 2, 3, 4, 5 LIMIT 3 OFFSET 100
+fields a@gc.1:23:4:-1,b@gc.2:23:4:-1,c@gc.3:23:4:-1,s:25:-1:-1,u@gc.6:25:-1:-1,n:20:8:-1
+row 0,1,4,,u9,9
+row 0,1,NULL,r0,u1,9
+row 0,1,NULL,r0,u10,9
+SELECT 3
+> SELECT CASE WHEN c > 2 THEN b ELSE -1 END AS k, count(*), sum(a) FROM gc WHERE a <> 1 GROUP BY 1 ORDER BY 1
+fields k:23:4:-1,count:20:8:-1,sum:20:8:-1
+row -1,62352,62352
+row 0,9412,9412
+row 1,9412,9412
+row 2,9412,9412
+row 3,9412,9412
+SELECT 5
+> SELECT CASE WHEN c IN (1, 3) THEN u END AS k, count(*) FROM gc GROUP BY 1 ORDER BY 1 NULLS FIRST
+fields k:25:-1:-1,count:20:8:-1
+row NULL,93529
+row u0,5135
+row u1,5134
+row u10,5133
+row u2,5134
+row u3,5135
+row u4,5132
+row u5,5134
+row u6,5134
+row u7,5132
+row u8,5135
+row u9,5133
+SELECT 12
+> SELECT a, b, e, c, u, 7 AS k, NULL::int AS z, count(*) AS n FROM gc GROUP BY 1, 2, 3, 4, 5, 6, 7 ORDER BY n DESC, 1, 2, 3, 4, 5 LIMIT 4
+fields a@gc.1:23:4:-1,b@gc.2:23:4:-1,e@gc.4:23:4:-1,c@gc.3:23:4:-1,u@gc.6:25:-1:-1,k:23:4:-1,z:23:4:-1,n:20:8:-1
+row 0,0,0,0,u4,7,NULL,215
+row 0,0,0,1,u3,7,NULL,215
+row 0,0,0,1,u8,7,NULL,215
+row 0,0,0,2,u0,7,NULL,215
+SELECT 4
+> SELECT CASE WHEN c = 2 THEN r ELSE '' END AS s, count(*) FROM gc GROUP BY 1 ORDER BY 1 NULLS FIRST
+fields s:25:-1:-1,count:20:8:-1
+row NULL,1486
+row ,122927
+row r0,3657
+row r1,3654
+row r2,3655
+row r3,3656
+row r4,3656
+row r5,3655
+row r6,3654
+SELECT 9
