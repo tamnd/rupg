@@ -1912,11 +1912,11 @@ fn project(
     let mut out = Vec::new();
     match groups {
         Some((order, results, firsts, top)) => {
-            let tuples: Vec<[usize; 1]> =
-                (0..results.groups).map(|g| [if g < firsts { g } else { scan::NONE }]).collect();
+            let tuples = firsts.tuples(results.groups);
+            let tuple = |g: usize| &tuples[firsts.place(g)];
             if let Some(top) = top {
                 for g in top {
-                    eval.tuple = &tuples[g];
+                    eval.tuple = tuple(g);
                     eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                     eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
                 }
@@ -1992,7 +1992,7 @@ fn project(
                     for row in heap.finish(&mut cmp)?.into_iter().skip(offset) {
                         let Some(&Value::Int8(g)) = row.last() else { continue };
                         let g = usize::try_from(g).unwrap_or(0);
-                        eval.tuple = &tuples[g];
+                        eval.tuple = tuple(g);
                         eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                         eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
                     }
@@ -2013,7 +2013,7 @@ fn project(
                         partial.push(row);
                         continue;
                     }
-                    eval.tuple = &tuples[g];
+                    eval.tuple = tuple(g);
                     eval.group = Group { aggs: results.group(g, Some(&read))?, ..Group::default() };
                     if let Some(having) = &query.having
                         && eval.eval(having)? != Value::Bool(true)
@@ -2031,7 +2031,7 @@ fn project(
                 for row in partial {
                     let Some(&Value::Int8(g)) = row.last() else { continue };
                     let g = usize::try_from(g).unwrap_or(0);
-                    eval.tuple = &tuples[g];
+                    eval.tuple = tuple(g);
                     eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                     eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
                 }
@@ -2042,7 +2042,7 @@ fn project(
                     break;
                 }
                 crate::interrupt(session, n)?;
-                eval.tuple = &tuples[g];
+                eval.tuple = tuple(g);
                 eval.group = Group { aggs: results.group(g, None)?, ..Group::default() };
                 if let Some(having) = &query.having
                     && eval.eval(having)? != Value::Bool(true)
@@ -2112,8 +2112,35 @@ struct Scan<'e, 'q> {
 /// The rows of the groups, the tables of the first row of each group, and true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done.
 type Grouped = (Vec<Vec<Value>>, scan::Tables, bool);
 
-/// The order of the groups, the values of the aggregates of each group, the number of groups with a first row, and the groups of the rows that [`count_top`] gives.
-type Groups<'q> = (Vec<usize>, Results<'q>, usize, Option<Vec<usize>>);
+/// The order of the groups, the values of the aggregates of each group, the groups with a first row, and the groups of the rows that [`count_top`] gives.
+type Groups<'q> = (Vec<usize>, Results<'q>, Firsts, Option<Vec<usize>>);
+
+/// The groups whose first rows the table of [`project`] has.
+enum Firsts {
+    /// The first groups, each at its place: the row of the group `g` is the row `g`.
+    All(usize),
+    /// The groups of a sorted list: the row of the group `wanted[i]` is the row `i`. A query with `LIMIT` reads the first rows of few of many groups.
+    Of(Vec<usize>),
+}
+
+impl Firsts {
+    /// The tuples of the groups for [`Firsts::place`], with a last tuple of no row for the groups with no first row.
+    fn tuples(&self, groups: usize) -> Vec<[usize; 1]> {
+        let rows = match self {
+            Firsts::All(rows) => (*rows).min(groups),
+            Firsts::Of(wanted) => wanted.len(),
+        };
+        (0..rows).map(|row| [row]).chain([[scan::NONE]]).collect()
+    }
+
+    /// The place of the tuple of the group `g` in [`Firsts::tuples`].
+    fn place(&self, g: usize) -> usize {
+        match self {
+            Firsts::All(rows) => g.min(*rows),
+            Firsts::Of(wanted) => wanted.binary_search(&g).unwrap_or(wanted.len()),
+        }
+    }
+}
 
 /// For `ORDER BY` of one count with `LIMIT`, as the sort of [`project`] gives it: the call of the count, true for a descending order, and the bound of the sort. The query must have no `HAVING`, no `DISTINCT` and no sets in the targets.
 fn top_key(
@@ -3102,6 +3129,7 @@ fn grouped(
         group_order(query, session, &keys_of_groups, hashes.as_deref(), groups, trailing, want)?
     };
     let mut chosen = None;
+    let mut first_rows = Firsts::All(firsts.len());
     if let Some(key) = top {
         chosen = match quick {
             Some(quick) => Some(quick),
@@ -3113,15 +3141,16 @@ fn grouped(
             None => (0..spots.len()).collect(),
         };
         wanted.sort_unstable();
-        firsts = vec![Vec::new(); spots.len()];
+        firsts = vec![Vec::new(); wanted.len()];
         read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+        first_rows = Firsts::Of(wanted);
     } else if let Some(first) = first_groups {
         let mut wanted: Vec<usize> = order.iter().take(first).copied().collect();
         wanted.sort_unstable();
-        firsts = vec![Vec::new(); spots.len()];
+        firsts = vec![Vec::new(); wanted.len()];
         read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
+        first_rows = Firsts::Of(wanted);
     }
-    let first_count = firsts.len();
     let mut kept = vec![false; scan.exec.types.len()];
     for &column in kept_columns {
         kept[column] = true;
@@ -3141,7 +3170,7 @@ fn grouped(
         cache,
         &tables,
         needed,
-        Some((order, results, first_count, chosen)),
+        Some((order, results, first_rows, chosen)),
         offset,
         count,
     )?;
@@ -3535,7 +3564,7 @@ fn spot(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// The values of the columns `kept_columns` of the first row of each group of `wanted`, from the segment, the vector and the row of each group in `spots`. The groups of `wanted` are in the order of the scan, so the scan decodes each vector once.
+/// The values of the columns `kept_columns` of the first row of each group of `wanted`, into `firsts[i]` for the group `wanted[i]`, from the segment, the vector and the row of each group in `spots`. The groups of `wanted` are in the order of the scan, so the scan decodes each vector once.
 fn read_spots(
     scan: &mut Scan<'_, '_>,
     kept_columns: &[usize],
@@ -3560,8 +3589,8 @@ fn read_spots(
         let sel: Vec<u32> = wanted[at..end].iter().map(|&g| spots[g][2]).collect();
         for &column in kept_columns {
             let col = exec.var(&mut batch, column, exec.types[column], &sel)?;
-            for (i, &g) in wanted[at..end].iter().enumerate() {
-                firsts[g].push(col.value(i, &exec.dicts));
+            for (i, row) in firsts[at..end].iter_mut().enumerate() {
+                row.push(col.value(i, &exec.dicts));
             }
         }
         at = end;
