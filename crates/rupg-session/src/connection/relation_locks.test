@@ -44,6 +44,10 @@ A> CREATE TRIGGER rlt BEFORE INSERT ON rl FOR EACH ROW EXECUTE FUNCTION rlf()
 ERROR 55P03 canceling statement due to lock timeout (waiting for ShareRowExclusiveLock on relation 16384 of database 5)
 A> VACUUM rl
 VACUUM
+A> VACUUM FULL rl
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16384 of database 5)
+A> VACUUM
+VACUUM
 A> SELECT count(*) FROM rl
 fields count:20:8:-1
 row 1
