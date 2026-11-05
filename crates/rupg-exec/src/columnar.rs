@@ -2610,6 +2610,8 @@ fn grouped(
     // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
     let mut hashing = plan_keys(scan.exec.session, query);
     let mut hashes: Vec<u32> = Vec::new();
+    // True when the scan found the groups with no hashes, which [`group_hashes`] gives when the order needs them.
+    let mut deferred = false;
     let mut hash_error: Option<Error> = None;
     // The keys of each group, from its first row, when the scan finds no hashes: the words of the keys and the mask of nulls while each key has one shape, else the values.
     let mut key_values: Vec<Value> = Vec::new();
@@ -2745,18 +2747,16 @@ fn grouped(
             base.extremes = extremes;
         }
         let shapes: Vec<Shape> = keys.iter().map(|key| key_shape(scan.exec, key)).collect();
-        if let Some(places) = &hashing {
-            hashes.reserve_exact(groups);
-            for (g, words) in found.words.chunks(keys.len() + 1).enumerate() {
-                match word_hash(places, &shapes, words, &scan.exec.dicts) {
-                    Ok(h) => hashes.push(h),
-                    Err(_) if g == 0 => {
-                        hashing = None;
-                        break;
-                    }
-                    Err(error) => return Err(error),
-                }
+        // A hash that cannot fail waits for the order of the groups, which a top of counts that are all different does not need.
+        if let Some(places) = &hashing
+            && !infallible(places, &shapes)
+        {
+            match group_hashes(session.tasks(), places, &shapes, &found.words, &scan.exec.dicts)? {
+                Some(all) => hashes = all,
+                None => hashing = None,
             }
+        } else if hashing.is_some() {
+            deferred = true;
         }
         key_words.words = found.words;
         key_words.shapes = Some(shapes);
@@ -3142,7 +3142,7 @@ fn grouped(
     if let Some(error) = hash_error {
         return Err(error);
     }
-    let hashes = hashing.map(|_| hashes);
+    let hashes = hashing.as_ref().map(|_| hashes);
     let keys_of_groups = match &key_words.shapes {
         Some(shapes) if key_words.by_words => {
             GroupKeys::Words { words: &key_words.words, shapes, dicts: &scan.exec.dicts }
@@ -3169,6 +3169,11 @@ fn grouped(
             (_, Some(first)) => Want::First(first),
             _ => Want::All,
         };
+        let mut hashes = hashes;
+        if deferred && let (Some(places), Some(shapes)) = (&hashing, &key_words.shapes) {
+            let dicts = &scan.exec.dicts;
+            hashes = group_hashes(session.tasks(), places, shapes, &key_words.words, dicts)?;
+        }
         group_order(query, session, &keys_of_groups, hashes.as_deref(), groups, trailing, want)?
     };
     let mut chosen = None;
@@ -3593,6 +3598,49 @@ fn derive_words(words: &[u64], width: usize, derived: &[Option<Derived>]) -> Opt
         out.push(new_mask);
     }
     Some(out)
+}
+
+/// True when [`word_hash`] gives a hash for each group of keys with the shapes `shapes`, with no error: each key is an integer of its type or a code of text, and the type has a hash of integers or of bytes.
+fn infallible(places: &[(usize, u32)], shapes: &[Shape]) -> bool {
+    places.iter().all(|&(p, ty)| match shapes[p] {
+        Shape::Int(t) => t == ty && rupg_func::extended_hash_int(ty, 0, 0).is_some(),
+        Shape::Code(_) => rupg_func::extended_hash_text(ty, b"", 0).is_some(),
+    })
+}
+
+/// The hashes of [`word_hash`] of the groups with the words `words`, which the tasks find each for a run of the groups. `None` when the hash cannot read the key of the first group, so that the groups go in the order of a sort.
+///
+/// # Errors
+///
+/// The error of the hash of a group after the first group, the first in the order of the groups.
+fn group_hashes(
+    tasks: Option<&dyn Tasks>,
+    places: &[(usize, u32)],
+    shapes: &[Shape],
+    words: &[u64],
+    dicts: &[Dict],
+) -> Result<Option<Vec<u32>>> {
+    let width = shapes.len() + 1;
+    let groups = words.len() / width;
+    let parts = on_parts(tasks, groups, |range| {
+        let mut part = Vec::with_capacity(range.len());
+        for g in range {
+            match word_hash(places, shapes, &words[g * width..(g + 1) * width], dicts) {
+                Ok(h) => part.push(h),
+                Err(error) => return Err((g, error)),
+            }
+        }
+        Ok(part)
+    });
+    let mut hashes = Vec::with_capacity(groups);
+    for part in parts {
+        match part {
+            Ok(part) => hashes.extend(part),
+            Err((0, _)) => return Ok(None),
+            Err((_, error)) => return Err(error),
+        }
+    }
+    Ok(Some(hashes))
 }
 
 /// The hash of the keys `places` of a group from its words `words` with the shapes `shapes`, as [`key_hash`] gives it from the first row of the group.
