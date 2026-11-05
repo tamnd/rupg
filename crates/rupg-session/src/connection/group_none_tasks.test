@@ -1,0 +1,41 @@
+> CREATE TABLE gn (u int, a int, b int, w bigint)
+CREATE TABLE
+> INSERT INTO gn SELECT i, i % 7, CASE WHEN i % 11 = 0 THEN NULL ELSE i % 1000 - 500 END, i % 50021 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gn
+ANALYZE
+> SELECT count(*) FROM gn WHERE a <> 0
+fields count:20:8:-1
+row 257143
+SELECT 1
+> SELECT count(*), sum(b), min(b), max(b), avg(b), count(b) FROM gn WHERE a = 3
+fields count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1,avg:1700:-1:-1,count:20:8:-1
+row 42857,-16913,-500,499,-0.43410076743410076743,38961
+SELECT 1
+> SELECT count(*), sum(b), min(b), max(w), avg(w), count(b) FROM gn WHERE u > 1000000
+fields count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:20:8:-1,avg:1700:-1:-1,count:20:8:-1
+row 0,NULL,NULL,NULL,NULL,0
+SELECT 1
+> SELECT count(*) FROM gn WHERE u < 0 HAVING count(*) > 0
+fields count:20:8:-1
+SELECT 0
+> SELECT count(*) FROM gn HAVING count(*) > 5
+fields count:20:8:-1
+row 300000
+SELECT 1
+> SELECT sum(w), count(b), count(*) FROM gn WHERE b IS NULL
+fields sum:1700:-1:-1,count:20:8:-1,count:20:8:-1
+row 681809716,0,27272
+SELECT 1
+> SELECT count(*) * 2, max(u) - min(u) FROM gn WHERE a IN (1, 2) AND u >= 1000
+fields ?column?:20:8:-1,?column?:23:4:-1
+row 170858,298998
+SELECT 1
+> SELECT avg(w), min(w) FROM gn WHERE u > 100 AND b < 0
+fields avg:1700:-1:-1,min:20:8:-1
+row 24818.713565516027,0
+SELECT 1
+> SELECT count(*), sum(u) FROM gn
+fields count:20:8:-1,sum:20:8:-1
+row 300000,45000150000
+SELECT 1

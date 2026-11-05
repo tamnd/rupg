@@ -201,6 +201,19 @@ pub(super) struct Found {
     pub(super) trailing: bool,
 }
 
+impl Found {
+    /// Gives the groups of a plan with no keys one group, with the states of no rows, when no row passes the conditions, as an aggregate with no `GROUP BY` gives one row.
+    pub(super) fn or_one(&mut self) {
+        if self.firsts.is_empty() {
+            self.words = vec![0];
+            self.firsts = vec![0];
+            for state in &mut self.states {
+                state.push();
+            }
+        }
+    }
+}
+
 /// Groups with the words of their keys, the first row and the states of each group, in the order of their first rows. Each key has `width` words, the words of the keys and the mask of nulls, so that a buffer keeps only the words that the plan uses. The hash of a key is not kept: to compute it again costs less than to write it and to read it again.
 struct Buf {
     width: usize,
@@ -772,7 +785,9 @@ fn scan_run<const W: usize>(
             }
         }
         hashes.clear();
-        hashes.extend(keys.iter().map(WordTable::<W>::hash));
+        if width > 0 {
+            hashes.extend(keys.iter().map(WordTable::<W>::hash));
+        }
         for base_fold in first_base..plan.folds.len() {
             if let Fold::Sum(place) = plan.folds[base_fold]
                 && let Some(d) = decoded[place].as_ref()
@@ -785,6 +800,27 @@ fn scan_run<const W: usize>(
                     }
                 }
             }
+        }
+        if width == 0 {
+            // With no keys, each row is in the one group, so the rows fold with no table.
+            if local.len() == 0
+                && let Some(&i) = sel.first()
+            {
+                local.push(&[0; W], base + i as u64);
+                for state in &mut local.states {
+                    state.push();
+                }
+            }
+            for ((state, &fold), &min) in local.states.iter_mut().zip(&plan.folds).zip(&mins) {
+                if let Fold::Count = fold {
+                    state.fold_cell(0, Cell::Count(sel.len() as i64), min);
+                } else if !matches!(fold, Fold::None) {
+                    for &i in &sel {
+                        state.fold_cell(0, cell(fold, &decoded, i), min);
+                    }
+                }
+            }
+            continue;
         }
         if direct {
             for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {

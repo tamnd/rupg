@@ -4312,6 +4312,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/group_tasks.test")));
     }
 
+    /// The tasks of the server fold the rows of an aggregate with no `GROUP BY` at the same time, and give one row also when no row passes the conditions.
+    #[test]
+    fn group_none_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/group_none_tasks.test")));
+    }
+
     /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.
     #[test]
     fn group_code_places() {

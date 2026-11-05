@@ -2649,7 +2649,8 @@ fn grouped(
         }
     }
     let parallel = match session.tasks() {
-        Some(tasks) if scan.open => {
+        // The summary answers some segments of a scan with no keys, which the tasks then do not read again.
+        Some(tasks) if scan.open && !scan.answered.contains(&true) => {
             let estimate = session_groups(session, query);
             (estimate.saturating_mul(groups::GROUP_ROWS) <= rows)
                 .then(|| {
@@ -2673,6 +2674,9 @@ fn grouped(
         session.interrupted()?;
         let mut run = groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments)?;
         session.interrupted()?;
+        if keys.is_empty() {
+            run.or_one();
+        }
         // With no derived keys, the words of the plan are the words of the keys, with no copy.
         if derived.iter().all(Option::is_none) {
             found = Some(run);
@@ -3412,7 +3416,7 @@ fn parallel_plan(
     rows: usize,
     parallelism: usize,
 ) -> Option<(groups::Plan, Vec<Option<Derived>>)> {
-    if parallelism < 2 || rows < 2 * groups::TASK_ROWS || keys.is_empty() {
+    if parallelism < 2 || rows < 2 * groups::TASK_ROWS {
         return None;
     }
     let place = |expr: &Expr| place_of(exec, expr);
