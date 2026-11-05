@@ -360,6 +360,41 @@ mod tests {
     }
 
     #[test]
+    fn a_numeric_column_keeps_each_value_with_its_scale() {
+        use rupg_types::Numeric;
+        let values: Vec<Value> = [0i128, -150, 1, 9_999_999_999, -9_999_999_999, 100, 123_456]
+            .iter()
+            .cycle()
+            .take(3000)
+            .enumerate()
+            .map(|(i, &v)| {
+                if i % 11 == 0 { Value::Null } else { Value::Numeric(Numeric::from_decimal(v, 2)) }
+            })
+            .collect();
+        let mut stored = Stored::build(Kind::Numeric(2), values.iter().map(Some)).unwrap();
+        stored.seal().unwrap();
+        let rows: Vec<usize> = (0..values.len()).collect();
+        let mut got = Vec::new();
+        stored.values_at(&rows, &mut got).unwrap();
+        assert_eq!(got, values);
+        // A value of another scale, or one whose integer does not fit, is not a value of the kind.
+        for other in
+            [Numeric::from_decimal(15, 1), Numeric::from_decimal(i128::MAX / 10, 2), Numeric::NAN]
+        {
+            assert!(
+                Stored::build(Kind::Numeric(2), [Some(&Value::Numeric(other))].into_iter())
+                    .is_err()
+            );
+        }
+        let parsed = rupg_types::numeric_in("-0.50", -1).unwrap();
+        assert_eq!(
+            Kind::Numeric(2)
+                .int_value(Kind::Numeric(2).int_of(&Value::Numeric(parsed.clone())).unwrap()),
+            Value::Numeric(parsed)
+        );
+    }
+
+    #[test]
     fn a_truncated_column_has_its_first_rows() {
         let values: Vec<Value> = (0..ROWS as i64 + 2500)
             .map(|i| if i % 9 == 0 { Value::Null } else { Value::Int4(i as i32) })

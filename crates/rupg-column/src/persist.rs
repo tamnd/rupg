@@ -21,6 +21,7 @@ rupg_common::persist_enum!(Kind {
     9 => TimestampTz,
     10 => Text,
     11 => Bytea,
+    12 => Numeric(scale),
 });
 
 /// Appends a byte string with its length.

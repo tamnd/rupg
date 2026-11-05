@@ -652,6 +652,11 @@ fn kind_of<'a>(values: impl Iterator<Item = &'a Value>) -> Option<Kind> {
             Value::TimestampTz(_) => Kind::TimestampTz,
             Value::Text(_) => Kind::Text,
             Value::Bytea(_) => Kind::Bytea,
+            // The integer of a value of a display scale up to 18 can fit in a `bigint`, and a value that does not fit makes the column fail.
+            Value::Numeric(v) => match u8::try_from(v.dscale()) {
+                Ok(scale) if scale <= 18 => Kind::Numeric(scale),
+                _ => return None,
+            },
             _ => return None,
         };
         if *kind.get_or_insert(this) != this {
