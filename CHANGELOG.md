@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `SELECT ... FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE` lock the rows of their tables, and `UPDATE`, `DELETE` and `INSERT ... ON CONFLICT DO UPDATE` wait for these locks. `NOWAIT` and `SKIP LOCKED` work (#1352).
 - `VACUUM FULL` takes `AccessExclusiveLock` on each relation, and `VACUUM` with no list takes `ShareUpdateExclusiveLock` on each relation, as in PostgreSQL (#1350).
 - A row goes to the client from the bytes of its columns with no list of the values for each row (#1349).
 - More statements take locks on their relations, as in PostgreSQL: `CREATE TRIGGER` and the table that a new foreign key references take `ShareRowExclusiveLock`, `DROP INDEX` also locks the table of the index, `CLUSTER` takes `AccessExclusiveLock`, `REINDEX` takes `ShareLock` on the table and `AccessExclusiveLock` on the index (`ShareUpdateExclusiveLock` on both with `CONCURRENTLY`), and `VACUUM` and `ANALYZE` take `ShareUpdateExclusiveLock` (#1348).
