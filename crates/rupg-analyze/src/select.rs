@@ -117,31 +117,56 @@ pub struct Target {
 impl Query {
     /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the offsets of the frames of the windows, the calls of the functions in `FROM`, the rows of the `VALUES` lists and the arguments of `TABLESAMPLE`.
     pub fn exprs(&self) -> Vec<&Expr> {
-        fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
-            if let FromItem::Join(j) = item {
-                joins(&j.left, out);
-                joins(&j.right, out);
-                out.extend(&j.on);
+        let mut out = Vec::new();
+        self.find_expr(&mut |expr| {
+            out.push(expr);
+            None::<()>
+        });
+        out
+    }
+
+    /// The first `Some` of `f` for the expressions of the query, in the order of [`Query::exprs`], with no list of the expressions.
+    pub fn find_expr<'a, T>(&'a self, f: &mut impl FnMut(&'a Expr) -> Option<T>) -> Option<T> {
+        fn joins<'a, T>(
+            item: &'a FromItem,
+            f: &mut impl FnMut(&'a Expr) -> Option<T>,
+        ) -> Option<T> {
+            let FromItem::Join(j) = item else { return None };
+            joins(&j.left, f)
+                .or_else(|| joins(&j.right, f))
+                .or_else(|| j.on.iter().find_map(&mut *f))
+        }
+        if let Some(found) = self.targets.iter().map(|t| &t.expr).find_map(&mut *f) {
+            return Some(found);
+        }
+        for item in &self.from {
+            if let Some(found) = joins(item, f) {
+                return Some(found);
             }
         }
-        let mut out: Vec<&Expr> = self.targets.iter().map(|t| &t.expr).collect();
-        for item in &self.from {
-            joins(item, &mut out);
+        let tail = self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit);
+        if let Some(found) = tail.into_iter().find_map(&mut *f) {
+            return Some(found);
         }
-        out.extend(self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit));
         for window in &self.windows {
-            out.extend(window.frame.start.iter().chain(&window.frame.end));
+            if let Some(found) =
+                window.frame.start.iter().chain(&window.frame.end).find_map(&mut *f)
+            {
+                return Some(found);
+            }
         }
         for relation in &self.relations {
-            if let Some(function) = &relation.function {
-                out.extend(function.calls.iter().map(|(call, _)| call));
-            }
-            out.extend(relation.values.iter().flatten().flatten());
-            if let Some(sample) = &relation.tablesample {
-                out.extend(sample.args.iter().chain(&sample.repeatable));
+            let calls = relation.function.iter().flat_map(|function| &function.calls);
+            let values = relation.values.iter().flatten().flatten();
+            let sample =
+                relation.tablesample.iter().flat_map(|s| s.args.iter().chain(&s.repeatable));
+            if let Some(found) =
+                calls.map(|(call, _)| call).chain(values).chain(sample).find_map(&mut *f)
+            {
+                return Some(found);
             }
         }
-        out
+        None
     }
 
     /// The expressions of the query, in the order of [`Query::exprs`].

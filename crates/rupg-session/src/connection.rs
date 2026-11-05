@@ -1363,6 +1363,11 @@ impl Connection {
         Arc::clone(xmin.get_or_insert_with(|| self.store.heap().xmin(self.pid)))
     }
 
+    /// `pgstat_track_counts`, from the settings that the session keeps for each generation of its settings.
+    pub(crate) fn track_counts(&self) -> bool {
+        self.known.borrow_mut().of(&self.settings.borrow()).counts
+    }
+
     /// The rows of the tables and the transactions in progress.
     pub(crate) fn heap(&self) -> &Heap {
         self.store.heap()
@@ -1701,7 +1706,7 @@ impl Connection {
                 });
             }
         }
-        if self.settings.borrow().get_of(guc::known!("track_counts")).as_deref() != Some("off") {
+        if self.track_counts() {
             for &table in &defined.scans {
                 self.activity.count_scan(table);
             }

@@ -904,16 +904,13 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     for cte in &query.ctes {
         check_scannable(&cte.query, session)?;
     }
-    for expr in query.exprs() {
-        let error = expr.find(0, &mut |e, _| match &e.kind {
+    let error = query.find_expr(&mut |expr| {
+        expr.find(0, &mut |e, _| match &e.kind {
             ExprKind::SubLink(sub) => check_scannable(&sub.query, session).err(),
             _ => None,
-        });
-        if let Some(error) = error {
-            return Err(error);
-        }
-    }
-    Ok(())
+        })
+    });
+    error.map_or(Ok(()), Err)
 }
 
 /// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` or an `= ANY` of an array of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.
