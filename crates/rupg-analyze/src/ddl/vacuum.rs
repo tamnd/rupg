@@ -44,7 +44,10 @@ pub fn vacuum_relations(
         let Some(rv) = &vrel.relation else { continue };
         let relid = lookup(&an, rv)?;
         let permitted = permitted(relid);
-        if !permitted {
+        if permitted {
+            // `vacuum_rel` and `analyze_rel` take `ShareUpdateExclusiveLock`, which lets reads and writes go on.
+            env.relation_lock(relid, super::SHARE_UPDATE_EXCLUSIVE)?;
+        } else {
             warnings.push(vacuum_denied(&class_name(env, relid), vacuum));
         }
         found.push((relid, &vrel.va_cols, rv.inh, permitted));

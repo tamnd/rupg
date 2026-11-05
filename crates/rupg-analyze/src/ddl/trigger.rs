@@ -80,6 +80,7 @@ impl Definer<'_, '_> {
     pub(super) fn create_trigger(&mut self, stmt: &CreateTrigStmt) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let found = self.lookup_relation(&rv)?;
+        self.lock(found, super::SHARE_ROW_EXCLUSIVE)?;
         let name = relname(&rv).to_string();
         let code = self.kind_of(found);
         let timed = matches!(stmt.timing, TRIGGER_BEFORE | TRIGGER_AFTER);

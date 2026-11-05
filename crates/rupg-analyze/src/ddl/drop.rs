@@ -436,6 +436,12 @@ impl Definer<'_, '_> {
         for target in &targets {
             let object = target.object;
             if object.class == PG_CLASS && object.sub == 0 {
+                // `RangeVarCallbackForDropRelation` locks the table of an index before the index.
+                if let Some(index) =
+                    self.catalog.relation(object.oid).and_then(|r| r.index.as_ref())
+                {
+                    self.an.env.relation_lock(index.table, super::ACCESS_EXCLUSIVE)?;
+                }
                 self.check_not_in_use(object.oid, "DROP TABLE")?;
             }
         }
