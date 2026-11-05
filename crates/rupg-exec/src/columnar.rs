@@ -3343,6 +3343,22 @@ fn parallel_plan(
                     _ => None,
                 }
             }
+            ExprKind::Func(func)
+                if src(func.oid) == "extract_timestamp" && key.ty == oid::NUMERIC =>
+            {
+                match func.args.as_slice() {
+                    [field, arg] if arg.ty == oid::TIMESTAMP => {
+                        let step = unit(field)?;
+                        let span = match step {
+                            60_000_000 => 60,
+                            3_600_000_000 => 24,
+                            _ => return None,
+                        };
+                        Some(groups::Input::Part(int_place(arg)?, step, span))
+                    }
+                    _ => None,
+                }
+            }
             ExprKind::Case(case) => case_input(exec, case),
             _ => place(key)
                 .filter(|&p| !matches!(exec.stored[p].kind.store(), Store::Float))

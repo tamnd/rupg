@@ -286,3 +286,28 @@ row r4,3656
 row r5,3655
 row r6,3654
 SELECT 9
+> SELECT extract(minute FROM ts) AS m, count(*) FROM gts GROUP BY 1 ORDER BY 1 NULLS FIRST LIMIT 5
+fields m:1700:-1:-1,count:20:8:-1
+row NULL,8825
+row 0,2353
+row 1,2356
+row 2,2357
+row 3,2356
+SELECT 5
+> SELECT i % 3 AS k, extract(hour FROM ts) AS h, count(*), min(i) FROM gts GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2 LIMIT 4
+fields k:23:4:-1,h:1700:-1:-1,count:20:8:-1,min:23:4:-1
+row 0,NULL,2942,6
+row 2,NULL,2942,5
+row 1,NULL,2941,34
+row 2,22,2061,2
+SELECT 4
+> SELECT extract(hour FROM ts) AS h, count(*) FROM gts WHERE i < 12 GROUP BY 1 ORDER BY 1 NULLS FIRST
+fields h:1700:-1:-1,count:20:8:-1
+row NULL,2
+row 10,5
+row 22,4
+SELECT 3
+> SELECT count(*) FROM (SELECT i % 50, extract(minute FROM ts) FROM gts GROUP BY 1, 2) s
+fields count:20:8:-1
+row 2750
+SELECT 1
