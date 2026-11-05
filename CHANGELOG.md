@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The report of a statement to `pg_stat_activity` reuses the buffers of the text of the statement, so a prepared statement that runs again makes no copies of its text (#1340).
 - The start of a plan finds the relations that the check of the materialized views reads once, and the copies of the plan share them, so the start of a point read does not walk the expressions of the query each time (#1339).
 - wire: `Bind` and `Execute` find a prepared statement and a portal by name with a cheap hasher for names (#1338).
 - The start of a query walks its expressions for the sublinks of `ExecCheckRelationsScannable` with no list of the expressions, the count of the scans of a `DO` block reads `track_counts` from the settings that the session keeps, and a `Bind` of a prepared statement compares the schemas of `search_path` with the schemas of its plan with no new list of them (#1337).
