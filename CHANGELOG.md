@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Statements take locks on their relations until the end of the transaction, as in PostgreSQL. A read takes `AccessShareLock`, a statement with `FOR UPDATE` or `FOR SHARE` takes `RowShareLock` and a write takes `RowExclusiveLock` on its table. These weak locks go on a fast path of the session and touch no shared state while no session holds or waits for a strong lock on the relation. `DROP TABLE`, `TRUNCATE` and `ALTER TABLE` take `AccessExclusiveLock` and `CREATE INDEX` takes `ShareLock`, so they wait for the transactions that use the table, until `lock_timeout`. `pg_locks` shows the locks on the fast path with `fastpath` true (#1346).
 - A point read of a key takes a read lock of the heap and not the write lock, so that the point reads of many sessions do not wait for each other (#1344).
 - exec, session: a point `SELECT` encodes the values of the versions as the heap keeps them, with no copy of the values: the heap keeps the values of a version in an `Arc`, and the read takes one count of it for each row (#1342).
 
