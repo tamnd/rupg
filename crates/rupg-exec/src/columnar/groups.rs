@@ -293,6 +293,150 @@ fn flush(local: &mut Buf, table: &mut WordTable<4>, parts: &mut [Buf]) {
     table.clear();
 }
 
+/// Puts into `sel` the rows of the vector `vector` of the segment `segment` that pass the filters of `plan`, and the columns that the filters test into `decoded`. False when no row passes.
+fn select<'p>(
+    stored: &[Arc<Stored>],
+    plan: &'p Plan,
+    rows: usize,
+    (segment, vector): (usize, usize),
+    tests: &mut Vec<&'p (usize, Test)>,
+    sel: &mut Vec<usize>,
+    decoded: &mut [Option<Decoded>],
+) -> Result<bool> {
+    let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
+    let count = (segment_rows - vector * VECTOR).min(VECTOR);
+    // spec/12 section 12.6.1: a vector whose zones show that no row passes a condition is not read, and a condition that every row passes is not tested.
+    tests.clear();
+    for filter in &plan.filters {
+        let zones = &stored[filter.0].segments[segment].summary.vectors;
+        let verdict = if zones.len() == stored::vectors(segment_rows) {
+            zones[vector].test(&filter.1)
+        } else {
+            Verdict::Some
+        };
+        match verdict {
+            Verdict::None => return Ok(false),
+            Verdict::All => {}
+            Verdict::Some => tests.push(filter),
+        }
+    }
+    sel.clear();
+    sel.extend(0..count);
+    for &&(place, ref test) in tests.iter() {
+        let d = decode(&stored[place], segment, vector)?;
+        sel.retain(|&i| passes(test, null(&d, i), int(&d, i)));
+        decoded[place] = Some(d);
+        if sel.is_empty() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The number of the values that are not null of the key of `plan`, which is its one key and a column, in the rows of the scan that pass its filters, and the first of these rows. Each task reads a run of the vectors, and puts each value that is not the value of the row before it into one of [`PARTS`] buffers by its hash. Then each task counts the values of some parts, and the counts of the parts add up, since a value is in one part. `None` for a plan of other keys.
+pub(super) fn distinct(
+    tasks: &dyn Tasks,
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    rows: usize,
+    segments: usize,
+) -> Result<Option<(i64, Option<u64>)>> {
+    let [Input::Column(place)] = plan.keys[..] else { return Ok(None) };
+    let units = units_of(rows, segments);
+    if units.is_empty() {
+        return Ok(Some((0, None)));
+    }
+    let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
+    let chunk = units.len().div_ceil(jobs);
+    let mut runs: Vec<Option<Result<Values>>> = Vec::new();
+    runs.resize_with(units.len().div_ceil(chunk), || None);
+    let work: Vec<Job<'_>> = units
+        .chunks(chunk)
+        .zip(&mut runs)
+        .map(|(units, out)| {
+            Box::new(move || {
+                *out = Some((|| {
+                    let mut parts: Vec<Vec<u64>> = vec![Vec::new(); PARTS];
+                    let mut decoded: Vec<Option<Decoded>> =
+                        (0..stored.len()).map(|_| None).collect();
+                    let mut sel = Vec::with_capacity(VECTOR);
+                    let mut tests = Vec::with_capacity(plan.filters.len());
+                    let mut first = None;
+                    let mut previous = None;
+                    for &unit in units {
+                        if !select(stored, plan, rows, unit, &mut tests, &mut sel, &mut decoded)? {
+                            continue;
+                        }
+                        let d = match decoded[place].take() {
+                            Some(d) => d,
+                            None => decode(&stored[place], unit.0, unit.1)?,
+                        };
+                        let base = (unit.0 * ROWS + unit.1 * VECTOR) as u64;
+                        for &i in &sel {
+                            if null(&d, i) {
+                                continue;
+                            }
+                            first = first.or(Some(base + i as u64));
+                            let v = int(&d, i) as u64;
+                            // In ClickBench, 82% of the rows have the `UserID` of the row before them.
+                            if previous != Some(v) {
+                                parts[part_of(v)].push(v);
+                                previous = Some(v);
+                            }
+                        }
+                    }
+                    Ok((parts, first))
+                })());
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let runs: Vec<Values> = runs.into_iter().flatten().collect::<Result<_>>()?;
+    let first = runs.iter().filter_map(|r| r.1).min();
+    let mut by_part: Vec<Vec<Vec<u64>>> =
+        (0..PARTS).map(|_| Vec::with_capacity(runs.len())).collect();
+    for (parts, _) in runs {
+        for (to, part) in by_part.iter_mut().zip(parts) {
+            to.push(part);
+        }
+    }
+    let per = PARTS.div_ceil(jobs);
+    let mut counts = vec![0_i64; by_part.len().div_ceil(per)];
+    let work: Vec<Job<'_>> = by_part
+        .chunks_mut(per)
+        .zip(&mut counts)
+        .map(|(parts, out)| {
+            Box::new(move || {
+                let mut all = Vec::new();
+                for part in parts {
+                    all.clear();
+                    for run in part.iter() {
+                        all.extend_from_slice(run);
+                    }
+                    all.sort_unstable();
+                    all.dedup();
+                    *out += i64::try_from(all.len()).unwrap_or(i64::MAX);
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    Ok(Some((counts.iter().sum(), first)))
+}
+
+/// The values of each part of the hashes for one run of vectors, and the first row of the run with a value.
+type Values = (Vec<Vec<u64>>, Option<u64>);
+
+/// The vectors of the scan of `rows` rows in `segments` segments, as their segment and their place in it.
+fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
+    let mut units = Vec::new();
+    for segment in 0..segments {
+        let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
+        units.extend((0..stored::vectors(segment_rows)).map(|vector| (segment, vector)));
+    }
+    units
+}
+
 /// The groups of the vectors `units` of the columns `stored`, which have `rows` rows.
 fn scan_run(
     stored: &[Arc<Stored>],
@@ -319,32 +463,8 @@ fn scan_run(
     let mut folded = 0;
     let mut direct = false;
     'units: for (n, &(segment, vector)) in units.iter().enumerate() {
-        let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
-        let count = (segment_rows - vector * VECTOR).min(VECTOR);
-        // spec/12 section 12.6.1: a vector whose zones show that no row passes a condition is not read, and a condition that every row passes is not tested.
-        tests.clear();
-        for filter in &plan.filters {
-            let zones = &stored[filter.0].segments[segment].summary.vectors;
-            let verdict = if zones.len() == stored::vectors(segment_rows) {
-                zones[vector].test(&filter.1)
-            } else {
-                Verdict::Some
-            };
-            match verdict {
-                Verdict::None => continue 'units,
-                Verdict::All => {}
-                Verdict::Some => tests.push(filter),
-            }
-        }
-        sel.clear();
-        sel.extend(0..count);
-        for &&(place, ref test) in &tests {
-            let d = decode(&stored[place], segment, vector)?;
-            sel.retain(|&i| passes(test, null(&d, i), int(&d, i)));
-            decoded[place] = Some(d);
-            if sel.is_empty() {
-                continue 'units;
-            }
+        if !select(stored, plan, rows, (segment, vector), &mut tests, &mut sel, &mut decoded)? {
+            continue 'units;
         }
         for &place in places {
             if !tests.iter().any(|t| t.0 == place) {
@@ -502,11 +622,7 @@ pub(super) fn run(
         .collect();
     places.sort_unstable();
     places.dedup();
-    let mut units = Vec::new();
-    for segment in 0..segments {
-        let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
-        units.extend((0..stored::vectors(segment_rows)).map(|vector| (segment, vector)));
-    }
+    let units = units_of(rows, segments);
     if units.is_empty() {
         return Ok(Found {
             words: Vec::new(),

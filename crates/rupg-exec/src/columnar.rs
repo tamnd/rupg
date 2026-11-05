@@ -2574,6 +2574,32 @@ fn grouped(
             found = Some(run);
         }
     }
+    // Calls of `count(DISTINCT)` of one column with no keys: the tasks count the values of the column.
+    if found.is_none()
+        && keys.is_empty()
+        && kept_columns.is_empty()
+        && bases.is_empty()
+        && !scan.answered.contains(&true)
+        && aggs.iter().all(|call| matches!(call.method, Method::Distinct))
+        && let Some(tasks) = session.tasks().filter(|_| scan.open)
+        && let Some(arg) = distinct_arg(&aggs)
+        && let Some((plan, derived)) =
+            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks.parallelism())
+        && derived.iter().all(Option::is_none)
+    {
+        session.interrupted()?;
+        if let Some((count, Some(first))) =
+            groups::distinct(tasks, &scan.exec.stored, &plan, rows, scan.segments)?
+        {
+            found = Some(groups::Found {
+                words: vec![0],
+                firsts: vec![first],
+                states: aggs.iter().map(|_| groups::Folded::Count(vec![count])).collect(),
+                extremes: Vec::new(),
+                trailing: false,
+            });
+        }
+    }
     if let Some(found) = found {
         groups = found.firsts.len();
         trailing = found.trailing;
@@ -3291,6 +3317,16 @@ fn parallel_plan(
     }
     let filters = conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()?;
     Some((groups::Plan { keys, folds, bases: bases.len(), filters }, derived))
+}
+
+/// The argument of the calls of `count(DISTINCT)` of `aggs`, when there is one and every call has the same argument.
+fn distinct_arg<'q>(aggs: &[Call<'q>]) -> Option<&'q Expr> {
+    let mut args = aggs
+        .iter()
+        .filter(|call| matches!(call.method, Method::Distinct))
+        .map(|call| call.agg.args.first());
+    let first = args.next()??;
+    args.all(|arg| arg.is_some_and(|arg| arg.kind == first.kind)).then_some(first)
 }
 
 /// The place of the stored column of `expr` when it is a column that the scan reads.
