@@ -709,11 +709,14 @@ impl<'a> Reader<'a> {
         &self,
         (tables, locks): (&[u32], &[(i32, i32)]),
         rows: Vec<Vec<Value>>,
-        width: usize,
+        (width, (offset, count)): (usize, (usize, Option<usize>)),
     ) -> Result<Option<Vec<Vec<Value>>>> {
+        let end = count.map_or(usize::MAX, |c| offset.saturating_add(c));
         let (Some(conn), Some(view)) = (self.conn, self.view.as_ref()) else {
             return Ok(Some(
                 rows.into_iter()
+                    .take(end)
+                    .skip(offset)
                     .map(|mut row| {
                         row.truncate(width);
                         row
@@ -724,7 +727,11 @@ impl<'a> Reader<'a> {
         let xid = conn.transaction_id(true).unwrap_or(view.xid);
         let heap = conn.heap();
         let mut out = Vec::with_capacity(rows.len());
+        let mut kept = 0;
         'rows: for mut row in rows {
+            if kept == end {
+                break;
+            }
             for (at, &(strength, wait)) in locks.iter().enumerate().take(tables.len()) {
                 let place = width + 2 * at;
                 let (Some(&Value::Oid(relation)), Some(&Value::Int8(tid))) =
@@ -765,8 +772,11 @@ impl<'a> Reader<'a> {
                     }
                 }
             }
-            row.truncate(width);
-            out.push(row);
+            kept += 1;
+            if kept > offset {
+                row.truncate(width);
+                out.push(row);
+            }
         }
         Ok(Some(out))
     }
@@ -2220,8 +2230,8 @@ pub(crate) fn run_select(
         }
         return Ok(rows);
     }
-    if let Some((locking, locks)) = plan.locking() {
-        return run_locking(&types, (&locking, &locks), params, reader, formats);
+    if let Some(locking) = plan.locking() {
+        return run_locking(&types, &locking, params, reader, formats);
     }
     let (values, failed) = match plan.run_select(params, reader) {
         Ok(values) => (values, None),
@@ -2248,17 +2258,22 @@ pub(crate) fn run_select(
 /// The errors of [`Plan::run_select`], of [`Reader::lock_rows`] and of the output functions.
 fn run_locking(
     types: &[u32],
-    (locking, locks): (&Plan, &[(i32, i32)]),
+    locking: &rupg_exec::Locking,
     params: &[Value],
     reader: &Reader<'_>,
     formats: &[i16],
 ) -> std::result::Result<Vec<Row>, (Vec<Row>, Error)> {
+    let limits = match &locking.limits {
+        Some(plan) => limits(plan, params, reader).map_err(|error| (Vec::new(), error))?,
+        None => (0, None),
+    };
     let mut fresh = None;
     let values = loop {
         let current = fresh.as_ref().unwrap_or(reader);
         let values =
-            locking.run_select(params, current).map_err(|(_, error)| (Vec::new(), error))?;
-        let locked = current.lock_rows((locking.marks(), locks), values, types.len());
+            locking.plan.run_select(params, current).map_err(|(_, error)| (Vec::new(), error))?;
+        let marks = (locking.plan.marks(), locking.locks.as_slice());
+        let locked = current.lock_rows(marks, values, (types.len(), limits));
         match locked.map_err(|error| (Vec::new(), error))? {
             Some(values) => break values,
             None => match reader.conn {
@@ -2280,6 +2295,31 @@ fn run_locking(
         }
     }
     Ok(rows)
+}
+
+/// `recompute_limits` of `nodeLimit.c` for a `SELECT` with a locking clause: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows, from the one row of `plan` of [`rupg_exec::Locking::limits`].
+fn limits(plan: &Plan, params: &[Value], reader: &Reader<'_>) -> Result<(usize, Option<usize>)> {
+    let rows = plan.run_select(params, reader).map_err(|(_, error)| error)?;
+    let value = |at: usize| match rows.first().and_then(|row| row.get(at)) {
+        Some(&Value::Int8(v)) => Some(v),
+        _ => None,
+    };
+    let offset = value(0).unwrap_or(0);
+    if offset < 0 {
+        return Err(Error::new(
+            SqlState::INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE,
+            "OFFSET must not be negative",
+        ));
+    }
+    let count = value(1);
+    if count.is_some_and(|c| c < 0) {
+        return Err(Error::new(
+            SqlState::INVALID_ROW_COUNT_IN_LIMIT_CLAUSE,
+            "LIMIT must not be negative",
+        ));
+    }
+    let size = |v: i64| usize::try_from(v).unwrap_or(usize::MAX);
+    Ok((size(offset), count.map(size)))
 }
 
 /// The bytes of the values of a row of the types `types` in the result format of each column: 1 is binary and any other code is text.
