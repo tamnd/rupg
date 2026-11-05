@@ -4273,6 +4273,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/group_having_first.test")));
     }
 
+    /// A subquery in `FROM` that reads no column of the query outside it runs in the vector scan, with the rows and the errors of the row engine.
+    #[test]
+    fn group_subquery() {
+        big_stack(|| script_tasks(include_str!("connection/group_subquery.test")));
+    }
+
     /// A grouped vector scan with `ORDER BY` of a count and `LIMIT` keeps the counts in a bounded heap with the steps of the heap of rows, so the groups with the same count come in the order of Postgres.
     #[test]
     fn group_count_top() {

@@ -1,0 +1,39 @@
+> CREATE TABLE gs (k int, v int, t text)
+CREATE TABLE
+> INSERT INTO gs SELECT i % 50, i, 'x' || (i % 7) FROM generate_series(1, 70000) i
+INSERT 0 70000
+> SELECT count(*) FROM (SELECT k, t, count(*) FROM gs GROUP BY k, t) s
+fields count:20:8:-1
+row 350
+SELECT 1
+> SELECT * FROM (SELECT k, sum(v) AS s FROM gs GROUP BY k) q WHERE s > 49030000
+fields k@gs.1:23:4:-1,s:20:8:-1
+row 48,49032200
+row 0,49035000
+row 49,49033600
+row 47,49030800
+SELECT 4
+> SELECT q.k, q.c FROM (SELECT k, count(*) AS c FROM gs WHERE v % 7 = 0 GROUP BY k ORDER BY c DESC, k LIMIT 3) q
+fields k@gs.1:23:4:-1,c:20:8:-1
+row 0,200
+row 1,200
+row 2,200
+SELECT 3
+> SELECT a.v, b.c FROM gs a JOIN (SELECT k, count(*) AS c FROM gs GROUP BY k) b ON a.k = b.k WHERE a.v < 4 ORDER BY 1
+fields v@gs.2:23:4:-1,c:20:8:-1
+row 1,1400
+row 2,1400
+row 3,1400
+SELECT 3
+> SELECT max(n) FROM (SELECT t, length(t) AS n FROM gs WHERE v < 10) s
+fields max:23:4:-1
+row 2
+SELECT 1
+> SELECT * FROM (SELECT k, sum(v) / (k - 3) FROM gs GROUP BY k) s
+fields k@gs.1:23:4:-1,?column?:20:8:-1
+ERROR 22012 division by zero
+> SELECT a.k, s.c FROM (VALUES (1), (2)) a(k), LATERAL (SELECT count(*) AS c FROM gs WHERE gs.k = a.k) s
+fields k:23:4:-1,c:20:8:-1
+row 1,1400
+row 2,1400
+SELECT 2

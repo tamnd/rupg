@@ -1431,8 +1431,9 @@ fn run_query(
 ) -> Result<Vec<Vec<Value>>> {
     let want = cache.want.take();
     let filled = cache.tables.borrow().iter().any(|(q, _, _)| std::ptr::eq(*q, query));
+    // A subquery that reads no column of a query outside it runs once, so the scan can run it too.
     if !exists
-        && outer.is_empty()
+        && (outer.is_empty() || !correlated(query))
         && !filled
         && let Some(rows) = columnar::run(query, params, session, cache, want)?
     {
