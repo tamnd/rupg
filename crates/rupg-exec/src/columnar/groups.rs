@@ -31,6 +31,8 @@ pub(super) enum Input {
     Column(usize),
     /// `date_trunc` of a column of timestamps to a unit of `step` microseconds. An infinite timestamp keeps its value, as in `timestamp_trunc`.
     Floor(usize, i64),
+    /// `extract` of a field from a column of timestamps: the number of units of `step` microseconds, modulo `span`. An infinite timestamp gives null, as in `extract_timestamp`.
+    Part(usize, i64, i64),
     /// `CASE WHEN tests THEN column ELSE default END`: the word of the column `then` for a row that passes all the tests, and the word `default` for the other rows.
     Case {
         tests: Vec<(usize, Test)>,
@@ -44,7 +46,7 @@ impl Input {
     /// The places of the columns that the key reads.
     fn places(&self) -> Vec<usize> {
         match self {
-            Input::Column(place) | Input::Floor(place, _) => vec![*place],
+            Input::Column(place) | Input::Floor(place, _) | Input::Part(place, ..) => vec![*place],
             Input::Case { tests, then, .. } => {
                 tests.iter().map(|t| t.0).chain(std::iter::once(*then)).collect()
             }
@@ -729,6 +731,17 @@ fn scan_run<const W: usize>(
                             let v = int(d, i);
                             let infinite = v == i64::MIN || v == i64::MAX;
                             key[k] = if infinite { v } else { v - v.rem_euclid(step) } as u64;
+                        }
+                    }
+                }
+                Input::Part(place, step, span) => {
+                    let Some(d) = decoded[place].as_ref() else { continue };
+                    for (key, &i) in keys.iter_mut().zip(&sel) {
+                        let v = int(d, i);
+                        if null(d, i) || v == i64::MIN || v == i64::MAX {
+                            key[width] |= 1 << k;
+                        } else {
+                            key[k] = v.div_euclid(step).rem_euclid(span) as u64;
                         }
                     }
                 }
