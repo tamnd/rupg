@@ -60,8 +60,10 @@ impl<const W: usize> WordTable<W> {
     }
 
     fn resize(&mut self, size: usize) {
-        let old =
-            std::mem::replace(&mut self.slots, vec![Slot { key: [0; W], id: NO_GROUP }; size]);
+        let old = std::mem::replace(
+            &mut self.slots,
+            rupg_platform::alloc::large_vec(size, Slot { key: [0; W], id: NO_GROUP }),
+        );
         let mask = size - 1;
         for slot in old.into_iter().filter(|s| s.id != NO_GROUP) {
             let mut at = Self::hash(&slot.key) as usize & mask;
@@ -2598,7 +2600,10 @@ fn grouped(
         session.interrupted()?;
         let mut run = groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments)?;
         session.interrupted()?;
-        if let Some(words) = derive_words(&run.words, plan.keys.len() + 1, &derived) {
+        // With no derived keys, the words of the plan are the words of the keys, with no copy.
+        if derived.iter().all(Option::is_none) {
+            found = Some(run);
+        } else if let Some(words) = derive_words(&run.words, plan.keys.len() + 1, &derived) {
             run.words = words;
             found = Some(run);
         }
