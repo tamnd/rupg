@@ -721,6 +721,7 @@ fn range_bounds(f: &Func, src: &str) -> Option<Expr> {
             form: FuncForm::Operator(op),
             variadic: false,
             retset: false,
+            collation: 0,
         };
         Some(Expr::new(ExprKind::Func(func), oid::BOOL))
     };
@@ -1700,7 +1701,7 @@ impl<'a> Fold<'a> {
         let mut args = f.args.clone();
         args[at] = cast;
         let form = op.map_or(FuncForm::Call, FuncForm::Operator);
-        let call = Func { oid: func, args, form, variadic: false, retset: false };
+        let call = Func { oid: func, args, form, variadic: false, retset: false, collation: 0 };
         self.function(Expr {
             kind: ExprKind::Func(call),
             ty: oid::TEXT,

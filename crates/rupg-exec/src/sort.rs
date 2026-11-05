@@ -28,6 +28,8 @@ struct Key {
     descending: Option<bool>,
     /// For `<` or `>` of `text` in a collation of ICU: the collator, and true for `>`.
     collated: Option<(Collator, bool)>,
+    /// The collation of ICU of the key, which the calls of its functions get, or 0.
+    collation: u32,
 }
 
 /// For the function `<` or `>` of `smallint`, `integer`, `bigint`, `date`, `time`, `timestamp`, `timestamptz`, `numeric` or `text` with itself: true for `>`. The order of these types is the order of their integers, also for the infinite values, and the order of the bytes for `text`, as the comparison of text does here. A `numeric` compares as an integer only in a column of integers, and a value of `numeric` calls the function.
@@ -67,17 +69,18 @@ impl<'a> Keys<'a> {
             .map(|g| {
                 let ty = types[g.target];
                 let text = matches!(ty, oid::TEXT | oid::VARCHAR);
-                let collated = native(g.sort)
-                    .filter(|_| text)
-                    .and_then(|desc| Some((rupg_func::collator(session, g.collation)?, desc)));
+                let collator = rupg_func::collator(session, g.collation);
+                let collated =
+                    native(g.sort).filter(|_| text).and_then(|desc| Some((collator?, desc)));
                 Ok(Key {
                     column: g.target,
                     ty,
                     sort: find(g.sort)?,
                     equal: find(g.equal)?,
                     nulls_first: g.nulls_first,
-                    descending: if collated.is_some() { None } else { native(g.sort) },
+                    descending: if collator.is_some() { None } else { native(g.sort) },
                     collated,
+                    collation: if collator.is_some() { g.collation } else { 0 },
                 })
             })
             .collect::<Result<_>>()?;
@@ -107,14 +110,15 @@ impl<'a> Keys<'a> {
             .collect()
     }
 
-    fn test(&self, kernel: Kernel, ty: u32, a: &Value, b: &Value) -> Result<bool> {
-        let types = [ty, ty];
+    fn test(&self, kernel: Kernel, key: &Key, a: &Value, b: &Value) -> Result<bool> {
+        let types = [key.ty, key.ty];
         let call = Call {
             session: self.session,
             args: &types,
             ret: oid::BOOL,
             variadic: false,
             want: None,
+            collation: key.collation,
         };
         Ok(kernel(&call, &[a.clone(), b.clone()])? == Value::Bool(true))
     }
@@ -149,9 +153,9 @@ impl<'a> Keys<'a> {
                     {
                         let order = collator.compare(x, y);
                         if desc { order.reverse() } else { order }
-                    } else if self.test(sort, key.ty, x, y)? {
+                    } else if self.test(sort, key, x, y)? {
                         Ordering::Less
-                    } else if self.test(sort, key.ty, y, x)? {
+                    } else if self.test(sort, key, y, x)? {
                         Ordering::Greater
                     } else {
                         Ordering::Equal
@@ -172,7 +176,7 @@ impl<'a> Keys<'a> {
             let same = match (x.is_null(), y.is_null()) {
                 (true, true) => true,
                 (false, false) => match key.equal {
-                    Some(equal) => self.test(equal, key.ty, x, y)?,
+                    Some(equal) => self.test(equal, key, x, y)?,
                     None => false,
                 },
                 _ => false,

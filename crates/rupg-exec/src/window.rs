@@ -681,6 +681,7 @@ impl<'s> Ranged<'s> {
             ret: oid::BOOL,
             variadic: false,
             want: None,
+            collation: 0,
         };
         let args = [val.clone(), base.clone(), offset.clone(), Value::Bool(sub), Value::Bool(less)];
         Ok(func(&call, &args)? == Value::Bool(true))

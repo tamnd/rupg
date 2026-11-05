@@ -2099,6 +2099,7 @@ pub(crate) fn nextval(sequence: u32) -> Result<Expr> {
         form: FuncForm::Call,
         variadic: false,
         retset: false,
+        collation: 0,
     };
     Ok(Expr::new(ExprKind::Func(func), proc.rettype))
 }

@@ -215,7 +215,14 @@ fn var(relation: usize, index: usize, ty: u32, typmod: i32) -> Expr {
 
 /// A call of the function with this OID.
 fn call(func: u32, args: Vec<Expr>, ty: u32) -> Expr {
-    let func = Func { oid: func, args, form: FuncForm::Call, variadic: false, retset: false };
+    let func = Func {
+        oid: func,
+        args,
+        form: FuncForm::Call,
+        variadic: false,
+        retset: false,
+        collation: 0,
+    };
     Expr::new(ExprKind::Func(func), ty)
 }
 
@@ -379,8 +386,14 @@ pub(crate) fn rewrite(
         targets.push(target(&c.path, path_cat(row_of(&c.columns, columns), path)));
         let (ne, func) = c.ne;
         let args = vec![var(0, mark, c.ty, c.typmod), c.value.clone()];
-        let ne =
-            Func { oid: func, args, form: FuncForm::Operator(ne), variadic: false, retset: false };
+        let ne = Func {
+            oid: func,
+            args,
+            form: FuncForm::Operator(ne),
+            variadic: false,
+            retset: false,
+            collation: 0,
+        };
         filter = Some(Expr::new(ExprKind::Func(ne), oid::BOOL));
     }
     let mut newq2 = wrap("*TROCRN*", all, q2, targets);

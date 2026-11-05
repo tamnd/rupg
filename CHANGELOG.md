@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Comparisons of strings in a collation of ICU (`<`, `<=`, `>`, `>=`, `bttextcmp`, `text_larger`, `text_smaller` and the `bpchar` and `name` forms), and the sorts of `ORDER BY`, windows and aggregates, order the strings as the ICU collator does, as in PostgreSQL; the uses of an ICU collation that do not follow it yet fail with `FEATURE_NOT_SUPPORTED` (#1360).
 - `CREATE COLLATION` with `provider = icu` makes a collation of ICU, with the standard form of the locale, the checks of `icu_validation_level` and the collator version, as in PostgreSQL (#1357).
 - `ORDER BY x COLLATE "xx-x-icu"`, and the `ORDER BY` of an aggregate, order strings as ICU does for a deterministic collation of the ICU provider, with ICU4X (#1356).
 - `SELECT ... FOR UPDATE SKIP LOCKED` with `LIMIT` and `OFFSET` counts only the rows that it locks, as the `LockRows` node of PostgreSQL runs below `Limit` (#1354).

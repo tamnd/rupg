@@ -1186,6 +1186,7 @@ fn boolean_equal(key: &Expr, value: bool) -> Expr {
         form: FuncForm::Operator(BOOLEAN_EQUAL),
         variadic: false,
         retset: false,
+        collation: 0,
     };
     Expr::new(ExprKind::Func(call), oid::BOOL)
 }
@@ -1927,7 +1928,8 @@ fn bool_items(expr: &Expr) -> Option<(BoolOp, Cow<'_, [Expr]>)> {
             let item = |value| {
                 let args = vec![left.clone(), value];
                 let form = FuncForm::Operator(op);
-                let call = Func { oid: *func, args, form, variadic: false, retset: false };
+                let call =
+                    Func { oid: *func, args, form, variadic: false, retset: false, collation: 0 };
                 Expr::new(ExprKind::Func(call), oid::BOOL)
             };
             let op = if *any { BoolOp::Or } else { BoolOp::And };

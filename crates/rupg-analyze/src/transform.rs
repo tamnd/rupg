@@ -45,7 +45,7 @@ fn sortable(collation: &rupg_catalog::Collation) -> bool {
 }
 
 /// An error for an expression that the analyzer does not take yet.
-fn not_yet(what: &str, at: Option<usize>) -> Error {
+pub(crate) fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
 }
 
@@ -177,6 +177,9 @@ impl Analyzer<'_> {
                     .map(|a| self.coerce_to_common(a, ty, construct))
                     .collect::<Result<Vec<_>>>()?;
                 let at = place(m.location);
+                if self.icu_input(&args) != 0 {
+                    return Err(not_yet(&format!("{construct} in a collation of ICU"), at));
+                }
                 let less = self.comparison(ty, at)?;
                 Ok(Expr {
                     kind: ExprKind::MinMax { greatest: m.op == MinMaxOp::IS_GREATEST, less, args },
@@ -208,7 +211,6 @@ impl Analyzer<'_> {
             Node::SQLValueFunction(f) => self.transform_sql_value(f),
             Node::A_ArrayExpr(a) => self.transform_array(a, 0, 0, -1),
             Node::CollateClause(c) => {
-                let sort = std::mem::take(&mut self.sort_collate);
                 let arg = self.transform(c.arg.as_ref())?;
                 let at = place(c.location);
                 if !types::collatable(arg.ty) && arg.ty != oid::UNKNOWN {
@@ -218,10 +220,7 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                self.sort_collate = sort;
-                let collation = self.collation_oid(&c.collname, at);
-                self.sort_collate = false;
-                let collation = collation?;
+                let collation = self.lookup_collation(&c.collname, at, true)?;
                 let (ty, typmod) = (arg.ty, arg.typmod);
                 let mut expr = Expr::new(ExprKind::Collate(Box::new(arg), collation), ty).at(at);
                 expr.typmod = typmod;
@@ -252,8 +251,40 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `LookupCollation` and `get_collation_oid`: the OID of the collation that a name gives, in the schema of the name or in the first schema of the path that has one. Only the collations that compare as the bytes of the string are supported.
+    /// `LookupCollation` and `get_collation_oid`: the OID of the collation that a name gives, in the schema of the name or in the first schema of the path that has one. Only the collations that compare as the bytes of the string are supported: a column, an index or a type orders its values as the bytes.
     pub(crate) fn collation_oid(&self, list: &[Option<Node>], at: Option<usize>) -> Result<u32> {
+        self.lookup_collation(list, at, false)
+    }
+
+    /// The collation of ICU of the inputs of a call, or 0, with the relations of the query that the analyzer reads now.
+    pub(crate) fn icu_input(&self, args: &[Expr]) -> u32 {
+        let mut levels = vec![&self.scope.relations[..]];
+        levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+        crate::collate::icu_input(args, &levels, self.env.catalog())
+    }
+
+    /// `inputcollid` of a call of the function `func` when the function orders strings in a collation of ICU, or 0. A function that reads the collation in another way, such as `upper` and the regular expressions, is not supported yet in a collation of ICU.
+    pub(crate) fn call_collation(
+        &self,
+        func: u32,
+        args: &[Expr],
+        at: Option<usize>,
+    ) -> Result<u32> {
+        use crate::collate::Use;
+        let usage = crate::collate::collation_use(func);
+        if usage == Use::None {
+            return Ok(0);
+        }
+        let collation = self.icu_input(args);
+        if collation != 0 && usage == Use::Unsupported {
+            let name = rupg_pgcatalog::builtin::proc_by_oid(func).map_or("", |p| p.name);
+            return Err(not_yet(&format!("the function {name} in a collation of ICU"), at));
+        }
+        Ok(collation)
+    }
+
+    /// [`Analyzer::collation_oid`], which also takes a deterministic collation of ICU with no rules when `icu` is true, for `COLLATE` in an expression.
+    fn lookup_collation(&self, list: &[Option<Node>], at: Option<usize>, icu: bool) -> Result<u32> {
         let parts = names(list);
         let (schema, name) = self.split_name(&parts, at)?;
         let path = schema.map_or_else(|| self.path.clone(), |schema| vec![schema]);
@@ -265,7 +296,7 @@ impl Analyzer<'_> {
                 return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
             }
             if namespace == crate::PG_CATALOG_NAMESPACE && OTHER_COLLATIONS.contains(&name) {
-                if self.sort_collate && name == "unicode" {
+                if icu && name == "unicode" {
                     return Ok(UNICODE_COLLATION_OID);
                 }
                 return Err(not_yet(&format!("collation \"{name}\""), at));
@@ -273,7 +304,7 @@ impl Analyzer<'_> {
             if let Some(found) =
                 self.env.catalog().and_then(|c| c.collation_by_name(namespace, name))
             {
-                if bytewise(found) || (self.sort_collate && sortable(found)) {
+                if bytewise(found) || (icu && sortable(found)) {
                     return Ok(found.oid);
                 }
                 return Err(not_yet(&format!("collation \"{name}\""), at));
@@ -437,6 +468,9 @@ impl Analyzer<'_> {
         }
         let strategy = kinds.trailing_zeros();
         if let Some(kind) = RowCompareKind::of_strategy(strategy) {
+            if ops.iter().any(|op| matches!(&op.kind, ExprKind::Func(f) if f.collation != 0)) {
+                return Err(not_yet("a comparison of rows in a collation of ICU", at));
+            }
             let compares = operators
                 .iter()
                 .map(|&operator| {
@@ -723,11 +757,11 @@ impl Analyzer<'_> {
         } else {
             self.coerce(right, array_decl, -1, Context::Implicit, None)?
         };
-        Ok(Expr::new(
-            ExprKind::ScalarArrayOp { func: op.code, any, args: vec![left, right] },
-            oid::BOOL,
-        )
-        .at(at))
+        let args = vec![left, right];
+        if self.call_collation(op.code, &args, at)? != 0 {
+            return Err(not_yet("ANY and ALL with an order in a collation of ICU", at));
+        }
+        Ok(Expr::new(ExprKind::ScalarArrayOp { func: op.code, any, args }, oid::BOOL).at(at))
     }
 
     /// `transformAExprIn`: `x IN (a, b)` as `x = ANY (ARRAY[a, b])` when the values have a common type, or else as `x = a OR x = b`.

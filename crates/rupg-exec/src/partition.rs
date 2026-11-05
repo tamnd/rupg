@@ -298,8 +298,14 @@ impl Dispatch {
             Expr::constant(value.clone(), intype, -1, None),
             Expr::constant(Value::Int8(seed.cast_signed()), oid::INT8, -1, None),
         ];
-        let call =
-            Func { oid: function, args, form: FuncForm::Call, variadic: false, retset: false };
+        let call = Func {
+            oid: function,
+            args,
+            form: FuncForm::Call,
+            variadic: false,
+            retset: false,
+            collation: 0,
+        };
         let call = Expr::new(ExprKind::Func(call), oid::INT8);
         let one = crate::evaluate_row(&[call], self.oid, &[], &[], session)?;
         let Some(Value::Int8(one)) = one.first() else {

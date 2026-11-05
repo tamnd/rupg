@@ -463,6 +463,16 @@ fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
         let b = Value::Array(Box::new(anyarray_array(any, call.session)?));
         return order(call, &[a.clone(), b]);
     }
+    // `varstr_cmp` in a collation of ICU, for `text`, `varchar`, `bpchar` and `name`. A `bpchar` value compares without its trailing spaces, as `bpcharcmp` does.
+    if let (Value::Text(x), Value::Text(y)) = (a, b)
+        && call.collation != 0
+        && let Some(collator) = crate::collator(call.session, call.collation)
+    {
+        let trim = |ty: u32, s: &'_ str| -> usize {
+            if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
+        };
+        return Ok(collator.compare(&x[..trim(left, x)], &y[..trim(right, y)]));
+    }
     compare(left, a, right, b)
 }
 

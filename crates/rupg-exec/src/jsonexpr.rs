@@ -302,6 +302,7 @@ impl Eval<'_> {
             ret: e.returning.ty,
             variadic: false,
             want: None,
+            collation: 0,
         };
         let want = e.op != JsonExprOp::Exists;
         let Some((found, mut items)) =

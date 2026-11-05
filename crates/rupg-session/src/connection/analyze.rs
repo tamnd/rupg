@@ -111,6 +111,7 @@ impl Compare<'_> {
             ret: oid::BOOL,
             variadic: false,
             want: None,
+            collation: 0,
         };
         Ok(kernel(&call, &[a.clone(), b.clone()])? == Value::Bool(true))
     }

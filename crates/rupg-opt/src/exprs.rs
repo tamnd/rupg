@@ -194,10 +194,10 @@ pub(crate) fn is_false(expr: &Expr) -> bool {
     matches!(expr.as_const(), Some(Value::Bool(false) | Value::Null))
 }
 
-/// The OID of the operator of a call of an operator with two arguments, with the arguments.
+/// The OID of the operator of a call of an operator with two arguments, with the arguments. A call in a collation of ICU is not one: an index, a join or a class of equal values orders the strings as their bytes.
 pub(crate) fn binary(expr: &Expr) -> Option<(u32, &Expr, &Expr)> {
     match &expr.kind {
-        ExprKind::Func(f) => match (f.form, f.args.as_slice()) {
+        ExprKind::Func(f) if f.collation == 0 => match (f.form, f.args.as_slice()) {
             (FuncForm::Operator(op), [left, right]) => Some((op, left, right)),
             _ => None,
         },

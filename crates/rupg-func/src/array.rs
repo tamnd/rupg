@@ -48,6 +48,7 @@ fn on_anyarray(call: &Call<'_>, args: &[Value], kernel: Kernel) -> Result<Value>
         ret: rupg_types::oid::TEXT_ARRAY,
         variadic: call.variadic,
         want: call.want,
+        collation: call.collation,
     };
     let result = kernel(&inner, &inner_args)?;
     if matches!(result, Value::Null) {

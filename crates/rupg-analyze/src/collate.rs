@@ -314,3 +314,97 @@ fn column_collation(
     }
     relation.columns.get(index).map_or(0, |c| type_collation(c.ty))
 }
+
+/// `UNICODE_COLLATION_OID`: the collation `unicode` of ICU with the root locale.
+const UNICODE_COLLATION: u32 = 963;
+
+/// True for a collation of the ICU provider, whose order is not the order of the bytes.
+pub(crate) fn icu(collation: u32, catalog: Option<&Catalog>) -> bool {
+    collation == UNICODE_COLLATION
+        || catalog.and_then(|c| c.collation(collation)).is_some_and(|c| c.provider == b'i')
+}
+
+/// The way a built-in function reads the collation of its inputs, as `PG_GET_COLLATION`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Use {
+    /// The function does not read the collation, or reads it only for a collation that is not deterministic.
+    None,
+    /// The function orders two strings with `varstr_cmp`, which the kernels of `rupg-func` do in a collation of ICU.
+    Order,
+    /// The function reads the collation in a way that rupg does not do yet for ICU: the case of the letters, the classes of the characters of a regular expression, or the order of the elements of an array.
+    Unsupported,
+}
+
+/// [`Use`] of the function `func`.
+pub(crate) fn collation_use(func: u32) -> Use {
+    let Some(proc) = rupg_pgcatalog::builtin::proc_by_oid(func) else { return Use::None };
+    let src = proc.src;
+    let order = matches!(
+        src,
+        "text_lt"
+            | "text_le"
+            | "text_gt"
+            | "text_ge"
+            | "bttextcmp"
+            | "text_larger"
+            | "text_smaller"
+            | "bpcharlt"
+            | "bpcharle"
+            | "bpchargt"
+            | "bpcharge"
+            | "bpcharcmp"
+            | "bpchar_larger"
+            | "bpchar_smaller"
+            | "namelt"
+            | "namele"
+            | "namegt"
+            | "namege"
+            | "btnamecmp"
+            | "namelttext"
+            | "nameletext"
+            | "namegttext"
+            | "namegetext"
+            | "textltname"
+            | "textlename"
+            | "textgtname"
+            | "textgename"
+            | "btnametextcmp"
+            | "bttextnamecmp"
+    );
+    if order {
+        return Use::Order;
+    }
+    let unsupported = src.contains("regex")
+        || src.contains("iclike")
+        || src.contains("icnlike")
+        || matches!(
+            src,
+            "upper"
+                | "lower"
+                | "initcap"
+                | "casefold"
+                | "array_lt"
+                | "array_le"
+                | "array_gt"
+                | "array_ge"
+                | "btarraycmp"
+                | "array_larger"
+                | "array_smaller"
+        );
+    if unsupported { Use::Unsupported } else { Use::None }
+}
+
+/// The collation of the inputs of a call, as `inputcollid`, when it is a collation of ICU, or 0. A conflict of implicit collations gives 0.
+pub(crate) fn icu_input(args: &[Expr], levels: &[&[Relation]], catalog: Option<&Catalog>) -> u32 {
+    if !args.iter().any(|a| types::collatable(a.ty)) {
+        return 0;
+    }
+    let mut merged = State::None;
+    for arg in args {
+        let Ok(one) = state(arg, levels, catalog) else { return 0 };
+        let Ok(next) = merged.merge(one, catalog) else { return 0 };
+        merged = next;
+    }
+    let oid = merged.oid();
+    if icu(oid, catalog) { oid } else { 0 }
+}

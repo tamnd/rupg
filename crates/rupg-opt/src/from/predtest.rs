@@ -62,10 +62,10 @@ pub(super) fn implied(pred: &Expr, clause: &Expr) -> bool {
     operator_proof(pred, clause)
 }
 
-/// The operator and the two arguments of a call of an infix operator.
+/// The operator and the two arguments of a call of an infix operator. A call in a collation of ICU is not one, because the proofs know the order of the bytes.
 fn operator(expr: &Expr) -> Option<(u32, &[Expr])> {
     match &expr.kind {
-        ExprKind::Func(f) => match (f.form, f.args.as_slice()) {
+        ExprKind::Func(f) if f.collation == 0 => match (f.form, f.args.as_slice()) {
             (FuncForm::Operator(op), args @ [_, _]) => Some((op, args)),
             _ => None,
         },

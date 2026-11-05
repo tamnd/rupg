@@ -452,8 +452,6 @@ pub(crate) struct Analyzer<'a> {
     auto_view: Option<autoview::AutoView>,
     /// The actions of the `WHEN` clauses of the `MERGE` that the analyzer reads now, in the order of the statement, which `view_has_instead_trigger` and `rewriteTargetView` read for a view.
     merge_actions: Vec<MergeCommand>,
-    /// True while the analyzer reads the `COLLATE` at the top of an item of `ORDER BY`, whose collation may be a deterministic collation of ICU: the sort orders by it, and its equality is the equality of the bytes.
-    sort_collate: bool,
 }
 
 impl<'a> Analyzer<'a> {
@@ -519,7 +517,6 @@ impl<'a> Analyzer<'a> {
             rule: rules::State::default(),
             auto_view: None,
             merge_actions: Vec::new(),
-            sort_collate: false,
         }
     }
 

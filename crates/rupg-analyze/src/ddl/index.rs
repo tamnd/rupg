@@ -634,6 +634,10 @@ impl Definer<'_, '_> {
         if !elem.collation.is_empty() {
             collation = self.an.collation_oid(&elem.collation, at)?;
         }
+        // The index orders the strings as their bytes.
+        if crate::collate::icu(collation, Some(&*self.catalog)) {
+            return Err(not_yet("an index in a collation of ICU", at));
+        }
         if types::collatable(ty) {
             if collation == 0 {
                 return Err(Error::new(

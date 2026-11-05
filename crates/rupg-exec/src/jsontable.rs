@@ -122,8 +122,14 @@ impl Eval<'_> {
         if doc.is_null() {
             return Ok(Vec::new());
         }
-        let call =
-            Call { session: self.session, args: &[], ret: oid::JSONB, variadic: false, want: None };
+        let call = Call {
+            session: self.session,
+            args: &[],
+            ret: oid::JSONB,
+            variadic: false,
+            want: None,
+            collation: 0,
+        };
         let paths = Paths { call, vars };
         let mut root = State::new(&table.plan);
         if let State::Scan(scan) = &mut root {

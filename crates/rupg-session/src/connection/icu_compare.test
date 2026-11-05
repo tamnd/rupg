@@ -1,0 +1,253 @@
+!details
+> create table t (s text)
+CREATE TABLE
+> insert into t values ('a'), ('B'), ('b'), ('A'), ('ä'), ('z'), ('Z'), ('10'), ('9'), ('Å'), (null)
+INSERT 0 11
+> select 'a' < 'B' collate "en-x-icu", 'a' < 'B' collate "C", 'a' collate "unicode" < 'B', 'B' collate "unicode" > 'a'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t
+SELECT 1
+> select 'a' <= 'a' collate "en-x-icu", 'a' >= 'A' collate "en-x-icu", 'a' > 'A' collate "en-x-icu", 'A' < 'a' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f
+SELECT 1
+> select 'a' = 'a' collate "en-x-icu", 'a' <> 'A' collate "en-x-icu", 'a' = 'A' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f
+SELECT 1
+> select bttextcmp('a' collate "en-x-icu", 'B'), bttextcmp('a', 'B' collate "C") > 0 as c, bttextcmp('B' collate "en-x-icu", 'a')
+fields bttextcmp:23:4:-1,c:16:1:-1,bttextcmp:23:4:-1
+row -1,t,1
+SELECT 1
+> select text_larger('a' collate "en-x-icu", 'B'), text_smaller('a' collate "en-x-icu", 'B'), text_larger('a', 'B')
+fields text_larger:25:-1:-1,text_smaller:25:-1:-1,text_larger:25:-1:-1
+row B,a,a
+SELECT 1
+> select 'ä' < 'z' collate "sv-x-icu", 'ä' < 'z' collate "de-x-icu", 'ä' < 'z' collate "C"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,f
+SELECT 1
+> select s from t where s collate "en-x-icu" < 'b' order by s collate "en-x-icu"
+fields s@t.1:25:-1:-1
+row 10
+row 9
+row a
+row A
+row Å
+row ä
+SELECT 6
+> select s from t where s < 'b' collate "C" order by s collate "C"
+fields s@t.1:25:-1:-1
+row 10
+row 9
+row A
+row B
+row Z
+row a
+SELECT 6
+> select s, s collate "en-x-icu" > 'B' as gt from t order by s collate "C"
+fields s@t.1:25:-1:-1,gt:16:1:-1
+row 10,f
+row 9,f
+row A,f
+row B,f
+row Z,t
+row a,f
+row b,f
+row z,t
+row Å,f
+row ä,f
+row NULL,NULL
+SELECT 11
+> select s from t where s collate "sv-x-icu" between 'A' and 'b' order by s collate "sv-x-icu"
+fields s@t.1:25:-1:-1
+row A
+row b
+SELECT 2
+> select s from t where s collate "en-x-icu" not between 'A' and 'b' order by s collate "C"
+fields s@t.1:25:-1:-1
+row 10
+row 9
+row B
+row Z
+row a
+row z
+SELECT 6
+> select x from (select s collate "en-x-icu" as x from t) q where x < 'b' order by x
+fields x:25:-1:-1
+row 10
+row 9
+row a
+row A
+row Å
+row ä
+SELECT 6
+> select s from t where s collate "en-x-icu" in ('a', 'A', 'ä') order by s collate "C"
+fields s@t.1:25:-1:-1
+row A
+row a
+row ä
+SELECT 3
+> select 'a'::char(3) collate "en-x-icu" < 'B'::char(3), 'a  '::char(3) collate "en-x-icu" = 'a'::char(3), bpcharcmp('b'::char(2) collate "en-x-icu", 'A'::char(2))
+fields ?column?:16:1:-1,?column?:16:1:-1,bpcharcmp:23:4:-1
+row t,t,1
+SELECT 1
+> select 'a'::varchar collate "en-x-icu" < 'B'::varchar, 'a'::varchar < 'B'::varchar collate "C"
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> select 'a'::name collate "en-x-icu" < 'B'::name, 'a'::name < 'B'::name
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> create collation num (provider = icu, locale = 'en-u-kn-true')
+NOTICE 00000 using standard form "en-u-kn" for ICU locale "en-u-kn-true"
+CREATE COLLATION
+> select '10' < '9' collate num, '10' < '9' collate "en-x-icu", 'a10' > 'a9' collate num
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t
+SELECT 1
+> select s from t where s collate num > '5' order by s collate num
+fields s@t.1:25:-1:-1
+row 9
+row 10
+row a
+row A
+row Å
+row ä
+row b
+row B
+row z
+row Z
+SELECT 10
+> select case when s collate "en-x-icu" < 'b' then 'low' else 'high' end as k, s from t where s is not null order by s collate "C"
+fields k:25:-1:-1,s@t.1:25:-1:-1
+row low,10
+row low,9
+row low,A
+row high,B
+row high,Z
+row low,a
+row high,b
+row high,z
+row low,Å
+row low,ä
+SELECT 10
+> select s, row_number() over (order by s collate "en-x-icu") from t where s is not null order by 2
+fields s@t.1:25:-1:-1,row_number:20:8:-1
+row 10,1
+row 9,2
+row a,3
+row A,4
+row Å,5
+row ä,6
+row b,7
+row B,8
+row z,9
+row Z,10
+SELECT 10
+> select string_agg(s, ',' order by s collate "en-x-icu") from t
+fields string_agg:25:-1:-1
+row 10,9,a,A,Å,ä,b,B,z,Z
+SELECT 1
+> select string_agg(s, ',' order by s collate "sv-x-icu" desc) from t
+fields string_agg:25:-1:-1
+row ä,Å,Z,z,B,b,A,a,9,10
+SELECT 1
+> create table t2 as select s collate "en-x-icu" as s from t
+SELECT 11
+> select attcollation::regcollation from pg_attribute where attrelid = 't2'::regclass and attname = 's'
+fields attcollation:4191:4:-1
+row "en-x-icu"
+SELECT 1
+> select s from t2 where s < 'b' order by s
+fields s@t2.1:25:-1:-1
+row 10
+row 9
+row a
+row A
+row Å
+row ä
+SELECT 6
+> select s from t2 where s > 'a' collate "C" order by s collate "C"
+fields s@t2.1:25:-1:-1
+row b
+row z
+row Å
+row ä
+SELECT 4
+> select count(*) from t2 where s < 'b'
+fields count:20:8:-1
+row 6
+SELECT 1
+> prepare p (text) as select $1 collate "en-x-icu" < 'B', $1 < 'B'
+PREPARE
+> execute p ('a')
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> create index ti on t (s)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> select s from t where s collate "en-x-icu" < 'b' order by s collate "en-x-icu"
+fields s@t.1:25:-1:-1
+row 10
+row 9
+row a
+row A
+row Å
+row ä
+SELECT 6
+> select s from t where s collate "en-x-icu" >= 'a' and s collate "en-x-icu" < 'c' order by s collate "C"
+fields s@t.1:25:-1:-1
+row A
+row B
+row a
+row b
+row Å
+row ä
+SELECT 6
+> reset enable_seqscan
+RESET
+> select 'a' collate "C" < 'b' collate "en-x-icu"
+ERROR 42P21 collation mismatch between explicit collations "C" and "en-x-icu" at 30
+> select exists (select 1 from t where s collate "en-x-icu" < 'B' and s <> 'A')
+fields exists:16:1:-1
+row t
+SELECT 1
+> select s from t where s collate "en-x-icu" > all (select 'A' union all select 'a') order by s collate "C"
+fields s@t.1:25:-1:-1
+row B
+row Z
+row b
+row z
+row Å
+row ä
+SELECT 6
+> select s from t where not (s collate "en-x-icu" < 'b') order by s collate "C"
+fields s@t.1:25:-1:-1
+row B
+row Z
+row b
+row z
+SELECT 4
+> create table t3 (k text default 'x', c bool check (k collate "en-x-icu" > 'B'))
+CREATE TABLE
+> insert into t3 (k, c) values ('a', true)
+ERROR 23514 new row for relation "t3" violates check constraint "t3_k_check"
+DETAIL Failing row contains (a, t).
+> insert into t3 (k, c) values ('c', true)
+INSERT 0 1
+> select k from t3
+fields k@t3.1:25:-1:-1
+row c
+SELECT 1
+> drop table t3
+DROP TABLE
+> drop table t2
+DROP TABLE
+> drop table t
+DROP TABLE
+> drop collation num
+DROP COLLATION
