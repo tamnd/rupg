@@ -23,6 +23,9 @@ const PREFETCH: usize = 16;
 /// The least number of rows for each group, by the estimate of the plan, for the scan to find the groups at the same time. With fewer rows for each group, the table of each task keeps few rows out, and the parts, their merge and their order cost more CPU time than the scan of one task: on 2M rows of ClickBench, 1 to 7 rows for each group took 1.4 to 2 times the CPU time, and 9 rows for each group took less.
 pub(super) const GROUP_ROWS: usize = 8;
 
+/// The least number of rows that pass the conditions for each group, by the estimates of the plan, for the scan to find the groups at the same time. The tasks read all the rows of the table, but each row that passes goes into the parts: on 2M rows of ClickBench, `WHERE SearchPhrase <> ''` keeps about 200000 rows, and q31 with 1.5 rows for each group and q32 with 1 row took 1.3 to 1.5 times the CPU time on the tasks, but q15 with 2.9 rows for each group took 0.8 times.
+pub(super) const GROUP_INPUT: usize = 2;
+
 /// The fewest rows for each task, so that a small table does not pay for the tasks.
 pub(super) const TASK_ROWS: usize = 1 << 16;
 
@@ -183,7 +186,7 @@ pub(super) struct Plan {
     pub(super) folds: Vec<Fold>,
     /// The number of folds of bases at the end of `folds`, whose extremes the scan keeps.
     pub(super) bases: usize,
-    /// The conditions of the scan, each a test of one column by its place. A test other than a null test is on a column of integers.
+    /// The conditions of the scan, each a test of one column by its place. A test other than a null test is on a column of integers, or an equal or not equal test on a column of text codes.
     pub(super) filters: Vec<(usize, Test)>,
 }
 
@@ -386,35 +389,76 @@ fn select<'p>(
     Ok(true)
 }
 
+/// A row of a vector, as an index into its decoded values.
+pub(super) trait Row: Copy {
+    /// The index of the row.
+    fn at(self) -> usize;
+}
+
+impl Row for usize {
+    #[inline]
+    fn at(self) -> usize {
+        self
+    }
+}
+
+impl Row for u32 {
+    #[inline]
+    fn at(self) -> usize {
+        self as usize
+    }
+}
+
 /// Keeps the rows of `sel` whose values in `d` pass `test`. The kind of the test and the form of the values are found once for the vector and not once for each row, and the loop keeps a row with no branch, since a branch on a condition that some rows pass and some do not is often wrong.
-fn keep(test: &Test, d: &Decoded, sel: &mut Vec<usize>) {
-    let DecodedData::Int(v) = &d.data else {
-        retain(sel, |i| passes(test, null(d, i), int(d, i)));
-        return;
-    };
+pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
     let c = |key: &u64| rupg_summary::key::int_of(*key);
-    match (test, d.nulls.as_deref()) {
-        (Test::IsNull, None) => sel.clear(),
-        (Test::IsNotNull, None) => {}
+    let n = d.nulls.as_deref();
+    match (test, n) {
+        (Test::IsNull, None) => return sel.clear(),
+        (Test::IsNotNull, None) => return,
         (Test::IsNull | Test::IsNotNull, Some(_)) => {
-            retain(sel, |i| passes(test, null(d, i), 0));
+            return retain(sel, |i| passes(test, null(d, i), 0));
         }
-        (Test::Eq(k), n) => compare(v, n, sel, |x| x == c(k)),
-        (Test::Ne(k), n) => compare(v, n, sel, |x| x != c(k)),
-        (Test::Lt(k), n) => compare(v, n, sel, |x| x < c(k)),
-        (Test::Le(k), n) => compare(v, n, sel, |x| x <= c(k)),
-        (Test::Gt(k), n) => compare(v, n, sel, |x| x > c(k)),
-        (Test::Ge(k), n) => compare(v, n, sel, |x| x >= c(k)),
-        (Test::In(keys), n) => {
-            let values: Vec<i64> = keys.iter().map(c).collect();
-            compare(v, n, sel, |x| values.contains(&x));
-        }
+        _ => {}
+    }
+    match &d.data {
+        DecodedData::Int(v) => match test {
+            Test::Eq(k) => compare(v, n, sel, |x| x == c(k)),
+            Test::Ne(k) => compare(v, n, sel, |x| x != c(k)),
+            Test::Lt(k) => compare(v, n, sel, |x| x < c(k)),
+            Test::Le(k) => compare(v, n, sel, |x| x <= c(k)),
+            Test::Gt(k) => compare(v, n, sel, |x| x > c(k)),
+            Test::Ge(k) => compare(v, n, sel, |x| x >= c(k)),
+            Test::In(keys) => {
+                let values: Vec<i64> = keys.iter().map(c).collect();
+                compare(v, n, sel, |x| values.contains(&x));
+            }
+            Test::IsNull | Test::IsNotNull => {}
+        },
+        // The test of a text is on its code, which the zones test gives as an integer. A code that does not fit is the code of no row.
+        DecodedData::Code(v) => match test {
+            Test::Eq(k) => match u32::try_from(c(k)) {
+                Ok(k) => compare(v, n, sel, |x| x == k),
+                Err(_) => sel.clear(),
+            },
+            Test::Ne(k) => match u32::try_from(c(k)) {
+                Ok(k) => compare(v, n, sel, |x| x != k),
+                Err(_) => compare(v, n, sel, |_| true),
+            },
+            _ => retain(sel, |i| passes(test, null(d, i), int(d, i))),
+        },
+        DecodedData::Float(_) => retain(sel, |i| passes(test, null(d, i), int(d, i))),
     }
 }
 
 /// Keeps the rows of `sel` whose values in `v` are not null by `nulls` and pass `test`.
 #[inline]
-fn compare(v: &[i64], nulls: Option<&[bool]>, sel: &mut Vec<usize>, test: impl Fn(i64) -> bool) {
+fn compare<T: Copy, R: Row>(
+    v: &[T],
+    nulls: Option<&[bool]>,
+    sel: &mut Vec<R>,
+    test: impl Fn(T) -> bool,
+) {
     match nulls {
         None => retain(sel, |i| test(v[i])),
         Some(nulls) => retain(sel, |i| !nulls[i] & test(v[i])),
@@ -423,12 +467,12 @@ fn compare(v: &[i64], nulls: Option<&[bool]>, sel: &mut Vec<usize>, test: impl F
 
 /// Keeps the rows of `sel` that `keep` gives true for, in their order. Each row is written, and the end of the kept rows moves only when the row is kept.
 #[inline]
-fn retain(sel: &mut Vec<usize>, keep: impl Fn(usize) -> bool) {
+fn retain<R: Row>(sel: &mut Vec<R>, keep: impl Fn(usize) -> bool) {
     let mut kept = 0;
     for j in 0..sel.len() {
         let i = sel[j];
         sel[kept] = i;
-        kept += usize::from(keep(i));
+        kept += usize::from(keep(i.at()));
     }
     sel.truncate(kept);
 }

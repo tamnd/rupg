@@ -523,7 +523,9 @@ pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
             }
             _ => continue,
         };
-        let hash = |right| HashTable { groups: table.groups, keys: table.keys.clone(), right };
+        let input = node.children.first().map_or(table.groups, |c| c.cost.rows);
+        let hash =
+            |right| HashTable { groups: table.groups, input, keys: table.keys.clone(), right };
         match table.of {
             Grouped::Group(q) if std::ptr::eq(q, query) => out.group = Some(hash(false)),
             Grouped::Distinct(q) if std::ptr::eq(q, query) => out.distinct = Some(hash(false)),
