@@ -423,12 +423,30 @@ pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
     }
     match &d.data {
         DecodedData::Int(v) => match test {
-            Test::Eq(k) => compare(v, n, sel, |x| x == c(k)),
-            Test::Ne(k) => compare(v, n, sel, |x| x != c(k)),
-            Test::Lt(k) => compare(v, n, sel, |x| x < c(k)),
-            Test::Le(k) => compare(v, n, sel, |x| x <= c(k)),
-            Test::Gt(k) => compare(v, n, sel, |x| x > c(k)),
-            Test::Ge(k) => compare(v, n, sel, |x| x >= c(k)),
+            Test::Eq(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x == k);
+            }
+            Test::Ne(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x != k);
+            }
+            Test::Lt(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x < k);
+            }
+            Test::Le(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x <= k);
+            }
+            Test::Gt(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x > k);
+            }
+            Test::Ge(k) => {
+                let k = c(k);
+                compare(v, n, sel, |x| x >= k);
+            }
             Test::In(keys) => {
                 let values: Vec<i64> = keys.iter().map(c).collect();
                 compare(v, n, sel, |x| values.contains(&x));
@@ -752,7 +770,8 @@ fn scan_run<const W: usize>(
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
     let mut local = Buf::new(&plan.folds, width + 1);
-    let mut table = WordTable::<W>::new(LOCAL);
+    // With no keys the rows fold with no table, so the table has no room.
+    let mut table = WordTable::<W>::new(if width == 0 { 0 } else { LOCAL });
     // The rows that the table folded since it was last empty, and true when the rows go into the buffers with no table.
     let mut folded = 0;
     let mut direct = false;

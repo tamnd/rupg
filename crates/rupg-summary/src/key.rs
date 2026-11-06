@@ -6,30 +6,35 @@ use std::cmp::Ordering;
 
 /// The key of an integer. Exact.
 #[must_use]
+#[inline]
 pub fn int(value: i64) -> u64 {
     (value as u64) ^ (1 << 63)
 }
 
 /// The integer of a key from [`int`].
 #[must_use]
+#[inline]
 pub fn int_of(key: u64) -> i64 {
     (key ^ (1 << 63)) as i64
 }
 
 /// The key of a 128-bit integer, the scaled form of a `numeric` (spec/09 section 9.8). Values outside the range of `i64` get the key of the nearest end, so the map is monotone and is exact only inside that range.
 #[must_use]
+#[inline]
 pub fn wide(value: i128) -> u64 {
     int(value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
 }
 
 /// True when [`wide`] keeps `value` apart from every other value.
 #[must_use]
+#[inline]
 pub fn wide_is_exact(value: i128) -> bool {
     i64::try_from(value).is_ok_and(|v| v != i64::MIN && v != i64::MAX)
 }
 
 /// The key of a `double precision` in the order of PostgreSQL: negative infinity, the numbers, positive infinity, then NaN. Negative zero and zero are equal in PostgreSQL and get the same key. Every NaN gets the highest key, because PostgreSQL makes every NaN equal. Exact for the order of PostgreSQL.
 #[must_use]
+#[inline]
 pub fn float(value: f64) -> u64 {
     if value.is_nan() {
         return u64::MAX;
@@ -41,12 +46,14 @@ pub fn float(value: f64) -> u64 {
 
 /// The comparison of `double precision` in PostgreSQL, `float8_cmp_internal`: NaN is equal to NaN and above every other value, and negative zero is equal to zero.
 #[must_use]
+#[inline]
 pub fn float_cmp(a: f64, b: f64) -> Ordering {
     float(a).cmp(&float(b))
 }
 
 /// The key of a byte string: its first 8 bytes in big endian order, with zero bytes after a shorter string. The map is monotone in byte order, which is the order of the `C` collation, and it is not exact.
 #[must_use]
+#[inline]
 pub fn bytes(value: &[u8]) -> u64 {
     let mut word = [0u8; 8];
     let len = value.len().min(8);
