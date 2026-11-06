@@ -680,8 +680,8 @@ impl Wire {
         n > 0
     }
 
-    /// [`Wire::fill`] for the next message of the main loop. When no message comes in [`IDLE_TRIM`], the session is idle. Then the task gives back the memory of its stack and of the buffers, and it waits with no limit. A read that a signal interrupts starts again. A socket with a read timeout gets `EINTR` also from a stop of the process, as a debugger makes.
-    fn wait(&mut self, tasks: &dyn Tasks) -> bool {
+    /// [`Wire::fill`] for the next message of the main loop. When no message comes in [`IDLE_TRIM`], the session is idle. Then the task gives back the memory of its stack and of the buffers, calls `idle`, and waits with no limit. A read that a signal interrupts starts again. A socket with a read timeout gets `EINTR` also from a stop of the process, as a debugger makes.
+    fn wait(&mut self, tasks: &dyn Tasks, idle: &dyn Fn()) -> bool {
         if !self.timed {
             self.timed = self.stream.set_read_timeout(Some(IDLE_TRIM)).is_ok();
         }
@@ -707,6 +707,7 @@ impl Wire {
                         self.out = OutBuf::new();
                     }
                     tasks.trim_stack();
+                    idle();
                     self.timed = self.stream.set_read_timeout(None).is_err();
                     // A small buffer for the wait, so that an idle session holds less memory.
                     size = FIRST_READ;
@@ -1047,7 +1048,10 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         let going = match step.next {
             Next::Continue => wire.out.len() < FLUSH_AT || wire.flush(),
             Next::Flush => wire.flush(),
-            Next::Read => (!wire.out.must_send() || wire.flush()) && wire.wait(&*shared.tasks),
+            Next::Read => {
+                (!wire.out.must_send() || wire.flush())
+                    && wire.wait(&*shared.tasks, &|| shared.store.release_mapped())
+            }
             Next::Close => {
                 wire.flush();
                 false
@@ -1126,11 +1130,11 @@ mod tests {
         assert!(w.fill(16));
         assert_eq!(w.pending(), b"Q");
         let mut w = wire(vec![Err(interrupted), Ok(b"S".to_vec())]);
-        assert!(w.wait(&OsTasks));
+        assert!(w.wait(&OsTasks, &|| {}));
         assert_eq!(w.pending(), b"S");
         let mut w = wire(vec![Err(io::ErrorKind::ConnectionReset), Ok(b"Q".to_vec())]);
         assert!(!w.fill(16));
-        assert!(!wire(Vec::new()).wait(&OsTasks));
+        assert!(!wire(Vec::new()).wait(&OsTasks, &|| {}));
     }
 
     #[test]

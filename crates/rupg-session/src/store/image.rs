@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use rupg_catalog::{Catalog, SequenceData};
 use rupg_common::bytes::Mapping;
@@ -19,6 +21,9 @@ const MAGIC: &[u8; 8] = b"rupg\x00img";
 /// The size of the log after which a commit makes a checkpoint, as `max_wal_size` starts one, so a restart does not read a long log.
 const LOG_LIMIT: u64 = 256 << 20;
 
+/// The least time between two releases of the pages of the mappings at the end of a statement. A release drops the page table of each mapping, and the next statement that reads a column maps its pages again with faults. On 2M rows of ClickBench, a release after each statement took about 3M cycles of each query, which was 40 percent of Q1.
+const RELEASE_EVERY: Duration = Duration::from_secs(1);
+
 /// The version of the form of an image. An image of another version does not load.
 const VERSION: u32 = 3;
 
@@ -32,6 +37,17 @@ pub(crate) struct ImageFile {
     first: Mutex<u64>,
     /// The mappings of the images whose bytes the frozen columns read. A mapping goes when no column reads it.
     maps: Mutex<Vec<Weak<dyn Mapping>>>,
+    /// The time of the monotonic clock of the last release at the end of a statement, in milliseconds after 1, or 0 before the first release.
+    released: AtomicU64,
+}
+
+/// True when the last release in `released` was at least [`RELEASE_EVERY`] before `now`, or when no release was made. Then `released` gets `now`. Of the statements that end at the same time, one gets true.
+fn release_due(released: &AtomicU64, now: Duration) -> bool {
+    let now = u64::try_from(now.as_millis()).unwrap_or(u64::MAX).saturating_add(1);
+    let last = released.load(Ordering::Relaxed);
+    let every = u64::try_from(RELEASE_EVERY.as_millis()).unwrap_or(u64::MAX);
+    (last == 0 || now.saturating_sub(last) >= every)
+        && released.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok()
 }
 
 /// The catalog of a database in an image. The catalog of `initdb` is not in the image, and a catalog that two databases share is in the image once.
@@ -77,13 +93,29 @@ impl Store {
         }
         store.heap.start_logging();
         let log = Log::create(Arc::clone(&io), path.clone(), epoch)?;
-        store.image =
-            Some(ImageFile { io, path, log, first: Mutex::new(first), maps: Mutex::new(mapped) });
+        store.image = Some(ImageFile {
+            io,
+            path,
+            log,
+            first: Mutex::new(first),
+            maps: Mutex::new(mapped),
+            released: AtomicU64::new(0),
+        });
         Ok(store)
     }
 
-    /// Gives the pages of the mapping of the image back to the operating system, at the end of a statement. The page cache keeps them, and the next statement that reads a column maps the pages that it reads again, so the memory of the process is the columns of the statements that run (spec/19 section 19.5).
-    pub(crate) fn release_mapped(&self) {
+    /// Gives the pages of the mappings of the image back to the operating system at the end of a statement, when the last release was at least [`RELEASE_EVERY`] before `now` on the monotonic clock. The statements of a busy store then read the columns that they share with no new faults, and the memory of the process is the columns of the statements of the last second (spec/19 section 19.5). [`Store::release_mapped`] gives all the pages back when a session is idle.
+    pub(crate) fn release_mapped_after(&self, now: Duration) {
+        let Some(file) = &self.image else {
+            return;
+        };
+        if release_due(&file.released, now) {
+            self.release_mapped();
+        }
+    }
+
+    /// Gives the pages of the mappings of the image back to the operating system. The page cache keeps them, and the next statement that reads a column maps the pages that it reads again.
+    pub fn release_mapped(&self) {
         let Some(file) = &self.image else {
             return;
         };
@@ -394,5 +426,22 @@ fn take_shared(input: &mut Reader<'_>) -> Result<Shared> {
         1 => Ok(Shared::Earlier(Persist::take(input)?)),
         2 => Ok(Shared::New),
         _ => Err(corrupt("a catalog of the image has a bad tag")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A release at the end of a statement comes at most once in each [`RELEASE_EVERY`], and the first one comes at once.
+    #[test]
+    fn releases_at_most_once_a_second() {
+        let released = AtomicU64::new(0);
+        assert!(release_due(&released, Duration::ZERO));
+        assert!(!release_due(&released, Duration::from_millis(1)));
+        assert!(!release_due(&released, Duration::from_millis(999)));
+        assert!(release_due(&released, Duration::from_millis(1000)));
+        assert!(!release_due(&released, Duration::from_millis(1500)));
+        assert!(release_due(&released, Duration::from_secs(5)));
     }
 }

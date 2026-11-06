@@ -2241,7 +2241,7 @@ impl Connection {
 
     /// The parameters that changed, then `ReadyForQuery`.
     fn ready_for_query(&mut self, out: &mut OutBuf) {
-        self.store.release_mapped();
+        self.store.release_mapped_after(self.clock.monotonic());
         self.report_idle();
         self.sync_role();
         self.session.set_utf8(self.utf8());
