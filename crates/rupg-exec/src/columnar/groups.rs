@@ -1070,6 +1070,11 @@ fn scan_run<const W: usize>(
         folded += sel.len();
         ids.clear();
         for (n, ((key, &hash), &i)) in keys.iter().zip(&hashes).zip(&sel).enumerate() {
+            // The rows of a table often come in the order of a key, so a row often has the key of the row before it, and then its group.
+            if n > 0 && keys[n - 1] == *key {
+                ids.push(ids[n - 1]);
+                continue;
+            }
             // The table is larger than the cache of the core for many groups, so the read of a slot starts early.
             if let Some(&ahead) = hashes.get(n + PREFETCH) {
                 table.prefetch(ahead);
