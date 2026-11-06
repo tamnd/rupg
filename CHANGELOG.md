@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A vector scan with `ORDER BY` and `LIMIT`, whose targets are all keys of the order on columns of integers, dates, times or text codes, finds its top in the tasks of the server. Each task keeps its own top and the tasks share the first key of the last row of their tops, so that a task skips the rows and, by the zones of a key of integers, the vectors that cannot go in the top (#1374).
 - `upper`, `lower`, `initcap` and `casefold` in a collation of ICU map the case in the language of the collation, with the words of UAX #29 for `initcap`, as in PostgreSQL (#1373).
 - A vector scan keeps `numeric` columns of one scale as integers and computes their comparisons, `+`, `-`, `*`, `sum` and `avg` with no `numeric` value for each row. A `GROUP BY` of a `character(n)` column groups on the bytes (#1372).
 - Comparisons of arrays in a collation of ICU (`<`, `<=`, `>`, `>=`, `btarraycmp`, `array_larger`, `array_smaller`, `max`, `min`, `GREATEST`, `LEAST` and a sort) and `array_sort` order the strings of the elements as the ICU collator does, as in PostgreSQL (#1371).

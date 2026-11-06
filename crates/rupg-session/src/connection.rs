@@ -4330,6 +4330,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/text_filter_tasks.test")));
     }
 
+    /// The tasks of the server find the top of a vector scan with `ORDER BY` and `LIMIT` when each target is a key, with the order of Postgres for nulls first and last, `DESC`, empty texts, timestamps, more keys, a filter, `OFFSET` and a top that the tasks do not find.
+    #[test]
+    fn top_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/top_tasks.test")));
+    }
+
     /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.
     #[test]
     fn group_code_places() {

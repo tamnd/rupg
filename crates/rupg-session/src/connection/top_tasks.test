@@ -1,0 +1,125 @@
+> CREATE TABLE tt (u int, s text, t timestamp, k int)
+CREATE TABLE
+> INSERT INTO tt SELECT i, CASE WHEN i % 13 = 0 THEN NULL WHEN i % 7 = 0 THEN '' ELSE 'w' || (i::bigint * 7919 % 100003) END, CASE WHEN i % 17 = 0 THEN NULL ELSE timestamp '2020-01-01' + (i::bigint * 104729 % 200000) * interval '1 second' END, i % 10 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE tt
+ANALYZE
+> SELECT s FROM tt WHERE s <> '' ORDER BY s LIMIT 10
+fields s@tt.2:25:-1:-1
+row w0
+row w0
+row w1
+row w1
+row w10
+row w10
+row w10
+row w100
+row w100
+row w1000
+SELECT 10
+> SELECT s FROM tt ORDER BY s DESC LIMIT 5
+fields s@tt.2:25:-1:-1
+row NULL
+row NULL
+row NULL
+row NULL
+row NULL
+SELECT 5
+> SELECT s FROM tt ORDER BY s NULLS FIRST LIMIT 3
+fields s@tt.2:25:-1:-1
+row NULL
+row NULL
+row NULL
+SELECT 3
+> SELECT t, s FROM tt WHERE s <> '' ORDER BY t, s LIMIT 10
+fields t@tt.3:1114:8:-1,s@tt.2:25:-1:-1
+row 2020-01-01 00:00:00,w52489
+row 2020-01-01 00:00:01,w80701
+row 2020-01-01 00:00:02,w8910
+row 2020-01-01 00:00:03,w37122
+row 2020-01-01 00:00:04,w65334
+row 2020-01-01 00:00:05,w93546
+row 2020-01-01 00:00:08,w78179
+row 2020-01-01 00:00:10,w34600
+row 2020-01-01 00:00:11,w62812
+row 2020-01-01 00:00:12,w91024
+SELECT 10
+> SELECT u FROM tt WHERE k = 3 ORDER BY u DESC LIMIT 4 OFFSET 2
+fields u@tt.1:23:4:-1
+row 299973
+row 299963
+row 299953
+row 299943
+SELECT 4
+> SELECT s, k FROM tt WHERE k IN (1, 2) AND s <> '' ORDER BY k DESC, s LIMIT 6
+fields s@tt.2:25:-1:-1,k@tt.4:23:4:-1
+row w100,2
+row w100000,2
+row w10001,2
+row w10006,2
+row w10008,2
+row w1001,2
+SELECT 6
+> SELECT s FROM tt WHERE s = 'absent' ORDER BY s LIMIT 3
+fields s@tt.2:25:-1:-1
+SELECT 0
+> SELECT count(*), count(DISTINCT s), min(s), max(s) FROM (SELECT s FROM tt WHERE s <> '' ORDER BY s LIMIT 3000 OFFSET 100) q
+fields count:20:8:-1,count:20:8:-1,min:25:-1:-1,max:25:-1:-1
+row 3000,1262,w10032,w11168
+SELECT 1
+> SELECT k, u FROM tt ORDER BY k, u LIMIT 3
+fields k@tt.4:23:4:-1,u@tt.1:23:4:-1
+row 0,10
+row 0,20
+row 0,30
+SELECT 3
+> SELECT t FROM tt ORDER BY t DESC LIMIT 3
+fields t@tt.3:1114:8:-1
+row NULL
+row NULL
+row NULL
+SELECT 3
+> SELECT s FROM tt WHERE s <> '' ORDER BY s DESC NULLS LAST LIMIT 4
+fields s@tt.2:25:-1:-1
+row w99999
+row w99999
+row w99999
+row w99998
+SELECT 4
+> SELECT u, s FROM tt WHERE s <> '' ORDER BY u, s LIMIT 5
+fields u@tt.1:23:4:-1,s@tt.2:25:-1:-1
+row 1,w7919
+row 2,w15838
+row 3,w23757
+row 4,w31676
+row 5,w39595
+SELECT 5
+> SELECT u FROM tt ORDER BY u DESC LIMIT 3
+fields u@tt.1:23:4:-1
+row 300000
+row 299999
+row 299998
+SELECT 3
+> SELECT u, k FROM tt WHERE k = 4 ORDER BY u DESC NULLS LAST, k LIMIT 3
+fields u@tt.1:23:4:-1,k@tt.4:23:4:-1
+row 299994,4
+row 299984,4
+row 299974,4
+SELECT 3
+> CREATE TABLE tn (v int)
+CREATE TABLE
+> INSERT INTO tn SELECT CASE WHEN i > 299990 THEN NULL ELSE i END FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE tn
+ANALYZE
+> SELECT v FROM tn ORDER BY v NULLS FIRST LIMIT 3
+fields v@tn.1:23:4:-1
+row NULL
+row NULL
+row NULL
+SELECT 3
+> SELECT v FROM tn ORDER BY v DESC NULLS LAST LIMIT 2
+fields v@tn.1:23:4:-1
+row 299990
+row 299989
+SELECT 2
