@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A vector scan with `GROUP BY` on the tasks of the server packs its keys into fewer words, by the bits of the type of each key and a flag of a null only when the column has a null, so that its tables have smaller slots: on 2M rows of ClickBench the cycles of q35 go from 742M to 489M, of q17 from 467M to 371M, of q16 from 315M to 257M and of q19 from 1364M to 1209M.
 - A vector scan with `GROUP BY` on the tasks of the server gives a row with the key of the row before it the group of that row, with no probe of its table. The rows of ClickBench often come in the order of `UserID`, and lines 16, 36, 17 and 43 on 2M rows take 6 to 11 percent fewer instructions.
 - An aggregate with no `GROUP BY` on the tasks of the server keeps one buffer for each task in place of 256, and a vector scan with `GROUP BY` and fewer than one group for each 1024 rows puts its groups in the order of their first rows with a sort of the first rows, in place of a map of one bit for each row. ClickBench line 2 on 2M rows takes 22M instructions in place of 24M.
 - A vector scan with `GROUP BY` on the tasks of the server starts the read of the slot of each row in its table early, and matches each fold once for each vector in place of once for each row. ClickBench lines 16, 34 and 36 on 2M rows take 4 to 5 percent fewer instructions.

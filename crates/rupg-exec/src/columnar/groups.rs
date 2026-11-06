@@ -4,7 +4,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::Arc;
 
-use rupg_column::segment::ROWS;
+use rupg_column::segment::{Kind, ROWS};
 use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::Result;
 use rupg_kernels::hash::prefetch;
@@ -222,7 +222,7 @@ impl Found {
     }
 }
 
-/// Groups with the words of their keys, the first row and the states of each group, in the order of their first rows. Each key has `width` words, the words of the keys and the mask of nulls, so that a buffer keeps only the words that the plan uses. The hash of a key is not kept: to compute it again costs less than to write it and to read it again.
+/// Groups with their packed keys of [`Pack`], the first row and the states of each group, in the order of their first rows. Each key has `width` words, so that a buffer keeps only the words that the plan uses. The hash of a key is not kept: to compute it again costs less than to write it and to read it again.
 struct Buf {
     width: usize,
     keys: Vec<u64>,
@@ -307,6 +307,181 @@ struct Run {
     extremes: Vec<Option<(i64, i64)>>,
     /// The last row of the run that passes the conditions.
     last: Option<u64>,
+}
+
+/// The bits of a value or of a null flag of a key in the words of a packed key.
+#[derive(Clone, Copy)]
+struct Field {
+    word: usize,
+    shift: u32,
+    bits: u32,
+    /// True when the bits are the low bits of a signed integer, which a read extends with its sign.
+    signed: bool,
+}
+
+impl Field {
+    #[inline]
+    fn mask(self) -> u64 {
+        if self.bits >= 64 { u64::MAX } else { (1 << self.bits) - 1 }
+    }
+
+    /// Puts the low bits of `value` into the field of `key`, whose bits are 0.
+    #[inline]
+    fn put(self, key: &mut [u64], value: u64) {
+        key[self.word] |= (value & self.mask()) << self.shift;
+    }
+
+    #[inline]
+    fn get(self, key: &[u64]) -> u64 {
+        let v = (key[self.word] >> self.shift) & self.mask();
+        if self.signed && self.bits < 64 {
+            let rest = 64 - self.bits;
+            ((v << rest) as i64 >> rest) as u64
+        } else {
+            v
+        }
+    }
+}
+
+/// Where a key of a plan is in a packed key.
+#[derive(Clone, Copy)]
+enum Place {
+    /// A key with the same word for each row, or null for each row with `None`, which has no bits.
+    Const(Option<u64>),
+    /// The bits of the value, and the flag of a null when the key can be null.
+    Bits(Field, Option<Field>),
+}
+
+/// The bits of the word of a value of the kind `kind`, and true when the word is a signed value.
+fn bits_of(kind: Kind) -> (u32, bool) {
+    match kind {
+        Kind::Bool => (1, false),
+        Kind::Int2 => (16, true),
+        Kind::Int4 | Kind::Date => (32, true),
+        // A code of a dictionary is a `u32`.
+        Kind::Text | Kind::Bytea => (32, false),
+        _ => (64, false),
+    }
+}
+
+/// The keys of a plan in fewer words. Each key keeps only the bits that its type can have, and a flag of one bit for a null only when its column has a null, so that `UserID`, the minute of `EventTime` and the code of `SearchPhrase` fit in 2 words in place of 4. A smaller key makes a smaller slot in each table, and a hash, a compare and a copy of fewer words. The tasks keep the packed keys, and [`Pack::unpack`] gives the words of the keys and the mask of nulls of each group of the result.
+struct Pack {
+    places: Vec<Place>,
+    /// The words of a packed key, at least 1.
+    width: usize,
+}
+
+impl Pack {
+    fn new(stored: &[Arc<Stored>], plan: &Plan) -> Pack {
+        let nulls = |place: usize| stored[place].segments.iter().any(|s| s.summary.nulls > 0);
+        // The bits of the value of each key, true for a signed value, and true when the key can be null.
+        let shapes: Vec<Option<(u32, bool, bool)>> = plan
+            .keys
+            .iter()
+            .map(|input| match *input {
+                Input::Column(place) => {
+                    let (bits, signed) = bits_of(stored[place].kind);
+                    Some((bits, signed, nulls(place)))
+                }
+                Input::Floor(place, _) => Some((64, false, nulls(place))),
+                // The value is from 0 to `span - 1`, and an infinite timestamp gives null.
+                Input::Part(_, _, span) => {
+                    let most = u64::try_from(span - 1).unwrap_or(u64::MAX);
+                    Some(((64 - most.leading_zeros()).max(1), false, true))
+                }
+                Input::Case { .. } => Some((64, false, true)),
+                Input::Const(_) => None,
+            })
+            .collect();
+        // The fields go into the words largest first, each into the first word with room, so the words are few.
+        let mut fields: Vec<(u32, usize, bool)> = Vec::new();
+        for (k, shape) in shapes.iter().enumerate() {
+            if let Some((bits, _, null)) = *shape {
+                fields.push((bits, k, false));
+                if null {
+                    fields.push((1, k, true));
+                }
+            }
+        }
+        fields.sort_by_key(|&(bits, ..)| Reverse(bits));
+        let mut used: Vec<u32> = Vec::new();
+        let mut values: Vec<Option<Field>> = vec![None; plan.keys.len()];
+        let mut flags: Vec<Option<Field>> = vec![None; plan.keys.len()];
+        for (bits, k, null) in fields {
+            let word = used.iter().position(|&u| u + bits <= 64).unwrap_or_else(|| {
+                used.push(0);
+                used.len() - 1
+            });
+            let signed = !null && shapes[k].is_some_and(|s| s.1);
+            let field = Field { word, shift: used[word], bits, signed };
+            used[word] += bits;
+            if null {
+                flags[k] = Some(field);
+            } else {
+                values[k] = Some(field);
+            }
+        }
+        let places = plan
+            .keys
+            .iter()
+            .zip(values.into_iter().zip(flags))
+            .map(|(input, (value, flag))| match (input, value) {
+                (_, Some(value)) => Place::Bits(value, flag),
+                (Input::Const(word), None) => Place::Const(*word),
+                (_, None) => Place::Const(None),
+            })
+            .collect();
+        Pack { places, width: used.len().max(1) }
+    }
+
+    /// Puts the word `value` of the key `k` into the packed key `key`.
+    #[inline]
+    fn put(&self, key: &mut [u64], k: usize, value: u64) {
+        if let Place::Bits(field, _) = self.places[k] {
+            field.put(key, value);
+        }
+    }
+
+    /// Puts a null of the key `k` into the packed key `key`.
+    #[inline]
+    fn put_null(&self, key: &mut [u64], k: usize) {
+        if let Place::Bits(_, Some(flag)) = self.places[k] {
+            flag.put(key, 1);
+        }
+    }
+
+    /// The word of the key `k` of the packed key `packed`, or `None` for a null.
+    #[inline]
+    fn value(&self, packed: &[u64], k: usize) -> Option<u64> {
+        match self.places[k] {
+            Place::Const(word) => word,
+            Place::Bits(value, flag) => {
+                (!flag.is_some_and(|f| f.get(packed) != 0)).then(|| value.get(packed))
+            }
+        }
+    }
+
+    /// The words of the keys and the mask of nulls of the packed key `packed`, into `out`, which has a word for each key and the mask.
+    #[inline]
+    fn unpack(&self, packed: &[u64], out: &mut [u64]) {
+        let mut mask = 0;
+        for (k, (place, to)) in self.places.iter().zip(out.iter_mut()).enumerate() {
+            match *place {
+                Place::Const(Some(word)) => *to = word,
+                Place::Const(None) => {
+                    *to = 0;
+                    mask |= 1 << k;
+                }
+                Place::Bits(value, flag) => {
+                    *to = value.get(packed);
+                    if flag.is_some_and(|f| f.get(packed) != 0) {
+                        mask |= 1 << k;
+                    }
+                }
+            }
+        }
+        out[self.places.len()] = mask;
+    }
 }
 
 pub(super) fn null(decoded: &Decoded, i: usize) -> bool {
@@ -914,6 +1089,7 @@ pub(super) fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
 fn scan_run<const W: usize>(
     stored: &[Arc<Stored>],
     plan: &Plan,
+    pack: &Pack,
     places: &[usize],
     units: &[(usize, usize)],
     rows: usize,
@@ -921,7 +1097,7 @@ fn scan_run<const W: usize>(
     let width = plan.keys.len();
     // With no keys the scan has one group, so one part holds it.
     let count = if width == 0 { 1 } else { PARTS };
-    let mut parts: Vec<Buf> = (0..count).map(|_| Buf::new(&plan.folds, width + 1)).collect();
+    let mut parts: Vec<Buf> = (0..count).map(|_| Buf::new(&plan.folds, pack.width)).collect();
     let mut extremes: Vec<Option<(i64, i64)>> = vec![None; plan.bases];
     let first_base = plan.folds.len() - plan.bases;
     let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
@@ -932,7 +1108,7 @@ fn scan_run<const W: usize>(
     let mut hashes: Vec<u64> = Vec::with_capacity(VECTOR);
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
-    let mut local = Buf::new(&plan.folds, width + 1);
+    let mut local = Buf::new(&plan.folds, pack.width);
     // With no keys the rows fold with no table, so the table has no room.
     let mut table = WordTable::<W>::new(if width == 0 { 0 } else { LOCAL });
     // The rows that the table folded since it was last empty, and true when the rows go into the buffers with no table.
@@ -966,20 +1142,36 @@ fn scan_run<const W: usize>(
                             .zip(&tested)
                             .all(|(t, d)| passes(&t.1, null(d, i), int(d, i)));
                         match (chosen, default) {
-                            (true, _) if null(d, i) => key[width] |= 1 << k,
-                            (true, _) => key[k] = int(d, i) as u64,
-                            (false, Some(word)) => key[k] = word,
-                            (false, None) => key[width] |= 1 << k,
+                            (true, _) if null(d, i) => pack.put_null(key, k),
+                            (true, _) => pack.put(key, k, int(d, i) as u64),
+                            (false, Some(word)) => pack.put(key, k, word),
+                            (false, None) => pack.put_null(key, k),
                         }
                     }
                 }
                 Input::Column(place) => {
                     let Some(d) = decoded[place].as_ref() else { continue };
-                    for (key, &i) in keys.iter_mut().zip(&sel) {
-                        if null(d, i) {
-                            key[width] |= 1 << k;
-                        } else {
-                            key[k] = int(d, i) as u64;
+                    let Place::Bits(value, flag) = pack.places[k] else { continue };
+                    // A vector with no nulls, the most common, puts each value with no test.
+                    match (&d.data, &d.nulls) {
+                        (DecodedData::Int(v), None) => {
+                            for (key, &i) in keys.iter_mut().zip(&sel) {
+                                value.put(key, v[i] as u64);
+                            }
+                        }
+                        (DecodedData::Code(v), None) => {
+                            for (key, &i) in keys.iter_mut().zip(&sel) {
+                                value.put(key, u64::from(v[i]));
+                            }
+                        }
+                        _ => {
+                            for (key, &i) in keys.iter_mut().zip(&sel) {
+                                if !null(d, i) {
+                                    value.put(key, int(d, i) as u64);
+                                } else if let Some(flag) = flag {
+                                    flag.put(key, 1);
+                                }
+                            }
                         }
                     }
                 }
@@ -987,11 +1179,15 @@ fn scan_run<const W: usize>(
                     let Some(d) = decoded[place].as_ref() else { continue };
                     for (key, &i) in keys.iter_mut().zip(&sel) {
                         if null(d, i) {
-                            key[width] |= 1 << k;
+                            pack.put_null(key, k);
                         } else {
                             let v = int(d, i);
                             let infinite = v == i64::MIN || v == i64::MAX;
-                            key[k] = if infinite { v } else { v - v.rem_euclid(step) } as u64;
+                            pack.put(
+                                key,
+                                k,
+                                if infinite { v } else { v - v.rem_euclid(step) } as u64,
+                            );
                         }
                     }
                 }
@@ -1000,14 +1196,14 @@ fn scan_run<const W: usize>(
                     for (key, &i) in keys.iter_mut().zip(&sel) {
                         let v = int(d, i);
                         if null(d, i) || v == i64::MIN || v == i64::MAX {
-                            key[width] |= 1 << k;
+                            pack.put_null(key, k);
                         } else {
-                            key[k] = v.div_euclid(step).rem_euclid(span) as u64;
+                            pack.put(key, k, v.div_euclid(step).rem_euclid(span) as u64);
                         }
                     }
                 }
-                Input::Const(Some(word)) => keys.iter_mut().for_each(|key| key[k] = word),
-                Input::Const(None) => keys.iter_mut().for_each(|key| key[width] |= 1 << k),
+                // A constant key has no bits in a packed key.
+                Input::Const(_) => {}
             }
         }
         hashes.clear();
@@ -1145,6 +1341,7 @@ pub(super) struct Top {
 fn top_groups(
     parts: &[Buf],
     plan: &Plan,
+    pack: &Pack,
     top: &Top,
     last: Option<u64>,
     extremes: &[Option<(i64, i64)>],
@@ -1157,6 +1354,7 @@ fn top_groups(
         return None;
     }
     let width = plan.keys.len() + 1;
+    let mut words = [0_u64; 8];
     // A larger rank is first in the sort. The heap has the first `bound + 1` ranks, with the last of them at its top.
     let rank = |c: i64| if top.descending { i128::from(c) } else { -i128::from(c) };
     let mut best: BinaryHeap<Reverse<(i128, u32, u32)>> = BinaryHeap::with_capacity(top.bound + 2);
@@ -1173,9 +1371,10 @@ fn top_groups(
             }
         }
         for &(k, lo, hi) in &top.ranges {
-            for words in part.keys.chunks_exact(width) {
-                let v = i128::from(words[k] as i64);
-                if words[width - 1] >> k & 1 == 0 && (v < lo || v > hi) {
+            for packed in part.keys.chunks_exact(pack.width) {
+                if let Some(v) = pack.value(packed, k)
+                    && (i128::from(v as i64) < lo || i128::from(v as i64) > hi)
+                {
                     return None;
                 }
             }
@@ -1192,7 +1391,8 @@ fn top_groups(
     let mut out = Buf::new(&plan.folds, width);
     for &(_, p, g) in &best {
         let (part, g) = (&parts[p as usize], g as usize);
-        out.push(&part.key::<8>(g), part.firsts[g]);
+        pack.unpack(&part.keys[g * pack.width..(g + 1) * pack.width], &mut words);
+        out.push(&words, part.firsts[g]);
         for (to, from) in out.states.iter_mut().zip(&part.states) {
             to.take(from, g);
         }
@@ -1244,21 +1444,22 @@ pub(super) fn run(
     }
     let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
     let chunk = units.len().div_ceil(jobs);
+    let pack = Pack::new(stored, plan);
+    let packed = pack.width;
     let mut runs: Vec<Option<Result<Run>>> = Vec::new();
     runs.resize_with(units.len().div_ceil(chunk), || None);
     let work: Vec<Job<'_>> = units
         .chunks(chunk)
         .zip(&mut runs)
         .map(|(units, out)| {
-            let places = &places;
+            let (places, pack) = (&places, &pack);
             Box::new(move || {
                 // A key of fewer words has smaller slots, so more of the table stays in the cache, and a probe hashes and compares fewer words.
-                *out = Some(if plan.keys.len() < 2 {
-                    scan_run::<2>(stored, plan, places, units, rows)
-                } else if plan.keys.len() < 4 {
-                    scan_run::<4>(stored, plan, places, units, rows)
-                } else {
-                    scan_run::<8>(stored, plan, places, units, rows)
+                *out = Some(match packed {
+                    1 => scan_run::<1>(stored, plan, pack, places, units, rows),
+                    2 => scan_run::<2>(stored, plan, pack, places, units, rows),
+                    3 | 4 => scan_run::<4>(stored, plan, pack, places, units, rows),
+                    _ => scan_run::<8>(stored, plan, pack, places, units, rows),
                 });
             }) as Job<'_>
         })
@@ -1292,12 +1493,11 @@ pub(super) fn run(
             Box::new(move || {
                 for (slot, bufs) in out.iter_mut().zip(bufs) {
                     let bufs = std::mem::take(bufs);
-                    *slot = Some(if width <= 2 {
-                        merge::<2>(bufs, &plan.folds, mins, width)
-                    } else if width <= 4 {
-                        merge::<4>(bufs, &plan.folds, mins, width)
-                    } else {
-                        merge::<8>(bufs, &plan.folds, mins, width)
+                    *slot = Some(match packed {
+                        1 => merge::<1>(bufs, &plan.folds, mins, packed),
+                        2 => merge::<2>(bufs, &plan.folds, mins, packed),
+                        3 | 4 => merge::<4>(bufs, &plan.folds, mins, packed),
+                        _ => merge::<8>(bufs, &plan.folds, mins, packed),
                     });
                 }
             }) as Job<'_>
@@ -1305,7 +1505,7 @@ pub(super) fn run(
         .collect();
     tasks.run_all(work);
     let parts: Vec<Buf> = parts.into_iter().flatten().collect();
-    if let Some(found) = top.and_then(|top| top_groups(&parts, plan, top, last, &extremes)) {
+    if let Some(found) = top.and_then(|top| top_groups(&parts, plan, &pack, top, last, &extremes)) {
         return Ok(found);
     }
     let groups: usize = parts.iter().map(Buf::len).sum();
@@ -1368,7 +1568,7 @@ pub(super) fn run(
         .zip(firsts.chunks_mut(chunk))
         .zip(columns)
         .map(|(((order, words), firsts), mut columns)| {
-            let parts = &parts;
+            let (parts, pack) = (&parts, &pack);
             Box::new(move || {
                 for (n, &(p, g)) in order.iter().enumerate() {
                     // Each group of the run comes from one of many parts, so the processor cannot predict the next reads.
@@ -1376,15 +1576,10 @@ pub(super) fn run(
                         parts[p as usize].prefetch(g as usize);
                     }
                     let (part, g) = (&parts[p as usize], g as usize);
-                    // A loop of at most 8 words, which costs less than a call of `memcpy` for each group.
-                    let to = &mut words[n * width..(n + 1) * width];
-                    if width <= 2 {
-                        to.iter_mut().zip(&part.key::<2>(g)).for_each(|(to, &word)| *to = word);
-                    } else if width <= 4 {
-                        to.iter_mut().zip(&part.key::<4>(g)).for_each(|(to, &word)| *to = word);
-                    } else {
-                        to.iter_mut().zip(&part.key::<8>(g)).for_each(|(to, &word)| *to = word);
-                    }
+                    pack.unpack(
+                        &part.keys[g * packed..(g + 1) * packed],
+                        &mut words[n * width..(n + 1) * width],
+                    );
                     firsts[n] = part.firsts[g];
                     for (to, from) in columns.iter_mut().zip(&part.states) {
                         match (to, from) {
@@ -1436,4 +1631,36 @@ enum Column<'a> {
     Sum(&'a mut [(i64, i128)]),
     Extreme(&'a mut [Option<i64>]),
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packs_the_extreme_values_of_each_kind() {
+        let cases: [(Kind, &[i64]); 6] = [
+            (Kind::Bool, &[0, 1]),
+            (Kind::Int2, &[i64::from(i16::MIN), -1, 0, i64::from(i16::MAX)]),
+            (Kind::Int4, &[i64::from(i32::MIN), -1, 0, i64::from(i32::MAX)]),
+            (Kind::Date, &[i64::from(i32::MIN), -2451545, 0, i64::from(i32::MAX)]),
+            (Kind::Text, &[0, i64::from(u32::MAX)]),
+            (Kind::Int8, &[i64::MIN, -1, 0, i64::MAX]),
+        ];
+        for (kind, values) in cases {
+            let (bits, signed) = bits_of(kind);
+            // A field after another field in the same word, and a flag after it, must keep the value.
+            let shift = (64 - bits).min(3);
+            let field = Field { word: 1, shift, bits, signed };
+            for &v in values {
+                let mut key = [u64::MAX, 0];
+                if shift > 0 {
+                    key[1] = (1 << shift) - 1;
+                }
+                field.put(&mut key, v as u64);
+                assert_eq!(field.get(&key) as i64, v, "{kind:?} {v}");
+                assert_eq!(key[0], u64::MAX);
+            }
+        }
+    }
 }
