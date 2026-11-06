@@ -1,6 +1,7 @@
 //! The groups of a vector scan on the tasks of the server (spec/14 section 14.5), as a hash aggregate with parts of the hashes. Each task reads a run of the vectors and keeps the rows that pass the conditions. It folds the rows into a small table that stays in the cache, and when the table is full, it moves the groups of the table into [`PARTS`] buffers, one for each part of the hashes of the keys. When the table folds few rows into each group, the task puts each row into the buffers with no table. Then each task merges the buffers of some parts, from the buffers of the first run to the last, so the first row of each group is its first row in the scan. The groups then go in the order of their first rows, which is the order of the scan on one task.
 
-use std::collections::BTreeSet;
+use std::cmp::Reverse;
+use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::Arc;
 
 use rupg_column::segment::ROWS;
@@ -1038,7 +1039,82 @@ fn merge<const W: usize>(bufs: Vec<Buf>, folds: &[Fold], mins: &[bool], width: u
     merged
 }
 
-/// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`.
+/// For `ORDER BY` of one count with `LIMIT`, the groups that [`run`] gives: the place of the fold of the count in the folds of the plan, true for a descending order, and the bound of the sort. For each key of the plan that a derived key reads, `ranges` has the place of the key and the range of its values for which the derived key has a value of its type.
+pub(super) struct Top {
+    pub(super) fold: usize,
+    pub(super) descending: bool,
+    pub(super) bound: usize,
+    pub(super) ranges: Vec<(usize, i128, i128)>,
+}
+
+/// The groups of the first `top.bound` counts of the parts `parts`, in the order of their first rows, when the first `top.bound` counts in the order of the sort and the count after them are all different. The bounded heap of the sort then keeps these groups for each order of the groups, as `distinct_top` of the scan finds them. The parts have different keys, so the count of each group is in one part. `None` when two of these counts are equal, for few groups, or when the value of a key of a group is out of `top.ranges`, so that the order of all the groups gives the error of the derived key.
+fn top_groups(
+    parts: &[Buf],
+    plan: &Plan,
+    top: &Top,
+    last: Option<u64>,
+    extremes: &[Option<(i64, i64)>],
+) -> Option<Found> {
+    if !matches!(plan.folds.get(top.fold), Some(Fold::Count | Fold::CountArg(_))) {
+        return None;
+    }
+    let groups: usize = parts.iter().map(Buf::len).sum();
+    if groups <= top.bound.saturating_mul(4) {
+        return None;
+    }
+    let width = plan.keys.len() + 1;
+    // A larger rank is first in the sort. The heap has the first `bound + 1` ranks, with the last of them at its top.
+    let rank = |c: i64| if top.descending { i128::from(c) } else { -i128::from(c) };
+    let mut best: BinaryHeap<Reverse<(i128, u32, u32)>> = BinaryHeap::with_capacity(top.bound + 2);
+    let mut most = None;
+    for (p, part) in parts.iter().enumerate() {
+        let Folded::Count(counts) = &part.states[top.fold] else { return None };
+        for (g, &c) in counts.iter().enumerate() {
+            let r = rank(c);
+            if best.len() <= top.bound {
+                best.push(Reverse((r, p as u32, g as u32)));
+            } else if best.peek().is_some_and(|t| r > t.0.0) {
+                best.pop();
+                best.push(Reverse((r, p as u32, g as u32)));
+            }
+        }
+        for &(k, lo, hi) in &top.ranges {
+            for words in part.keys.chunks_exact(width) {
+                let v = i128::from(words[k] as i64);
+                if words[width - 1] >> k & 1 == 0 && (v < lo || v > hi) {
+                    return None;
+                }
+            }
+        }
+        most = most.max(part.firsts.iter().max().copied());
+    }
+    let mut best: Vec<(i128, u32, u32)> = best.into_iter().map(|r| r.0).collect();
+    best.sort_unstable_by_key(|a| Reverse(a.0));
+    if best.len() <= top.bound || best.windows(2).any(|w| w[0].0 == w[1].0) {
+        return None;
+    }
+    best.truncate(top.bound);
+    best.sort_unstable_by_key(|&(_, p, g)| parts[p as usize].firsts[g as usize]);
+    let mut out = Buf::new(&plan.folds, width);
+    for &(_, p, g) in &best {
+        let (part, g) = (&parts[p as usize], g as usize);
+        out.push(&part.key::<8>(g), part.firsts[g]);
+        for (to, from) in out.states.iter_mut().zip(&part.states) {
+            to.take(from, g);
+        }
+    }
+    // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
+    let trailing = last.is_some() && most != last;
+    Some(Found {
+        words: out.keys,
+        firsts: out.firsts,
+        states: out.states,
+        extremes: extremes.to_vec(),
+        trailing,
+    })
+}
+
+/// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`. With `top`, the groups can be only the groups of the result of the sort, as [`top_groups`] gives them.
 ///
 /// # Errors
 ///
@@ -1049,6 +1125,7 @@ pub(super) fn run(
     plan: &Plan,
     rows: usize,
     segments: usize,
+    top: Option<&Top>,
 ) -> Result<Found> {
     let mut places: Vec<usize> = plan
         .keys
@@ -1133,6 +1210,9 @@ pub(super) fn run(
         .collect();
     tasks.run_all(work);
     let parts: Vec<Buf> = parts.into_iter().flatten().collect();
+    if let Some(found) = top.and_then(|top| top_groups(&parts, plan, top, last, &extremes)) {
+        return Ok(found);
+    }
     // The place of each group is the number of first rows before its first row, which a map of the first rows gives.
     let mut map = vec![0_u64; rows / 64 + 1];
     for part in &parts {

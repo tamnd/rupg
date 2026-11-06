@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A vector scan with `GROUP BY` and `ORDER BY` of one count with `LIMIT` gets from the tasks of the server only the groups of the result, when the counts of these groups and the count after them are all different. The tasks do not put all the groups in the order of their first rows, and the scan does not make the derived keys of all the groups. ClickBench lines 36 and 16 take 13 and 12 percent fewer instructions.
 - A partition key takes a deterministic collation of ICU. The bounds, the routing of the rows, the pruning and the order of the partitions follow the collation, and `pg_get_partition_constraintdef` shows the collation of each bound, as in PostgreSQL (#1382).
 - An index, a `PRIMARY KEY` and a `UNIQUE` constraint take a deterministic collation of ICU. A scan of the index gives the rows in the order of the collation, and a comparison in the collation is an index condition, as in PostgreSQL (#1381).
 - A vector scan with `GROUP BY` and `LIMIT` and no sort, whose groups go in the order of a sort of their keys with a first key on a column of integers, finds in the tasks of the server only the groups whose first key is not more than the `n`th least value of the column. A scan that reads the zones finds this value. ClickBench line 18 goes from 310 ms to 13 ms.
