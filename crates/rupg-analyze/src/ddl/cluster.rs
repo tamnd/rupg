@@ -655,7 +655,7 @@ impl Definer<'_, '_> {
                 equal: member(3).map_or(0, code),
                 nulls_first,
                 hashable: false,
-                collation: 0,
+                collation: info.collations.get(at).copied().unwrap_or_default(),
             });
             keys.exprs.push(expr);
         }

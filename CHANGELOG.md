@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An index, a `PRIMARY KEY` and a `UNIQUE` constraint take a deterministic collation of ICU. A scan of the index gives the rows in the order of the collation, and a comparison in the collation is an index condition, as in PostgreSQL (#1381).
 - A vector scan with `GROUP BY` and `LIMIT` and no sort, whose groups go in the order of a sort of their keys with a first key on a column of integers, finds in the tasks of the server only the groups whose first key is not more than the `n`th least value of the column. A scan that reads the zones finds this value. ClickBench line 18 goes from 310 ms to 13 ms.
 - A join of tables with frozen columns reads only the rows that can join. Each table keeps the rows that pass its own conditions, which the vectors test, and then the rows whose key of an `=` with another table is a key of the other table. The reduction runs only when no condition of `WHERE` can fail (#1378).
 - A column of `CREATE TABLE`, `ALTER TABLE ADD COLUMN` and `LIKE` takes a deterministic collation of ICU, and its sorts, comparisons and case mappings follow the collation, as in PostgreSQL (#1377).

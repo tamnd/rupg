@@ -74,14 +74,14 @@ pub(crate) struct Stats {
     needed: Vec<(Var, i32, BTreeSet<usize>)>,
     /// Each `PlaceHolderVar` that the query reads, with its width, the relations of the node that computes it and the relations of the places that read it, as `ph_eval_at` and `ph_needed`.
     placeholders: Vec<(Expr, i32, BTreeSet<usize>, BTreeSet<usize>)>,
-    /// `sort_pathkeys`: the keys of `ORDER BY`, each with its directions.
-    sort: Vec<(Expr, bool, bool)>,
+    /// `sort_pathkeys`: the keys of `ORDER BY`, each with its directions and its collation.
+    sort: Vec<QueryKey>,
     /// `window_pathkeys`: the keys of the sort of the first window, which the bottom `WindowAgg` reads.
-    window: Vec<(Expr, bool, bool)>,
+    window: Vec<QueryKey>,
     /// `group_pathkeys` and `distinct_pathkeys`: the keys of `GROUP BY` and of `DISTINCT`, in any order.
-    groups: Vec<Vec<(Expr, bool, bool)>>,
+    groups: Vec<Vec<QueryKey>>,
     /// `query_pathkeys`: the keys of `GROUP BY`, or else of the first window, or else of `DISTINCT`, or else of `ORDER BY`.
-    query: Vec<(Expr, bool, bool)>,
+    query: Vec<QueryKey>,
     /// The two sides of each `=` condition of a join that a merge join can test, each with its relations.
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
     /// `consider_startup`: true when the caller of the query or its `LIMIT` reads only a part of its rows, so that a plan with a lower start cost is a different plan.
@@ -350,19 +350,25 @@ impl Stats {
     fn has_class(&self, expr: &Expr) -> bool {
         let same = |a: &Expr| upper::strip_relabel(a).same(upper::strip_relabel(expr));
         self.equal.iter().any(|(members, _)| members.iter().any(same))
-            || self.sort.iter().chain(&self.window).any(|(e, _, _)| same(e))
-            || self.groups.iter().flatten().any(|(e, _, _)| same(e))
+            || self.sort.iter().chain(&self.window).any(|(e, ..)| same(e))
+            || self.groups.iter().flatten().any(|(e, ..)| same(e))
             || self.joins.iter().flatten().any(|(e, _)| same(e))
     }
 
     /// `make_canonical_pathkey`: the key of an order by the expression, with the other members of its equivalence class.
-    pub(crate) fn order_key(&self, expr: &Expr, desc: bool, nulls_first: bool) -> OrderKey {
+    pub(crate) fn order_key(
+        &self,
+        expr: &Expr,
+        desc: bool,
+        nulls_first: bool,
+        collation: u32,
+    ) -> OrderKey {
         let mut exprs = vec![expr.clone()];
         if let Some((members, _)) = self.equal.iter().find(|(m, _)| m.iter().any(|e| e.same(expr)))
         {
             exprs.extend(members.iter().filter(|m| !m.same(expr)).cloned());
         }
-        OrderKey { exprs, desc, nulls_first }
+        OrderKey { exprs, desc, nulls_first, collation }
     }
 
     /// `make_pathkeys_for_sortclauses_extended` with `remove_redundant`: the items of a list of keys without the items whose keys are redundant, as `pathkey_is_redundant` finds them.
@@ -521,14 +527,14 @@ impl Stats {
 
     /// `truncate_useless_pathkeys`: the first keys of the order of the rows of a join of relations that a node above can use. These are the first keys of `ORDER BY` or of the first window, the first keys that are keys of `GROUP BY` or of `DISTINCT`, or the first keys that a merge join with another relation can use.
     fn useful(&self, rels: &BTreeSet<usize>, order: &[OrderKey]) -> Vec<OrderKey> {
-        let has = |list: &[(Expr, bool, bool)], k: &OrderKey| {
-            list.iter().any(|(e, desc, nulls_first)| k.sorts(e, *desc, *nulls_first))
+        let has = |list: &[QueryKey], k: &OrderKey| {
+            list.iter().any(|(e, desc, nulls_first, c)| k.sorts(e, *desc, *nulls_first, *c))
         };
-        let leading = |list: &[(Expr, bool, bool)]| {
+        let leading = |list: &[QueryKey]| {
             order
                 .iter()
                 .zip(list)
-                .take_while(|(k, (e, desc, nulls_first))| k.sorts(e, *desc, *nulls_first))
+                .take_while(|(k, (e, desc, nulls_first, c))| k.sorts(e, *desc, *nulls_first, *c))
                 .count()
         };
         let ordered = leading(&self.sort).max(leading(&self.window));
@@ -540,6 +546,7 @@ impl Stats {
             .take_while(|k| {
                 !k.desc
                     && !k.nulls_first
+                    && bytewise(k.collation)
                     && self.joins.iter().any(|sides| {
                         sides.iter().zip(sides.iter().rev()).any(|((e, _), (_, other))| {
                             k.exprs.iter().any(|x| x.same(e)) && !other.is_subset(rels)
@@ -662,19 +669,39 @@ impl Tree<'_> {
     }
 }
 
-/// A key of the order of the rows of a node: the expressions that have the same value at the key, as a `PathKey` of an equivalence class.
+/// A key of an order that the query asks for: the expression, true for a descending order, true when the nulls come first, and the collation, as `SortGroupClause` gives them.
+pub(crate) type QueryKey = (Expr, bool, bool, u32);
+
+/// True for a collation that orders the strings as their bytes: no collation, the default collation, `C`, `POSIX`, `ucs_basic`, `pg_c_utf8` and `pg_unicode_fast`. Two such collations give the same order, so the order of one is the order of the other.
+pub(crate) fn bytewise(collation: u32) -> bool {
+    matches!(collation, 0 | 100 | 950 | 951 | 962 | 811 | 6411)
+}
+
+/// The collation of an order as one of the orders of the strings: 0 for a collation that orders them as their bytes, or the collation.
+pub(crate) fn order_class(collation: u32) -> u32 {
+    if bytewise(collation) { 0 } else { collation }
+}
+
+/// True when two collations give the same order of the strings: the same collation, or two collations that order the strings as their bytes.
+pub(crate) fn same_order(a: u32, b: u32) -> bool {
+    a == b || bytewise(a) && bytewise(b)
+}
+
+/// A key of the order of the rows of a node: the expressions that have the same value at the key, as a `PathKey` of an equivalence class, with the collation of the order, `ec_collation`. A merge join and a class of `=` order the strings as their bytes, with the collation 0.
 #[derive(Clone, Debug)]
 pub(crate) struct OrderKey {
     pub(crate) exprs: Vec<Expr>,
     pub(crate) desc: bool,
     pub(crate) nulls_first: bool,
+    pub(crate) collation: u32,
 }
 
 impl OrderKey {
-    /// True when the key orders the rows by the expression in this direction.
-    pub(crate) fn sorts(&self, expr: &Expr, desc: bool, nulls_first: bool) -> bool {
+    /// True when the key orders the rows by the expression in this direction and in the order of this collation.
+    pub(crate) fn sorts(&self, expr: &Expr, desc: bool, nulls_first: bool, collation: u32) -> bool {
         self.desc == desc
             && self.nulls_first == nulls_first
+            && same_order(self.collation, collation)
             && self.exprs.iter().any(|e| e.same(expr))
     }
 }
@@ -1198,7 +1225,7 @@ impl<'q> Builder<'q> {
         }
         // `set_subquery_pathlist`: a `Subquery Scan` of each plan of the subquery, with the order of its rows in the columns of the scan.
         if let Some(paths) = sub_paths {
-            let order = |columns: &[(usize, bool, bool)]| sub_order(relation, r, columns, stats);
+            let order = |columns: &[(usize, bool, bool, u32)]| sub_order(relation, r, columns, stats);
             seq.order = order(&paths.order);
             let mut kept = Paths::new(stats.startup);
             let others: Vec<Rel<'q>> = paths
@@ -1319,18 +1346,18 @@ impl<'q> Builder<'q> {
             && keys
                 .iter()
                 .zip(&cheapest.order)
-                .all(|((e, desc, nulls_first), o)| o.sorts(e, *desc, *nulls_first));
+                .all(|((e, desc, nulls_first, c), o)| o.sorts(e, *desc, *nulls_first, *c));
         if !keys.is_empty() && !sorted {
             let order: Vec<OrderKey> =
-                keys.iter().map(|k| stats.order_key(&k.0, k.1, k.2)).collect();
+                keys.iter().map(|k| stats.order_key(&k.0, k.1, k.2, k.3)).collect();
             let sort_keys = keys
                 .into_iter()
-                .map(|(e, desc, nulls_first)| SortKey {
+                .map(|(e, desc, nulls_first, collation)| SortKey {
                     item: Item { expr: Cow::Owned(e), below: true },
                     desc,
                     using: None,
                     nulls_first,
-                    collation: 0,
+                    collation,
                 })
                 .collect();
             let sorted = sort(cheapest.node.clone(), sort_keys, None);
@@ -1345,17 +1372,17 @@ impl<'q> Builder<'q> {
 fn sub_order(
     relation: &Relation,
     r: usize,
-    columns: &[(usize, bool, bool)],
+    columns: &[(usize, bool, bool, u32)],
     stats: &Stats,
 ) -> Vec<OrderKey> {
     let keys: Vec<OrderKey> = columns
         .iter()
-        .map_while(|&(at, desc, nulls_first)| {
+        .map_while(|&(at, desc, nulls_first, collation)| {
             let column = relation.columns.get(at)?;
             let var = Var { relation: r, attnum: i16::try_from(at + 1).ok()?, levels_up: 0 };
             let mut expr = Expr::new(ExprKind::Var(var), column.ty);
             expr.typmod = column.typmod;
-            Some(OrderKey { exprs: vec![expr], desc, nulls_first })
+            Some(OrderKey { exprs: vec![expr], desc, nulls_first, collation })
         })
         .collect();
     stats.useful(&BTreeSet::from([r]), &keys)
@@ -1926,12 +1953,12 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
             }
         }
     }
-    let keys = |items: &[SortGroup]| -> Vec<(Expr, bool, bool)> {
+    let keys = |items: &[SortGroup]| -> Vec<QueryKey> {
         items
             .iter()
             .map(|item| {
                 let desc = builtin::operator_by_oid(item.operator).is_some_and(|o| o.name == ">");
-                (level.target(item.target).clone(), desc, item.nulls_first)
+                (level.target(item.target).clone(), desc, item.nulls_first, item.collation)
             })
             .collect()
     };
@@ -1944,7 +1971,7 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     {
         let ordered = upper::aggregate_order(query, stats);
         let ordered =
-            ordered.into_iter().map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first));
+            ordered.into_iter().map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first, k.collation));
         stats.canonical(ordered.collect(), |k| &k.0)
     } else {
         group
@@ -2864,16 +2891,16 @@ fn merge_materialize(child: Node<'_>) -> Node<'_> {
 }
 
 /// `get_useful_pathkeys_for_relation` with `require_parallel_safe`: the first keys of `query_pathkeys` that the relation `r` can sort by, as `relation_can_be_sorted_early` finds them. Each key is a member of its class that reads only the relation and that a worker can compute, and the list stops at the first key with no such member.
-fn useful_gather_keys(stats: &Stats, r: usize) -> Vec<(Expr, bool, bool)> {
+fn useful_gather_keys(stats: &Stats, r: usize) -> Vec<QueryKey> {
     let mut out = Vec::new();
-    for (expr, desc, nulls_first) in &stats.query {
-        let key = stats.order_key(expr, *desc, *nulls_first);
+    for (expr, desc, nulls_first, collation) in &stats.query {
+        let key = stats.order_key(expr, *desc, *nulls_first, *collation);
         let member = key.exprs.into_iter().find(|e| {
             let rels = exprs::relations(e);
             rels.len() == 1 && rels.contains(&r) && !exprs::volatile(e) && parallel::safe(e)
         });
         match member {
-            Some(e) => out.push((e, *desc, *nulls_first)),
+            Some(e) => out.push((e, *desc, *nulls_first, *collation)),
             None => break,
         }
     }
@@ -3127,12 +3154,12 @@ fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<V
     let cheapest = &side[0];
     let groups = stats.groups(&values, cheapest.node.cost.rows);
     let n = keys.len() as f64;
-    let order: Vec<OrderKey> = keys.iter().map(|&k| stats.order_key(k, false, false)).collect();
+    let order: Vec<OrderKey> = keys.iter().map(|&k| stats.order_key(k, false, false, 0)).collect();
     let mut paths = Paths::new(stats.startup);
     if semi.sort {
         for (at, rel) in side.iter().enumerate() {
             let sorted = keys.len() <= rel.order.len()
-                && keys.iter().zip(&rel.order).all(|(k, o)| o.sorts(k, false, false));
+                && keys.iter().zip(&rel.order).all(|(k, o)| o.sorts(k, false, false, 0));
             if !sorted && at != 0 {
                 continue;
             }
@@ -3968,7 +3995,7 @@ fn ordered<'e>(order: &[OrderKey], keys: &[MergeKey], value: impl Fn(usize) -> &
         && keys
             .iter()
             .zip(order)
-            .all(|(&(c, desc, nulls_first), k)| k.sorts(value(c), desc, nulls_first))
+            .all(|(&(c, desc, nulls_first), k)| k.sorts(value(c), desc, nulls_first, 0))
 }
 
 /// `select_outer_pathkeys_for_merge`: the order of the keys of a merge join that sorts its sides. The keys of the query come first, in its directions, when the conditions have all of them. The condition of an outer join has only the value of its outer side, and only when that side is not the side that gets nulls. When the conditions are all keys of the query, they are the keys. The other keys follow in ascending order, first the keys with more expressions of relations outside the join that a condition makes equal to them.
@@ -3981,9 +4008,13 @@ fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_, '_>]
     let mut used = vec![false; clauses.len()];
     let mut out = Vec::new();
     let query = &input.stats.query;
-    let matches = query.iter().take_while(|(e, _, _)| clauses.iter().any(|c| has(c, e))).count();
+    // A merge join orders the strings as their bytes, as the classes of its conditions.
+    let matches = query
+        .iter()
+        .take_while(|(e, _, _, c)| bytewise(*c) && clauses.iter().any(|clause| has(clause, e)))
+        .count();
     if !query.is_empty() && (matches == query.len() || matches == clauses.len()) {
-        for (e, desc, nulls_first) in &query[..matches] {
+        for (e, desc, nulls_first, _) in &query[..matches] {
             if let Some(i) = (0..clauses.len()).find(|&i| !used[i] && has(&clauses[i], e)) {
                 used[i] = true;
                 out.push((i, *desc, *nulls_first));
@@ -4029,7 +4060,7 @@ fn outer_order(order: &[OrderKey], clauses: &[Clause<'_, '_>], all: bool) -> Opt
     for k in order {
         let before = out.len();
         for (i, c) in clauses.iter().enumerate() {
-            if !used[i] && k.sorts(c.outer, k.desc, k.nulls_first) {
+            if !used[i] && k.sorts(c.outer, k.desc, k.nulls_first, 0) {
                 used[i] = true;
                 out.push((i, k.desc, k.nulls_first));
             }
@@ -4274,6 +4305,7 @@ impl<'q> Candidate<'q> {
                         exprs: vec![c.outer.clone(), c.inner.clone()],
                         desc,
                         nulls_first,
+                        collation: 0,
                     })
                     .collect();
                 if !self.sort.0 {

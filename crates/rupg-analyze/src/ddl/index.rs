@@ -632,11 +632,7 @@ impl Definer<'_, '_> {
             });
         }
         if !elem.collation.is_empty() {
-            collation = self.an.collation_oid(&elem.collation, at)?;
-        }
-        // The index orders the strings as their bytes.
-        if crate::collate::icu(collation, Some(&*self.catalog)) {
-            return Err(not_yet("an index in a collation of ICU", at));
+            collation = self.an.column_collation_oid(&elem.collation, at)?;
         }
         if types::collatable(ty) {
             if collation == 0 {
@@ -703,7 +699,7 @@ impl Definer<'_, '_> {
             return Ok(0);
         }
         if let Some(Node::CollateClause(clause)) = raw {
-            return self.an.collation_oid(&clause.collname, place(clause.location));
+            return self.an.column_collation_oid(&clause.collname, place(clause.location));
         }
         let columns = self.catalog.relation(table).map_or(&[][..], |r| &r.columns[..]);
         Ok(columns_collation(columns, expr))

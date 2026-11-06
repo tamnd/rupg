@@ -6,7 +6,7 @@ use rupg_plan::{Cost, Grouped, Item, Kind, Node, Replaced, SortKey, Table};
 use rupg_types::{Value, oid};
 
 use crate::from::paths::{Paths, costs};
-use crate::from::{self, OrderKey, Stats};
+use crate::from::{self, OrderKey, QueryKey, Stats};
 use crate::{Builder, Level, cost, output, pullup, upper};
 
 /// The plan of a side of a set operation in the order of all its columns, which the `SetOp` with the sorted strategy reads.
@@ -40,16 +40,19 @@ impl<'q> Leaf<'q> {
 }
 
 /// `generate_setop_child_grouplist`: the keys of the columns of a `SELECT` of a set operation, in the order of the columns, or none when a column has no order.
-pub(crate) fn all_keys(query: &Query, op: &SetOp) -> Vec<(Expr, bool, bool)> {
+pub(crate) fn all_keys(query: &Query, op: &SetOp) -> Vec<QueryKey> {
     if op.groups.iter().any(|g| g.operator == 0) {
         return Vec::new();
     }
     let columns = query.targets.iter().filter(|t| !t.junk);
-    columns.zip(&op.groups).map(|(t, g)| (t.expr.clone(), false, g.nulls_first)).collect()
+    columns
+        .zip(&op.groups)
+        .map(|(t, g)| (t.expr.clone(), false, g.nulls_first, g.collation))
+        .collect()
 }
 
 /// `setop_pathkeys`: the keys of [`all_keys`] with no key that the equivalence classes of the `SELECT` make redundant, such as a column that a condition makes equal to a constant.
-pub(crate) fn keys(query: &Query, op: &SetOp, stats: &Stats) -> Vec<(Expr, bool, bool)> {
+pub(crate) fn keys(query: &Query, op: &SetOp, stats: &Stats) -> Vec<QueryKey> {
     stats.canonical(all_keys(query, op), |k| &k.0)
 }
 
@@ -67,10 +70,10 @@ pub(crate) fn simple(query: &Query) -> bool {
 }
 
 /// True when the rows of an order have the keys.
-pub(crate) fn ordered(order: &[OrderKey], keys: &[(Expr, bool, bool)]) -> bool {
+pub(crate) fn ordered(order: &[OrderKey], keys: &[QueryKey]) -> bool {
     !keys.is_empty()
         && order.len() >= keys.len()
-        && order.iter().zip(keys).all(|(k, (e, desc, nulls_first))| k.sorts(e, *desc, *nulls_first))
+        && order.iter().zip(keys).all(|(k, (e, desc, nulls_first, c))| k.sorts(e, *desc, *nulls_first, *c))
 }
 
 /// The number of groups of the rows of a `SELECT` of a side, as `build_setop_child_paths` gives it: the rows of a `SELECT` with groups, and else `estimate_num_groups` of its columns.
@@ -119,17 +122,19 @@ pub(crate) fn sorted<'q>(
     let bound = limit_tuples(query);
     if finals.is_empty() {
         // The rows of `ORDER BY` have the order when its keys come first in the order of the columns.
-        let sort: Vec<(Expr, bool, bool)> = query
+        let sort: Vec<QueryKey> = query
             .sort
             .iter()
             .filter_map(|s| {
                 let desc = builtin::operator_by_oid(s.operator).is_some_and(|o| o.name == ">");
-                Some((query.targets.get(s.target)?.expr.clone(), desc, s.nulls_first))
+                Some((query.targets.get(s.target)?.expr.clone(), desc, s.nulls_first, s.collation))
             })
             .collect();
         let sort = stats.canonical(sort, |k| &k.0);
         let has = sort.len() >= keys.len()
-            && sort.iter().zip(&keys).all(|(a, b)| a.0.same(&b.0) && a.1 == b.1 && a.2 == b.2);
+            && sort.iter().zip(&keys).all(|(a, b)| {
+                a.0.same(&b.0) && a.1 == b.1 && a.2 == b.2 && from::same_order(a.3, b.3)
+            });
         return if has { Sorted::Cheapest } else { Sorted::Sort(bound) };
     }
     let mut paths = Paths::new(false);
@@ -161,6 +166,7 @@ pub(crate) fn order(query: &Query, op: &SetOp) -> Vec<OrderKey> {
             exprs: vec![t.expr.clone()],
             desc: false,
             nulls_first: g.nulls_first,
+            collation: g.collation,
         })
         .collect()
 }

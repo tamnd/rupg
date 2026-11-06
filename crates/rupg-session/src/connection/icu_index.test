@@ -1,0 +1,327 @@
+!details
+> create table x (id int primary key, s text collate "sv-x-icu", t text)
+CREATE TABLE
+> insert into x select g, (array['ö','z','å','ä','a','b','Z','Ö','aa','ab'])[g % 10 + 1] || g, 'v' || g from generate_series(1, 200) g
+INSERT 0 200
+> create index x_s on x (s)
+CREATE INDEX
+> create index x_sc on x (s collate "C")
+CREATE INDEX
+> create index x_te on x (t collate "en-x-icu")
+CREATE INDEX
+> create unique index x_su on x (s, id)
+CREATE INDEX
+> select c.relname, l.collname from pg_index i join pg_class c on c.oid = i.indexrelid cross join lateral unnest(i.indcollation) k(coll) left join pg_collation l on l.oid = k.coll where i.indrelid = 'x'::regclass order by c.relname
+fields relname@pg_class.2:19:64:-1,collname@pg_collation.2:19:64:-1
+row x_pkey,NULL
+row x_s,sv-x-icu
+row x_sc,C
+row x_su,sv-x-icu
+row x_su,NULL
+row x_te,en-x-icu
+SELECT 6
+> analyze x
+ANALYZE
+> set enable_seqscan = off
+SET
+> set enable_bitmapscan = off
+SET
+> explain (costs off) select s from x order by s limit 5
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Only Scan using x_s on x
+EXPLAIN
+> select s from x order by s limit 5
+fields s@x.2:25:-1:-1
+row a104
+row a114
+row a124
+row a134
+row a14
+SELECT 5
+> explain (costs off) select s from x order by s desc limit 5
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Only Scan Backward using x_s on x
+EXPLAIN
+> select s from x order by s desc limit 5
+fields s@x.2:25:-1:-1
+row Ö97
+row ö90
+row Ö87
+row ö80
+row Ö77
+SELECT 5
+> explain (costs off) select s from x order by s collate "C" limit 5
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Only Scan using x_sc on x
+EXPLAIN
+> select s from x order by s collate "C" limit 5
+fields s@x.2:25:-1:-1
+row Z106
+row Z116
+row Z126
+row Z136
+row Z146
+SELECT 5
+> explain (costs off) select id, s from x where s > 'ö' order by s
+fields QUERY PLAN:25:-1:-1
+row Index Scan using x_s on x
+row   Index Cond: (s > 'ö'::text)
+EXPLAIN
+> select id, s from x where s > 'ö' order by s
+fields id@x.1:23:4:-1,s@x.2:25:-1:-1
+row 10,ö10
+row 100,ö100
+row 107,Ö107
+row 110,ö110
+row 117,Ö117
+row 120,ö120
+row 127,Ö127
+row 130,ö130
+row 137,Ö137
+row 140,ö140
+row 147,Ö147
+row 150,ö150
+row 157,Ö157
+row 160,ö160
+row 167,Ö167
+row 17,Ö17
+row 170,ö170
+row 177,Ö177
+row 180,ö180
+row 187,Ö187
+row 190,ö190
+row 197,Ö197
+row 20,ö20
+row 200,ö200
+row 27,Ö27
+row 30,ö30
+row 37,Ö37
+row 40,ö40
+row 47,Ö47
+row 50,ö50
+row 57,Ö57
+row 60,ö60
+row 67,Ö67
+row 7,Ö7
+row 70,ö70
+row 77,Ö77
+row 80,ö80
+row 87,Ö87
+row 90,ö90
+row 97,Ö97
+SELECT 40
+> explain (costs off) select id, s from x where s between 'z' and 'å2' order by s
+fields QUERY PLAN:25:-1:-1
+row Index Scan using x_s on x
+row   Index Cond: ((s >= 'z'::text) AND (s <= 'å2'::text))
+EXPLAIN
+> select id, s from x where s between 'z' and 'å2' order by s
+fields id@x.1:23:4:-1,s@x.2:25:-1:-1
+row 1,z1
+row 101,z101
+row 106,Z106
+row 11,z11
+row 111,z111
+row 116,Z116
+row 121,z121
+row 126,Z126
+row 131,z131
+row 136,Z136
+row 141,z141
+row 146,Z146
+row 151,z151
+row 156,Z156
+row 16,Z16
+row 161,z161
+row 166,Z166
+row 171,z171
+row 176,Z176
+row 181,z181
+row 186,Z186
+row 191,z191
+row 196,Z196
+row 21,z21
+row 26,Z26
+row 31,z31
+row 36,Z36
+row 41,z41
+row 46,Z46
+row 51,z51
+row 56,Z56
+row 6,Z6
+row 61,z61
+row 66,Z66
+row 71,z71
+row 76,Z76
+row 81,z81
+row 86,Z86
+row 91,z91
+row 96,Z96
+row 102,å102
+row 112,å112
+row 12,å12
+row 122,å122
+row 132,å132
+row 142,å142
+row 152,å152
+row 162,å162
+row 172,å172
+row 182,å182
+row 192,å192
+row 2,å2
+SELECT 52
+> explain (costs off) select id from x where s = 'ä3'
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using x_su on x
+row   Index Cond: (s = 'ä3'::text)
+EXPLAIN
+> select id from x where s = 'ä3'
+fields id@x.1:23:4:-1
+row 3
+SELECT 1
+> explain (costs off) select id from x where s in ('ä3', 'Ö7') order by id
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: id
+row   ->  Index Scan using x_s on x
+row         Index Cond: (s = ANY ('{ä3,Ö7}'::text[]))
+EXPLAIN
+> select id from x where s in ('ä3', 'Ö7') order by id
+fields id@x.1:23:4:-1
+row 3
+row 7
+SELECT 2
+> select count(*) from x where s collate "C" > 'ö'
+fields count:20:8:-1
+row 20
+SELECT 1
+> explain (costs off) select id from x where s like 'ab%' order by id
+fields QUERY PLAN:25:-1:-1
+row Index Scan using x_pkey on x
+row   Filter: (s ~~ 'ab%'::text)
+EXPLAIN
+> select id from x where s like 'ab%' order by id
+fields id@x.1:23:4:-1
+row 9
+row 19
+row 29
+row 39
+row 49
+row 59
+row 69
+row 79
+row 89
+row 99
+row 109
+row 119
+row 129
+row 139
+row 149
+row 159
+row 169
+row 179
+row 189
+row 199
+SELECT 20
+> explain (costs off) select t from x order by t collate "en-x-icu" limit 3
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Only Scan using x_te on x
+EXPLAIN
+> select t from x order by t collate "en-x-icu" limit 3
+fields t@x.3:25:-1:-1
+row v1
+row v10
+row v100
+SELECT 3
+> explain (costs off) select t from x where t collate "en-x-icu" < 'v11' order by t collate "en-x-icu"
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using x_te on x
+row   Index Cond: (t < 'v11'::text)
+EXPLAIN
+> select t from x where t collate "en-x-icu" < 'v11' order by t collate "en-x-icu"
+fields t@x.3:25:-1:-1
+row v1
+row v10
+row v100
+row v101
+row v102
+row v103
+row v104
+row v105
+row v106
+row v107
+row v108
+row v109
+SELECT 12
+> explain (costs off) select min(s), max(s) from x
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: MinMaxAggregate
+row   InitPlan minmax_1
+row     ->  Limit
+row           ->  Index Only Scan using x_s on x
+row                 Index Cond: (s IS NOT NULL)
+row   InitPlan minmax_2
+row     ->  Limit
+row           ->  Index Only Scan Backward using x_s on x x_1
+row                 Index Cond: (s IS NOT NULL)
+EXPLAIN
+> select min(s), max(s) from x
+fields min:25:-1:-1,max:25:-1:-1
+row a104,Ö97
+SELECT 1
+> reset enable_seqscan
+RESET
+> reset enable_bitmapscan
+RESET
+> create table y (k text collate "de-x-icu" primary key, n int)
+CREATE TABLE
+> insert into y values ('ä', 1), ('a', 2), ('z', 3), ('Ä', 4)
+INSERT 0 4
+> insert into y values ('ä', 5)
+ERROR 23505 duplicate key value violates unique constraint "y_pkey"
+DETAIL Key (k)=(ä) already exists.
+> insert into y values ('ä', 6) on conflict (k) do update set n = excluded.n
+INSERT 0 1
+> insert into y values ('b', 7) on conflict (k) do nothing
+INSERT 0 1
+> select * from y order by k
+fields k@y.1:25:-1:-1,n@y.2:23:4:-1
+row a,2
+row ä,6
+row Ä,4
+row b,7
+row z,3
+SELECT 5
+> create unique index y_lower on y (lower(k))
+ERROR 23505 could not create unique index "y_lower"
+DETAIL Key (lower(k))=(ä) is duplicated.
+> create table z (k text collate "sv-x-icu" unique)
+CREATE TABLE
+> insert into z values ('a'), ('A'), ('å')
+INSERT 0 3
+> insert into z values ('A')
+ERROR 23505 duplicate key value violates unique constraint "z_k_key"
+DETAIL Key (k)=(A) already exists.
+> select * from z order by k
+fields k@z.1:25:-1:-1
+row a
+row A
+row å
+SELECT 3
+> create index y_n on y (n, k)
+CREATE INDEX
+> cluster y using y_pkey
+CLUSTER
+> select * from y
+fields k@y.1:25:-1:-1,n@y.2:23:4:-1
+row a,2
+row ä,6
+row Ä,4
+row b,7
+row z,3
+SELECT 5
