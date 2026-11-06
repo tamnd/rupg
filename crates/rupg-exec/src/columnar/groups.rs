@@ -337,6 +337,96 @@ fn cell(fold: Fold, decoded: &[Option<Decoded>], i: usize) -> Cell {
     }
 }
 
+/// Folds the rows `sel` of a vector into the states `state` of their groups `ids`, for the fold `fold`. The match on the fold and on its column is once for each vector, not once for each row. A column that is not decoded gives no value, as [`cell`] gives it.
+#[inline]
+fn fold_rows(
+    state: &mut Folded,
+    fold: Fold,
+    ids: &[u32],
+    sel: &[usize],
+    decoded: &[Option<Decoded>],
+    min: bool,
+) {
+    let rows = ids.iter().map(|&id| id as usize).zip(sel.iter().copied());
+    match (state, fold) {
+        (Folded::Count(a), Fold::Count) => ids.iter().for_each(|&id| a[id as usize] += 1),
+        (Folded::Count(a), Fold::CountArg(place)) => {
+            let Some(d) = decoded[place].as_ref() else { return };
+            match &d.nulls {
+                None => ids.iter().for_each(|&id| a[id as usize] += 1),
+                Some(nulls) => rows.for_each(|(id, i)| a[id] += i64::from(!nulls[i])),
+            }
+        }
+        (Folded::Sum(a), Fold::Sum(place)) => {
+            let Some(d) = decoded[place].as_ref() else { return };
+            for (id, i) in rows {
+                if !null(d, i) {
+                    a[id].0 += 1;
+                    a[id].1 += i128::from(int(d, i));
+                }
+            }
+        }
+        (Folded::Extreme(a), Fold::Min(place) | Fold::Max(place)) => {
+            let Some(d) = decoded[place].as_ref() else { return };
+            for (id, i) in rows {
+                if !null(d, i) {
+                    let v = int(d, i);
+                    a[id] = Some(a[id].map_or(v, |s| if min { s.min(v) } else { s.max(v) }));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Puts each row `sel` of a vector, with its key of `keys` and its hash of `hashes`, into the buffer of its part as a new group, with no table. The rows of the vector start at the row `base` of the scan. The match on each fold is once for each vector, not once for each row.
+fn push_direct<const W: usize>(
+    parts: &mut [Buf],
+    folds: &[Fold],
+    keys: &[[u64; W]],
+    hashes: &[u64],
+    sel: &[usize],
+    base: u64,
+    decoded: &[Option<Decoded>],
+) {
+    let at: Vec<u8> = hashes.iter().map(|&hash| part_of(hash) as u8).collect();
+    for ((key, &p), &i) in keys.iter().zip(&at).zip(sel) {
+        parts[usize::from(p)].push(key, base + i as u64);
+    }
+    for (f, &fold) in folds.iter().enumerate() {
+        let rows = at.iter().map(|&p| usize::from(p)).zip(sel.iter().copied());
+        let column = |place: usize| decoded[place].as_ref();
+        match fold {
+            Fold::Count => rows.for_each(|(p, _)| parts[p].states[f].push_cell(Cell::Count(1))),
+            Fold::CountArg(place) => {
+                let d = column(place);
+                rows.for_each(|(p, i)| {
+                    let n = d.is_some_and(|d| !null(d, i));
+                    parts[p].states[f].push_cell(Cell::Count(i64::from(n)));
+                });
+            }
+            Fold::Sum(place) => {
+                let d = column(place);
+                rows.for_each(|(p, i)| {
+                    let cell = match d.filter(|d| !null(d, i)) {
+                        Some(d) => Cell::Sum(1, i128::from(int(d, i))),
+                        None => Cell::Sum(0, 0),
+                    };
+                    parts[p].states[f].push_cell(cell);
+                });
+            }
+            Fold::Min(place) | Fold::Max(place) => {
+                let d = column(place);
+                rows.for_each(|(p, i)| {
+                    let v = d.filter(|d| !null(d, i)).map(|d| int(d, i));
+                    parts[p].states[f].push_cell(Cell::Extreme(v));
+                });
+            }
+            Fold::None => {}
+        }
+    }
+}
+
 /// Moves the groups of `local` into the buffers of their parts, and empties `local` and its table.
 fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut [Buf]) {
     for g in 0..local.len() {
@@ -950,13 +1040,7 @@ fn scan_run<const W: usize>(
             continue;
         }
         if direct {
-            for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
-                let part = &mut parts[part_of(hash)];
-                part.push(key, base + i as u64);
-                for (state, &fold) in part.states.iter_mut().zip(&plan.folds) {
-                    state.push_cell(cell(fold, &decoded, i));
-                }
-            }
+            push_direct(&mut parts, &plan.folds, &keys, &hashes, &sel, base, &decoded);
             continue;
         }
         if table.room() < sel.len() {
@@ -970,19 +1054,17 @@ fn scan_run<const W: usize>(
                 for part in &mut parts {
                     part.reserve(more + more / 8);
                 }
-                for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
-                    let part = &mut parts[part_of(hash)];
-                    part.push(key, base + i as u64);
-                    for (state, &fold) in part.states.iter_mut().zip(&plan.folds) {
-                        state.push_cell(cell(fold, &decoded, i));
-                    }
-                }
+                push_direct(&mut parts, &plan.folds, &keys, &hashes, &sel, base, &decoded);
                 continue;
             }
         }
         folded += sel.len();
         ids.clear();
-        for ((key, &hash), &i) in keys.iter().zip(&hashes).zip(&sel) {
+        for (n, ((key, &hash), &i)) in keys.iter().zip(&hashes).zip(&sel).enumerate() {
+            // The table is larger than the cache of the core for many groups, so the read of a slot starts early.
+            if let Some(&ahead) = hashes.get(n + PREFETCH) {
+                table.prefetch(ahead);
+            }
             let next = local.len() as u32;
             let (id, new) = table.id(key, hash, next);
             if new {
@@ -997,9 +1079,7 @@ fn scan_run<const W: usize>(
             if matches!(fold, Fold::None) {
                 continue;
             }
-            for (&id, &i) in ids.iter().zip(&sel) {
-                state.fold_cell(id as usize, cell(fold, &decoded, i), min);
-            }
+            fold_rows(state, fold, &ids, &sel, &decoded, min);
         }
     }
     flush(&mut local, &mut table, &mut parts);
