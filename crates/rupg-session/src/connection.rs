@@ -4318,6 +4318,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/join_reduce.test")));
     }
 
+    /// A correlated subquery that runs once for all the rows of the query outside it gives the same rows as a run for each row: with nulls in the keys, a key with no row, an aggregate of no row, `NOT IN`, more than one row for a key, an error in a row and a change of the rows.
+    #[test]
+    fn lift_subquery() {
+        big_stack(|| script(include_str!("connection/lift.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
