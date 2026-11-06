@@ -941,6 +941,8 @@ struct Cache {
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
     /// The hash table of each such subquery of `ANY`, as a hashed `SubPlan` keeps it, or `None` when a value of the subquery has no key.
     hashed: RefCell<Vec<(*const Query, Kept)>>,
+    /// The state of each correlated subquery that [`lift`] can run once for all the rows of the query outside it, by the address of the subquery.
+    lifted: RefCell<Vec<(*const Query, lift::State)>>,
     /// The rows of each query of `WITH`, by its name and its query, as the tuplestore of its `CteScan` nodes keeps them. The query runs once, when a reference first needs it, so that the references read the same values of its volatile functions.
     ctes: RefCell<Vec<KeptCte>>,
     /// The name and the expression of each check constraint of a domain, by the OID of the domain, as the type cache keeps them.
@@ -3249,8 +3251,6 @@ impl<'a> Eval<'a> {
     fn sublink(&mut self, sub: &SubLink, ty: u32) -> Result<Value> {
         let exists = sub.kind == SubLinkKind::Exists;
         let query = &sub.query;
-        let mut frames = self.outer.to_vec();
-        frames.push(Frame { tables: self.tables, tuple: self.tuple, group: Some(&self.group) });
         let kept = match sub.kind {
             SubLinkKind::Multi { id, .. } => self
                 .multi
@@ -3262,16 +3262,34 @@ impl<'a> Eval<'a> {
         let rows = match kept {
             Some(rows) => rows,
             None => {
-                let rows = self.cache.rows(query, || {
-                    // `ExecScanSubPlan` stops at the second row of a subquery that gives one row.
-                    if matches!(
-                        sub.kind,
-                        SubLinkKind::Expr | SubLinkKind::RowCompare | SubLinkKind::Multi { .. }
-                    ) {
-                        self.cache.want.set(Some(2));
-                    }
-                    run_query(query, self.params, self.session, self.cache, &frames, exists)
-                })?;
+                let (params, session, cache) = (self.params, self.session, self.cache);
+                let lifted =
+                    lift::rows(query, &sub.kind, params, session, cache, &mut |e, row| {
+                        let Some(row) = row else { return self.eval(e) };
+                        self.sub.push(row.to_vec());
+                        let value = self.eval(e);
+                        self.sub.pop();
+                        value
+                    })?;
+                let mut frames = self.outer.to_vec();
+                frames.push(Frame {
+                    tables: self.tables,
+                    tuple: self.tuple,
+                    group: Some(&self.group),
+                });
+                let rows = match lifted {
+                    Some(rows) => rows,
+                    None => self.cache.rows(query, || {
+                        // `ExecScanSubPlan` stops at the second row of a subquery that gives one row.
+                        if matches!(
+                            sub.kind,
+                            SubLinkKind::Expr | SubLinkKind::RowCompare | SubLinkKind::Multi { .. }
+                        ) {
+                            self.cache.want.set(Some(2));
+                        }
+                        run_query(query, self.params, self.session, self.cache, &frames, exists)
+                    })?,
+                };
                 if let SubLinkKind::Multi { id, .. } = sub.kind {
                     self.multi.retain(|(other, _, _)| *other != id);
                     self.multi.push((id, self.tuple.to_vec(), Rc::clone(&rows)));
@@ -4606,6 +4624,7 @@ mod hashed;
 mod insert;
 mod jsonexpr;
 mod jsontable;
+mod lift;
 mod partition;
 mod populate;
 mod reduce;

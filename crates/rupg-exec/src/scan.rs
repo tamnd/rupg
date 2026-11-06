@@ -1558,7 +1558,7 @@ fn vector(values: impl Iterator<Item = Value>, from_zero: bool) -> Value {
 }
 
 /// The key of a value for a hash join, or `None` for a null, which equals no value.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Key {
     Int(i64),
     Text(String),

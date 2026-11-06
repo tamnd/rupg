@@ -1,0 +1,162 @@
+> CREATE TABLE lo (k int, p int, g text, d date)
+CREATE TABLE
+> INSERT INTO lo SELECT i, CASE WHEN i % 41 = 0 THEN NULL ELSE i % 700 END, CASE WHEN i % 4 = 0 THEN 'x' ELSE 'y' END, date '1995-01-01' + (i % 300) FROM generate_series(1, 3000) i
+INSERT 0 3000
+> CREATE TABLE ll (k bigint, p int, q numeric(10,2), z int, c date, r date)
+CREATE TABLE
+> INSERT INTO ll SELECT CASE WHEN i % 53 = 0 THEN NULL ELSE i % 2500 END, i % 900, (i % 50) + 0.5, i % 7, date '1995-01-01' + (i % 200), date '1995-01-01' + (i % 230) FROM generate_series(1, 20000) i
+INSERT 0 20000
+> SELECT g, count(*) FROM lo WHERE d < date '1995-06-01' AND EXISTS (SELECT * FROM ll WHERE ll.k = lo.k AND ll.c < ll.r) GROUP BY g ORDER BY g
+fields g@lo.3:25:-1:-1,count:20:8:-1
+row x,328
+row y,979
+SELECT 2
+> SELECT count(*), sum(k) FROM lo WHERE NOT EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.z = 3)
+fields count:20:8:-1,sum:20:8:-1
+row 542,1428774
+SELECT 1
+> SELECT count(*) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.p > 800 LIMIT 1)
+fields count:20:8:-1
+row 2140
+SELECT 1
+> SELECT k, p, (SELECT 0.2 * avg(q) FROM ll WHERE ll.p = lo.p) AS a FROM lo WHERE k % 97 = 1 OR p IS NULL ORDER BY k LIMIT 30
+fields k@lo.1:23:4:-1,p@lo.2:23:4:-1,a:1700:-1:-1
+row 1,1,0.30000000000000000
+row 41,NULL,NULL
+row 82,NULL,NULL
+row 98,98,9.70000000000000000
+row 123,NULL,NULL
+row 164,NULL,NULL
+row 195,195,9.10000000000000000
+row 205,NULL,NULL
+row 246,NULL,NULL
+row 287,NULL,NULL
+row 292,292,8.50000000000000000
+row 328,NULL,NULL
+row 369,NULL,NULL
+row 389,389,7.90000000000000000
+row 410,NULL,NULL
+row 451,NULL,NULL
+row 486,486,7.30000000000000000
+row 492,NULL,NULL
+row 533,NULL,NULL
+row 574,NULL,NULL
+row 583,583,6.70000000000000000
+row 615,NULL,NULL
+row 656,NULL,NULL
+row 680,680,6.10000000000000000
+row 697,NULL,NULL
+row 738,NULL,NULL
+row 777,77,5.50000000000000000
+row 779,NULL,NULL
+row 820,NULL,NULL
+row 861,NULL,NULL
+SELECT 30
+> SELECT count(*) FROM lo WHERE (SELECT count(*) FROM ll WHERE ll.p = lo.p AND ll.z = 1) = 0
+fields count:20:8:-1
+row 73
+SELECT 1
+> SELECT sum((SELECT count(*) FROM ll WHERE ll.p = lo.p AND ll.k = lo.k)), count((SELECT sum(q) FROM ll WHERE ll.p = lo.p AND ll.k = lo.k)) FROM lo
+fields sum:1700:-1:-1,count:20:8:-1
+row 1723,1723
+SELECT 1
+> SELECT k, (SELECT z FROM ll WHERE ll.k = lo.k AND ll.p = lo.p) FROM lo WHERE k < 40 ORDER BY k
+fields k@lo.1:23:4:-1,z:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+row 5,5
+row 6,6
+row 7,0
+row 8,1
+row 9,2
+row 10,3
+row 11,4
+row 12,5
+row 13,6
+row 14,0
+row 15,1
+row 16,2
+row 17,3
+row 18,4
+row 19,5
+row 20,6
+row 21,0
+row 22,1
+row 23,2
+row 24,3
+row 25,4
+row 26,5
+row 27,6
+row 28,0
+row 29,1
+row 30,2
+row 31,3
+row 32,4
+row 33,5
+row 34,6
+row 35,0
+row 36,1
+row 37,2
+row 38,3
+row 39,4
+SELECT 39
+> SELECT count(*) FROM lo WHERE k < 3000 AND (SELECT z FROM ll WHERE ll.k = lo.k) = 1
+fields count:20:8:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT count(*) FROM lo WHERE p IN (SELECT ll.p FROM ll WHERE ll.k = lo.k)
+fields count:20:8:-1
+row 1723
+SELECT 1
+> SELECT count(*) FROM lo WHERE p NOT IN (SELECT ll.p FROM ll WHERE ll.k = lo.k AND ll.z < 5)
+fields count:20:8:-1
+row 1708
+SELECT 1
+> SELECT k, ARRAY(SELECT z FROM ll WHERE ll.k = lo.k ORDER BY z, p) FROM lo WHERE k % 500 = 7 ORDER BY k
+fields k@lo.1:23:4:-1,array:1007:-1:-1
+row 7,{0,0,1,2,3,4,5,6}
+row 507,{0,1,2,3,3,4,5,6}
+row 1007,{0,1,2,3,4,5,6}
+row 1507,{0,1,2,2,3,4,5,6}
+row 2007,{0,1,2,3,4,5,5,6}
+row 2507,{}
+SELECT 6
+> SELECT count(*) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND 10 / ll.z > 1)
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*) FROM lo WHERE k < 100 AND EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND EXISTS (SELECT 1 FROM ll l2 WHERE l2.p = ll.p AND l2.k = lo.p))
+fields count:20:8:-1
+row 97
+SELECT 1
+> SELECT g, count(*) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.q > (SELECT avg(q) FROM ll l3 WHERE l3.z = ll.z)) GROUP BY g ORDER BY g
+fields g@lo.3:25:-1:-1,count:20:8:-1
+row x,300
+row y,950
+SELECT 2
+> UPDATE ll SET z = 3 WHERE k < 1000
+UPDATE 7850
+> SELECT count(*), sum(k) FROM lo WHERE NOT EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.z = 3)
+fields count:20:8:-1,sum:20:8:-1
+row 525,1420242
+SELECT 1
+> SELECT g, count(*) FROM lo WHERE EXISTS (SELECT * FROM ll WHERE ll.k = lo.k AND ll.p <> lo.p) AND NOT EXISTS (SELECT * FROM ll l3 WHERE l3.k = lo.k AND l3.p <> lo.p AND l3.c > l3.r) GROUP BY g ORDER BY g
+fields g@lo.3:25:-1:-1,count:20:8:-1
+row x,5
+row y,10
+SELECT 2
+> SELECT count(*), sum(k) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND (ll.z + lo.p) % 5 = 0)
+fields count:20:8:-1,sum:20:8:-1
+row 1644,2633370
+SELECT 1
+> SELECT count(*) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.z / (lo.p % 7) > 0)
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*) FROM lo WHERE NOT EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND (ll.c > lo.d OR ll.z = lo.p % 7))
+fields count:20:8:-1
+row 1041
+SELECT 1
+> SELECT count(*) FROM lo WHERE EXISTS (SELECT 1 FROM ll WHERE ll.k = lo.k AND ll.z::text || lo.g = '3x')
+fields count:20:8:-1
+row 618
+SELECT 1

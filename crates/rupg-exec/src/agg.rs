@@ -1211,7 +1211,7 @@ pub(crate) fn calls(query: &Query) -> Vec<(&Aggref, &Expr)> {
 }
 
 /// The aggregate calls of the query in the subqueries of the select list and of `HAVING`, as `replace_outer_agg` finds them, each with the number of levels between the call and the query.
-fn outer_calls(query: &Query) -> Vec<(&Aggref, &Expr, usize)> {
+pub(crate) fn outer_calls(query: &Query) -> Vec<(&Aggref, &Expr, usize)> {
     let mut out = Vec::new();
     for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
         expr.find(0, &mut |e, depth| {
