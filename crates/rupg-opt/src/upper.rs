@@ -1421,7 +1421,7 @@ impl<'q> Builder<'q> {
                 desc: false,
                 using: None,
                 nulls_first: g.nulls_first,
-                collation: 0,
+                collation: g.collation,
             })
             .collect();
         let enable = crate::enable();

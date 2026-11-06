@@ -47,6 +47,8 @@ struct Clause {
     /// The constants, which are not null, and their type. `IS NULL` has no operator and the one value null.
     values: Vec<Value>,
     ty: u32,
+    /// `inputcollid` of the operator when it is a collation of ICU, or 0, as in [`rupg_analyze::Func::collation`].
+    collation: u32,
 }
 
 /// The values that the conditions let a key column have.
@@ -146,6 +148,7 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
             any: false,
             values: vec![Value::Bool(value)],
             ty: oid::BOOL,
+            collation: 0,
         });
     }
     match &expr.kind {
@@ -156,18 +159,20 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
             any: false,
             values: vec![Value::Null],
             ty: arg.ty,
+            collation: 0,
         }),
-        // A test in a collation of ICU does not prune, because the bounds order the strings as their bytes.
-        ExprKind::Func(f) if f.args.len() == 2 && f.collation == 0 => {
+        ExprKind::Func(f) if f.args.len() == 2 => {
             let (attnum, (value, ty), commuted) =
                 match (column(&f.args[0], index), constant(&f.args[1])) {
                     (Some(attnum), Some(c)) => (attnum, c, false),
                     _ => (column(&f.args[1], index)?, constant(&f.args[0])?, true),
                 };
             let operator = operator(f.oid, f.args[0].ty, f.args[1].ty)?;
-            Some(Clause { attnum, operator, commuted, any: false, values: vec![value.clone()], ty })
+            let values = vec![value.clone()];
+            let collation = f.collation;
+            Some(Clause { attnum, operator, commuted, any: false, values, ty, collation })
         }
-        ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 } if args.len() == 2 => {
+        ExprKind::ScalarArrayOp { func, any: true, args, collation } if args.len() == 2 => {
             let attnum = column(&args[0], index)?;
             let element = builtin::type_by_oid(args[1].ty).map_or(0, |row| row.elem);
             // A null element is not equal to a value, so it does not count.
@@ -189,7 +194,15 @@ fn clause(expr: &Expr, index: usize, nullable: bool) -> Option<Clause> {
                 _ => return None,
             };
             let operator = operator(*func, args[0].ty, element)?;
-            Some(Clause { attnum, operator, commuted: false, any: true, values, ty: element })
+            Some(Clause {
+                attnum,
+                operator,
+                commuted: false,
+                any: true,
+                values,
+                ty: element,
+                collation: *collation,
+            })
         }
         _ => None,
     }
@@ -279,6 +292,12 @@ impl Dispatch {
                     continue;
                 }
                 let Some(strategy) = self.strategy_of(i, clause) else { continue };
+                // `PartCollMatchesExprColl`: the operator must compare in the collation of the key column. An `=` in a deterministic collation compares the bytes, so its collation is 0 and it fits any key.
+                if !(strategy == EQUAL && clause.collation == 0)
+                    && !self.same_collation(i, clause.collation)
+                {
+                    continue;
+                }
                 let values: Option<Vec<Value>> =
                     clause.values.iter().map(|v| fit(v, clause.ty, ty)).collect();
                 let Some(values) = values else { continue };
@@ -296,8 +315,7 @@ impl Dispatch {
                     allowed.equal = Some(merged);
                     continue;
                 }
-                // A collation can give another order than the order of the bounds.
-                if clause.any || self.collated[i] {
+                if clause.any {
                     continue;
                 }
                 let Some(value) = values.into_iter().next() else { continue };
@@ -524,8 +542,16 @@ impl Dispatch {
 
     /// The order of two values of the key column `i`, or `None` for the error of the compare.
     fn cmp(&self, i: usize, a: &Value, b: &Value) -> Option<Ordering> {
-        let ty = self.types[i];
-        rupg_func::compare(ty, a, ty, b).ok()
+        self.compare(i, a, b).ok()
+    }
+
+    /// True when an operator with the `inputcollid` `collation`, as in [`Clause::collation`], compares in the collation of the key column `i`: the same collation of ICU, or a collation that orders the bytes for both.
+    fn same_collation(&self, i: usize, collation: u32) -> bool {
+        let key = self.collations.get(i).copied().unwrap_or(0);
+        if self.collators.get(i).is_some_and(Option::is_some) {
+            return collation == key;
+        }
+        collation == 0 && matches!(key, 0 | 100 | 950 | 951 | 962 | 811 | 6411)
     }
 }
 

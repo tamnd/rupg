@@ -9,7 +9,7 @@ use rupg_pgcatalog::builtin::{self, OperatorRow};
 use rupg_types::{Value, oid};
 
 use super::expr_collation;
-use crate::compare;
+use crate::{Collator, Session, compare_in};
 
 /// The btree strategy numbers of the operators of a partition constraint.
 const LESS: i16 = 1;
@@ -29,6 +29,8 @@ struct KeyColumn {
     collation: u32,
     /// `partcollation`: the collation of the key.
     key_collation: u32,
+    /// The collator of `partcollation` when it is a collation of ICU, which orders the bounds.
+    collator: Option<Collator>,
     /// `partopfamily`.
     family: u32,
     /// `partopcintype`.
@@ -53,17 +55,22 @@ fn constant(e: &Expr) -> Result<&Value> {
     }
 }
 
-/// The order of two constants of the type of a key column.
-fn order(a: &Expr, b: &Expr) -> Result<Ordering> {
+/// The order of two constants of the type of the key column `column`, in the collation of the key.
+fn order(column: &KeyColumn, a: &Expr, b: &Expr) -> Result<Ordering> {
     let (x, y) = (constant(a)?, constant(b)?);
     match (x.is_null(), y.is_null()) {
-        (false, false) => compare(a.ty, x, b.ty, y),
+        (false, false) => compare_in(column.collator.as_ref(), a.ty, x, b.ty, y),
         (x_null, y_null) => Ok(x_null.cmp(&y_null)),
     }
 }
 
 /// The columns of the partition key of `parent`.
-fn key_columns(catalog: &Catalog, parent: &Relation, key: &PartitionKey) -> Result<Vec<KeyColumn>> {
+fn key_columns(
+    session: &dyn Session,
+    catalog: &Catalog,
+    parent: &Relation,
+    key: &PartitionKey,
+) -> Result<Vec<KeyColumn>> {
     let exprs = match &key.exprs {
         Some(text) => node::read_list(text)?,
         None => Vec::new(),
@@ -95,10 +102,12 @@ fn key_columns(catalog: &Catalog, parent: &Relation, key: &PartitionKey) -> Resu
                     Error::internal(format!("cache lookup failed for opclass {class}"))
                 })?,
         };
+        let key_collation = key.collations.get(keyno).copied().unwrap_or(0);
         columns.push(KeyColumn {
             expr,
             collation,
-            key_collation: key.collations.get(keyno).copied().unwrap_or(0),
+            key_collation,
+            collator: crate::collator(session, key_collation),
             family,
             intype,
         });
@@ -131,12 +140,23 @@ fn key_argument(column: &KeyColumn) -> Expr {
     Expr { kind, ty: column.intype, typmod: -1, location: None }
 }
 
+/// A constant of a bound with the collation of the key, as `transformPartitionBoundValue` gives it `constcollid`. A collation other than the one of the type shows after the constant, so the constant gets a `COLLATE`.
+fn bound_constant(column: &KeyColumn, value: Expr) -> Expr {
+    let own = builtin::type_by_oid(value.ty).map_or(super::DEFAULT_COLLATION, |t| t.collation);
+    if column.key_collation == 0 || column.key_collation == own {
+        return value;
+    }
+    let (ty, typmod) = (value.ty, value.typmod);
+    let kind = ExprKind::Collate(Box::new(value), column.key_collation);
+    Expr { kind, ty, typmod, location: None }
+}
+
 /// `make_partition_op_expr` with one value: `key op value`.
 fn op_clause(column: &KeyColumn, strategy: i16, value: Expr) -> Result<Expr> {
     let op = operator(column, strategy)?;
     Ok(boolean(ExprKind::Func(Func {
         oid: op.code,
-        args: vec![key_argument(column), value],
+        args: vec![key_argument(column), bound_constant(column, value)],
         form: FuncForm::Operator(op.oid),
         variadic: false,
         retset: false,
@@ -211,7 +231,7 @@ fn list_qual(
             }
             for e in all {
                 let mut at = elems.len();
-                while at > 0 && order(&elems[at - 1], &e)? == Ordering::Greater {
+                while at > 0 && order(column, &elems[at - 1], &e)? == Ordering::Greater {
                     at -= 1;
                 }
                 elems.insert(at, e);
@@ -222,8 +242,9 @@ fn list_qual(
         None
     } else if elems.len() > 1 && types::element(column.expr.ty) == 0 {
         let op = operator(column, EQUAL)?;
+        let elements = elems.into_iter().map(|e| bound_constant(column, e)).collect();
         let array = Expr {
-            kind: ExprKind::Array { element: column.expr.ty, multidims: false, elements: elems },
+            kind: ExprKind::Array { element: column.expr.ty, multidims: false, elements },
             ty: types::array_of(column.expr.ty),
             typmod: -1,
             location: None,
@@ -259,15 +280,15 @@ fn datum_value(datum: &RangeDatum) -> Result<Option<Expr>> {
 }
 
 /// The order of the lower bounds of two range partitions, as `partition_rbound_cmp` gives it. A column with `MINVALUE` or `MAXVALUE` ends the comparison.
-fn lower_order(a: &[RangeDatum], b: &[RangeDatum]) -> Result<Ordering> {
+fn lower_order(columns: &[KeyColumn], a: &[RangeDatum], b: &[RangeDatum]) -> Result<Ordering> {
     let rank = |d: &RangeDatum| match d {
         RangeDatum::MinValue => -1,
         RangeDatum::Value(_) => 0,
         RangeDatum::MaxValue => 1,
     };
-    for (x, y) in a.iter().zip(b) {
+    for ((x, y), column) in a.iter().zip(b).zip(columns) {
         let found = match (datum_value(x)?, datum_value(y)?) {
-            (Some(x), Some(y)) => order(&x, &y)?,
+            (Some(x), Some(y)) => order(column, &x, &y)?,
             _ => return Ok(rank(x).cmp(&rank(y))),
         };
         if found != Ordering::Equal {
@@ -285,7 +306,7 @@ fn range_default(catalog: &Catalog, parent: u32, columns: &[KeyColumn]) -> Resul
             && let PartitionBound::Range { lower, upper } = &of.bound
         {
             let mut at = bounds.len();
-            while at > 0 && lower_order(bounds[at - 1].0, lower)? == Ordering::Greater {
+            while at > 0 && lower_order(columns, bounds[at - 1].0, lower)? == Ordering::Greater {
                 at -= 1;
             }
             bounds.insert(at, (lower, upper));
@@ -318,7 +339,7 @@ fn range_qual(
         let (Some(low), Some(high)) = (datum_value(&lower[i])?, datum_value(&upper[i])?) else {
             break;
         };
-        if order(&low, &high)? != Ordering::Equal {
+        if order(&columns[i], &low, &high)? != Ordering::Equal {
             break;
         }
         if i + 1 == count {
@@ -392,12 +413,17 @@ fn range_qual(
 }
 
 /// `get_qual_from_partbound`: the constraint that the bound of a partition gives, with the columns of the parent.
-fn bound_qual(catalog: &Catalog, parent: &Relation, bound: &PartitionBound) -> Result<Vec<Expr>> {
+fn bound_qual(
+    session: &dyn Session,
+    catalog: &Catalog,
+    parent: &Relation,
+    bound: &PartitionBound,
+) -> Result<Vec<Expr>> {
     let key = parent
         .partition_key
         .as_ref()
         .ok_or_else(|| Error::internal(format!("relation {} is not partitioned", parent.oid)))?;
-    let columns = key_columns(catalog, parent, key)?;
+    let columns = key_columns(session, catalog, parent, key)?;
     let first = columns.first().ok_or_else(|| Error::internal("a partition key with no column"))?;
     match (key.strategy, bound) {
         (PartStrategy::Hash, PartitionBound::Hash { modulus, remainder }) => {
@@ -422,13 +448,17 @@ fn bound_qual(catalog: &Catalog, parent: &Relation, bound: &PartitionBound) -> R
 }
 
 /// `generate_partition_qual`: the constraint of the partition and of each partitioned table above it, the top one first, with the columns of the partition. A table that is not a partition has no constraint.
-pub(super) fn partition_qual(catalog: &Catalog, rel: &Relation) -> Result<Vec<Expr>> {
+pub(super) fn partition_qual(
+    session: &dyn Session,
+    catalog: &Catalog,
+    rel: &Relation,
+) -> Result<Vec<Expr>> {
     let Some(of) = &rel.partition_of else { return Ok(Vec::new()) };
     let parent = catalog.relation(of.parent).ok_or_else(|| {
         Error::internal(format!("cache lookup failed for relation {}", of.parent))
     })?;
-    let mut qual = partition_qual(catalog, parent)?;
-    qual.extend(bound_qual(catalog, parent, &of.bound)?);
+    let mut qual = partition_qual(session, catalog, parent)?;
+    qual.extend(bound_qual(session, catalog, parent, &of.bound)?);
     // `map_partition_varattnos`: the columns of the parent by name in the partition.
     let map: Vec<i16> = parent
         .columns

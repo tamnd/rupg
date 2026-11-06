@@ -482,7 +482,11 @@ fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
 }
 
 /// [`compare`] in a collation of ICU when `collator` is set: `varstr_cmp` for strings of `text`, `varchar`, `bpchar` and `name`, and `array_cmp` with its elements in the collation. A `bpchar` value compares without its trailing spaces, as `bpcharcmp` does.
-pub(crate) fn compare_in(
+///
+/// # Errors
+///
+/// The errors of [`compare`].
+pub fn compare_in(
     collator: Option<&crate::Collator>,
     left: u32,
     a: &Value,

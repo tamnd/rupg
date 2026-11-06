@@ -266,7 +266,7 @@ impl Analyzer<'_> {
         self.lookup_collation(list, at, false)
     }
 
-    /// [`Analyzer::collation_oid`] for the `COLLATE` of a column of a table, which also takes a deterministic collation of ICU with no rules. The comparisons, the sorts and the case mappings of the column follow ICU; an index or a partition key on such a column is not supported yet.
+    /// [`Analyzer::collation_oid`] for the `COLLATE` of a column of a table, which also takes a deterministic collation of ICU with no rules. The comparisons, the sorts and the case mappings of the column, and an index or a partition key on it, follow ICU.
     pub(crate) fn column_collation_oid(
         &self,
         list: &[Option<Node>],

@@ -25,7 +25,12 @@ struct KeyColumn {
     name: String,
     ty: u32,
     typmod: i32,
+    /// The collation of the key column, as `partcollation` has it, or 0.
+    collation: u32,
 }
+
+/// The type and the collation of a key column, which order the datums of the bounds.
+type KeyType = (u32, u32);
 
 /// A datum of a bound of a range partition before `make_one_partition_rbound`: -1 for `MINVALUE`, 0 for a value and 1 for `MAXVALUE`.
 struct NewDatum {
@@ -276,11 +281,7 @@ impl Definer<'_, '_> {
                 }
             };
             if !elem.collation.is_empty() {
-                collation = self.an.collation_oid(&elem.collation, None)?;
-            }
-            // The bounds of the partitions order the strings as their bytes.
-            if crate::collate::icu(collation, Some(&*self.catalog)) {
-                return Err(super::not_yet("a partition key in a collation of ICU", None));
+                collation = self.an.column_collation_oid(&elem.collation, None)?;
             }
             if types::collatable(ty) {
                 if collation == 0 {
@@ -489,17 +490,19 @@ impl Definer<'_, '_> {
         };
         let mut exprs = exprs.into_iter();
         let mut columns = Vec::with_capacity(partkey.attrs.len());
-        for &attnum in &partkey.attrs {
+        for (i, &attnum) in partkey.attrs.iter().enumerate() {
+            let collation = partkey.collations.get(i).copied().unwrap_or(0);
             if attnum != 0 {
                 let c = rel.column(attnum).ok_or_else(|| {
                     Error::internal(format!("cache lookup failed for attribute {attnum}"))
                 })?;
-                columns.push(KeyColumn { name: c.name.clone(), ty: c.ty, typmod: c.typmod });
+                let (name, ty, typmod) = (c.name.clone(), c.ty, c.typmod);
+                columns.push(KeyColumn { name, ty, typmod, collation });
             } else {
                 let expr =
                     exprs.next().ok_or_else(|| Error::internal("too few entries in partexprs"))?;
                 let name = self.an.env.deparse(&node::write(&expr)?, parent)?;
-                columns.push(KeyColumn { name, ty: expr.ty, typmod: expr.typmod });
+                columns.push(KeyColumn { name, ty: expr.ty, typmod: expr.typmod, collation });
             }
         }
         Ok(columns)
@@ -674,7 +677,8 @@ impl Definer<'_, '_> {
                     }
                 }
                 if check {
-                    self.check_list(relname, &parts, &values, columns[0].ty)?;
+                    let key = (columns[0].ty, columns[0].collation);
+                    self.check_list(relname, &parts, &values, key)?;
                 }
                 let mut stored = Vec::with_capacity(values.len());
                 for value in &values {
@@ -699,7 +703,7 @@ impl Definer<'_, '_> {
                 }
                 let lower = self.range_datums(&spec.lowerdatums, &columns)?;
                 let upper = self.range_datums(&spec.upperdatums, &columns)?;
-                let types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+                let types: Vec<KeyType> = columns.iter().map(|c| (c.ty, c.collation)).collect();
                 if check {
                     self.check_range(relname, &parts, &types, (&lower, &upper))?;
                 }
@@ -719,7 +723,13 @@ impl Definer<'_, '_> {
     }
 
     /// The list part of `check_new_partition_bound`: a value that another partition has, or a null when another partition takes nulls, overlaps.
-    fn check_list(&self, relname: &str, parts: &[Part], values: &[Expr], ty: u32) -> Result<()> {
+    fn check_list(
+        &self,
+        relname: &str,
+        parts: &[Part],
+        values: &[Expr],
+        (ty, collation): KeyType,
+    ) -> Result<()> {
         for value in values {
             let ExprKind::Const(value_of) = &value.kind else { continue };
             for part in parts {
@@ -730,7 +740,8 @@ impl Definer<'_, '_> {
                         Some(_) if value_of.is_null() => false,
                         Some(text) => {
                             let other = stored_value(text)?;
-                            self.an.env.compare(ty, value_of, &other)? == Ordering::Equal
+                            self.an.env.compare_in(ty, value_of, &other, collation)?
+                                == Ordering::Equal
                         }
                     };
                     if found {
@@ -743,10 +754,10 @@ impl Definer<'_, '_> {
     }
 
     /// `partition_rbound_cmp`: the order of two bounds of a range partition, as a column number with a sign. A bound that has `MINVALUE` or `MAXVALUE` in a column ignores the later columns, and of two bounds with equal datums the upper bound comes first.
-    fn rbound_cmp(&self, types: &[u32], a: &RangeBound, b: &RangeBound) -> Result<i32> {
+    fn rbound_cmp(&self, types: &[KeyType], a: &RangeBound, b: &RangeBound) -> Result<i32> {
         let mut colnum = 0;
         let mut order = Ordering::Equal;
-        for (i, &ty) in types.iter().enumerate() {
+        for (i, &(ty, collation)) in types.iter().enumerate() {
             colnum += 1;
             match a.kinds[i].cmp(&b.kinds[i]) {
                 Ordering::Less => return Ok(-colnum),
@@ -754,7 +765,7 @@ impl Definer<'_, '_> {
                 Ordering::Equal if a.kinds[i] != 0 => break,
                 Ordering::Equal => {}
             }
-            order = self.an.env.compare(ty, &a.values[i], &b.values[i])?;
+            order = self.an.env.compare_in(ty, &a.values[i], &b.values[i], collation)?;
             if order != Ordering::Equal {
                 break;
             }
@@ -782,8 +793,9 @@ impl Definer<'_, '_> {
             return Ok(parts.into_iter().map(|(oid, _)| oid).collect());
         };
         parts.sort_by_key(|(oid, _)| *oid);
-        let types: Vec<u32> = self.key_columns(table, &key)?.iter().map(|c| c.ty).collect();
-        let ty = types.first().copied().unwrap_or(0);
+        let types: Vec<KeyType> =
+            self.key_columns(table, &key)?.iter().map(|c| (c.ty, c.collation)).collect();
+        let (ty, collation) = types.first().copied().unwrap_or_default();
         let mut keyed = Vec::with_capacity(parts.len());
         for (oid, bound) in parts {
             let (rank, least, lower) = match &bound {
@@ -795,7 +807,9 @@ impl Definer<'_, '_> {
                         let value = stored_value(text)?;
                         let less = match &least {
                             None => true,
-                            Some(l) => self.an.env.compare(ty, &value, l)? == Ordering::Less,
+                            Some(l) => {
+                                self.an.env.compare_in(ty, &value, l, collation)? == Ordering::Less
+                            }
                         };
                         if less {
                             least = Some(value);
@@ -823,7 +837,7 @@ impl Definer<'_, '_> {
                             PartitionBound::Hash { modulus: mb, remainder: rb },
                         ) => (ma, ra).cmp(&(mb, rb)),
                         _ => match (&prev.least, &item.least, &prev.lower, &item.lower) {
-                            (Some(a), Some(b), _, _) => self.an.env.compare(ty, a, b)?,
+                            (Some(a), Some(b), _, _) => self.an.env.compare_in(ty, a, b, collation)?,
                             (_, _, Some(a), Some(b)) => self.rbound_cmp(&types, a, b)?.cmp(&0),
                             _ => Ordering::Equal,
                         },
@@ -841,7 +855,7 @@ impl Definer<'_, '_> {
     }
 
     /// A merge sort of the bounds with `qsort_partition_rbound_cmp`. The comparison can fail, so the sort of the standard library does not fit.
-    fn sort_bounds(&self, types: &[u32], mut all: Vec<RangeBound>) -> Result<Vec<RangeBound>> {
+    fn sort_bounds(&self, types: &[KeyType], mut all: Vec<RangeBound>) -> Result<Vec<RangeBound>> {
         if all.len() <= 1 {
             return Ok(all);
         }
@@ -878,7 +892,7 @@ impl Definer<'_, '_> {
         &self,
         relname: &str,
         parts: &[Part],
-        types: &[u32],
+        types: &[KeyType],
         (lower, upper): (&[NewDatum], &[NewDatum]),
     ) -> Result<()> {
         let low = new_bound(lower, true);
@@ -919,7 +933,8 @@ impl Definer<'_, '_> {
                     if kind != 0 {
                         return true;
                     }
-                    if self.an.env.compare(types[j], &cur.values[j], &prev.values[j]).ok()
+                    let (ty, collation) = types[j];
+                    if self.an.env.compare_in(ty, &cur.values[j], &prev.values[j], collation).ok()
                         != Some(Ordering::Equal)
                     {
                         return false;

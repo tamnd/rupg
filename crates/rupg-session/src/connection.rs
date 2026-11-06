@@ -7916,6 +7916,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_index.test")));
     }
 
+    /// A partition key in a collation of ICU orders the bounds as the collator does: the checks of empty and overlapping bounds, the order of the partitions, the routing of the rows, the pruning of a condition in the collation of the key and not of one in another collation, an ordered `Append` for `ORDER BY` in the collation, `ATTACH PARTITION` with a row out of the bounds, list, hash and `PRIMARY KEY` partitions, and a key with a collation of its own. `UNION`, `INTERSECT` and `EXCEPT` sort in the collation of their columns. `connection/icu_partition.test` is the output of PostgreSQL 19 (ICU 74) for the same script.
+    #[test]
+    fn icu_partition() {
+        big_stack(|| script(include_str!("connection/icu_partition.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {
