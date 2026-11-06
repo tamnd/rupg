@@ -17,6 +17,8 @@ use rupg_pgcatalog::{Batch, Values};
 use rupg_plan::Scanned;
 use rupg_types::{Array, Record, Value, oid};
 
+use crate::columnar;
+
 /// The attribute number of the system column `xmin`.
 const XMIN_ATTNUM: i16 = -2;
 
@@ -545,11 +547,14 @@ pub(crate) type Narrow<'a> = dyn FnMut(&Tables, &Expr, &[usize]) -> Result<Value
 /// The error of the input function of a column that the catalog keeps as text, and the error of a condition.
 ///
 /// With `narrow`, a query of one table with an `=` on each key column of a unique index reads only the versions with the key, as [`key_rows`] finds them. `keyed` becomes true when the parameters `params` gave the key.
+///
+/// With `narrow`, a join of tables whose conditions cannot fail reads only the rows that can join, as [`crate::reduce`] finds them.
 pub(crate) fn read(
     query: &Query,
     session: &dyn Session,
     mut narrow: Option<&mut Narrow<'_>>,
     (params, keyed): (&[Value], &mut bool),
+    cache: &crate::Cache,
 ) -> Result<Tables> {
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
@@ -594,6 +599,10 @@ pub(crate) fn read(
     let plain = query.write.is_none() && query.row_marks.is_empty();
     let mut rows = Vec::with_capacity(query.relations.len());
     let mut places = vec![None; query.relations.len()];
+    let reduce = narrow.as_ref().and_then(|_| crate::reduce::plan(query, &conds, session));
+    let mut selected: Vec<Option<columnar::Selected>> =
+        query.relations.iter().map(|_| None).collect();
+    let mut kept_of: Vec<Option<Vec<bool>>> = query.relations.iter().map(|_| None).collect();
     for (index, (relation, used)) in query.relations.iter().zip(&used).enumerate() {
         let work = relation
             .cte
@@ -622,6 +631,15 @@ pub(crate) fn read(
                 *keyed |= param;
                 rows.push(Rc::new(found));
                 continue;
+            }
+            if let Some(plan) = reduce.as_ref().filter(|_| !xids[index]) {
+                let (own, keys) = (&plan.own[index], &plan.keys[index]);
+                if let Some(found) = columnar::selected(relation, own, keys, session, cache)? {
+                    selected[index] = Some(found);
+                    kept_of[index] = kept;
+                    rows.push(Rc::default());
+                    continue;
+                }
             }
             let few = narrow.as_mut().filter(|_| !xids[index]).and_then(|test| {
                 let mask = narrowed(query, kept.as_deref().unwrap_or(used), &conds, session)?;
@@ -685,6 +703,30 @@ pub(crate) fn read(
             table.extend(crate::user::rows(catalog, user, session)?);
         }
         rows.push(Rc::new(table));
+    }
+    if let (Some(plan), Some(test)) = (&reduce, narrow)
+        && selected.iter().any(Option::is_some)
+    {
+        let all = tables(query, rows.clone(), xids.clone(), places.clone());
+        let found = crate::reduce::run(plan, &mut rows, &mut selected, all, test)?;
+        for (index, found) in found.into_iter().enumerate() {
+            let (Some(found), Some(selected)) = (found, &selected[index]) else { continue };
+            let relation = &query.relations[index];
+            let kept = kept_of[index].as_deref();
+            session.count_scan(relation.oid);
+            let width = kept.map_or(relation.columns.len(), |k| k.iter().filter(|k| **k).count());
+            let read = session.table_rows_at_places(relation.oid, kept, selected.rows, &found)?;
+            let mut read = match read {
+                Some(read) => read,
+                None => session.table_rows(relation.oid, kept)?,
+            };
+            for row in &mut read {
+                let tid = row.pop().unwrap_or(Value::Null);
+                row.resize(width, Value::Null);
+                row.push(tid);
+            }
+            rows[index] = Rc::new(read);
+        }
     }
     Ok(tables(query, rows, xids, places))
 }

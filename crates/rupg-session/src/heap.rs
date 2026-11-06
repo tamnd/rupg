@@ -1405,10 +1405,18 @@ impl Table {
         }
     }
 
-    /// The values of the versions at the places `places` in the order of [`Table::each_version`], which go up. The frozen columns decode only the vectors with these rows and make only their values, so that a sample of a long table does not make a value for each row. `None` is a column that does not decode.
-    fn rows_at(&self, places: &[usize]) -> Option<Vec<Vec<Value>>> {
+    /// The values of the versions at the places `places` in the order of [`Table::each_version`], which go up, with only the columns at `used`, in their order, or all the columns for `None`. The frozen columns decode only the vectors with these rows and make only their values, so that a sample of a long table does not make a value for each row. `None` is a column that does not decode.
+    fn rows_at(&self, places: &[usize], used: Option<&[usize]>) -> Option<Vec<Vec<Value>>> {
+        let pick = |values: &[Value]| -> Vec<Value> {
+            match used {
+                Some(used) => {
+                    used.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect()
+                }
+                None => values.to_vec(),
+            }
+        };
         let Some(frozen) = &self.frozen else {
-            return Some(places.iter().map(|&at| self.versions[at].values.to_vec()).collect());
+            return Some(places.iter().map(|&at| pick(&self.versions[at].values)).collect());
         };
         // For each place, the row of the frozen columns, or the version with its values.
         let slots: Vec<Result<usize, usize>> = if self.cold.is_some() && frozen.moved.is_empty() {
@@ -1432,10 +1440,21 @@ impl Table {
         let mut wanted: Vec<usize> = slots.iter().filter_map(|slot| slot.ok()).collect();
         wanted.sort_unstable();
         wanted.dedup();
-        let mut columns = Vec::with_capacity(frozen.columns.len());
-        for stored in &frozen.columns {
+        let all: Vec<usize>;
+        let used_columns = match used {
+            Some(used) => used,
+            None => {
+                all = (0..frozen.columns.len()).collect();
+                &all
+            }
+        };
+        let mut columns = Vec::with_capacity(used_columns.len());
+        for &column in used_columns {
             let mut values = Vec::with_capacity(wanted.len());
-            stored.values_at(&wanted, &mut values).ok()?;
+            match frozen.columns.get(column) {
+                Some(stored) => stored.values_at(&wanted, &mut values).ok()?,
+                None => values.resize(wanted.len(), Value::Null),
+            }
             columns.push(values);
         }
         slots
@@ -1445,9 +1464,29 @@ impl Table {
                     let at = wanted.binary_search(&row).ok()?;
                     Some(columns.iter().map(|column| column[at].clone()).collect())
                 }
-                Err(at) => Some(self.versions[at].values.to_vec()),
+                Err(at) => Some(pick(&self.versions[at].values)),
             })
             .collect()
+    }
+
+    /// Gives `each` the header of each version at the places `places` in the order of [`Table::each_version`], which go up. A cold table decodes only the vectors of headers with these places. `None` is a place after the last version.
+    fn versions_at(&self, places: &[usize], mut each: impl FnMut(&Version)) -> Option<()> {
+        let Some(cold) = &self.cold else {
+            for &place in places {
+                each(self.versions.get(place)?);
+            }
+            return Some(());
+        };
+        let mut decoded: Option<(usize, Vec<Version>)> = None;
+        for &place in places {
+            let vector = place / VECTOR;
+            if decoded.as_ref().is_none_or(|(at, _)| *at != vector) {
+                decoded = Some((vector, Cold::vector(cold.vectors.get(vector)?).ok()?));
+            }
+            let (_, versions) = decoded.as_ref()?;
+            each(versions.get(place % VECTOR)?);
+        }
+        Some(())
     }
 
     /// Gives `each` the header of each version of the table, cold or not, with no values.
@@ -2258,6 +2297,35 @@ impl Heap {
             .collect()
     }
 
+    /// The rows of [`Heap::visible_rows`] with no system columns for the versions at the places `places` in the order of the versions, which go up, of a table whose columns [`Heap::columns`] gave with `rows` rows. A cold table decodes only the vectors with these places, so that a join that keeps few rows of a long table makes the values of only those rows. `None` is a table with another number of versions, a version that the view does not see, or a column that does not decode.
+    pub(crate) fn rows_at_places(
+        &self,
+        relation: u32,
+        view: &View,
+        used: Option<&[bool]>,
+        rows: usize,
+        places: &[usize],
+    ) -> Option<Vec<Vec<Value>>> {
+        let state = self.state();
+        let table = state.tables.meta(&(view.database, relation))?;
+        if table.len() != rows
+            || !places.windows(2).all(|pair| pair[0] < pair[1])
+            || places.last().is_some_and(|&place| place >= rows)
+        {
+            return None;
+        }
+        let columns = used_columns(used);
+        let mut values = table.rows_at(places, columns.as_deref())?.into_iter();
+        let mut out = Vec::with_capacity(places.len());
+        let mut seen = true;
+        table.versions_at(places, |version| {
+            seen &= visible(version, view);
+            let values = values.next().unwrap_or_default();
+            out.push(version_row(version, &values, &table.combos, None, false));
+        })?;
+        (seen && out.len() == places.len()).then_some(out)
+    }
+
     /// The rows of [`Heap::rows_at`] for the versions whose key has the hash of `key` in the map of the unique key with the columns `columns`, the types `types` and `nulls_not_distinct`, in the order of their IDs, for a scan that tests the key again. The first read of a key makes its map from all the versions, as the first write that checks the key does. A key with a null that is not equal to a null gives no row.
     pub(crate) fn key_rows(
         &self,
@@ -2946,7 +3014,7 @@ impl Heap {
             }
             place += 1;
         });
-        if let Some(rows) = table.rows_at(&places) {
+        if let Some(rows) = table.rows_at(&places, None) {
             return (rows, total as f64);
         }
         let mut picks = picks();
@@ -3994,7 +4062,7 @@ mod tests {
             let mut all = Vec::new();
             table.each_version_row(None, |_, values| all.push(values.to_vec()));
             let want: Vec<Vec<Value>> = places.iter().map(|&at| all[at].clone()).collect();
-            assert_eq!(table.rows_at(&places).unwrap(), want);
+            assert_eq!(table.rows_at(&places, None).unwrap(), want);
             assert_eq!(want[2], all[37]);
         };
         insert(rows(ROWS + 5000..ROWS + 9000)).unwrap();
@@ -4184,12 +4252,12 @@ mod tests {
             .into_iter()
             .collect();
         let picked: Vec<Vec<Value>> = places.iter().map(|&at| want[at].clone()).collect();
-        assert_eq!(table.rows_at(&places).unwrap(), picked);
+        assert_eq!(table.rows_at(&places, None).unwrap(), picked);
         table.seal();
         table.chill();
         assert!(table.cold.is_some());
         assert_eq!(all(table), want);
-        assert_eq!(table.rows_at(&places).unwrap(), picked);
+        assert_eq!(table.rows_at(&places, None).unwrap(), picked);
         drop(state);
         let mut image = Vec::new();
         heap.image(&mut image);

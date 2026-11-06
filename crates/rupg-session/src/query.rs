@@ -1468,6 +1468,21 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn table_rows_at_places(
+        &self,
+        relation: u32,
+        used: Option<&[bool]>,
+        rows: usize,
+        places: &[usize],
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => {
+                Ok(store.heap().rows_at_places(relation, view, used, rows, places))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn table_rows_by_key(
         &self,
         relation: u32,

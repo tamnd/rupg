@@ -1078,6 +1078,7 @@ impl Cache {
             session,
             narrow.then_some(&mut test as &mut scan::Narrow<'_>),
             (params, &mut keyed),
+            self,
         )?);
         if !keyed {
             self.tables.borrow_mut().push((query, narrow, Rc::clone(&tables)));
@@ -4607,6 +4608,7 @@ mod jsonexpr;
 mod jsontable;
 mod partition;
 mod populate;
+mod reduce;
 mod scan;
 mod sort;
 mod user;

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A join of tables with frozen columns reads only the rows that can join. Each table keeps the rows that pass its own conditions, which the vectors test, and then the rows whose key of an `=` with another table is a key of the other table. The reduction runs only when no condition of `WHERE` can fail (#1378).
 - A column of `CREATE TABLE`, `ALTER TABLE ADD COLUMN` and `LIKE` takes a deterministic collation of ICU, and its sorts, comparisons and case mappings follow the collation, as in PostgreSQL (#1377).
 - Regular expressions and `ILIKE` in a collation of ICU use the classes and the simple case mapping of Unicode, and `ILIKE` the `lower` of the language of the collation, as in PostgreSQL; `[[:cntrl:]]` takes U+0080 to U+009F in each collation (#1376).
 - A vector scan with `ORDER BY` and `LIMIT`, whose targets are all keys of the order on columns of integers, dates, times or text codes, finds its top in the tasks of the server. Each task keeps its own top and the tasks share the first key of the last row of their tops, so that a task skips the rows and, by the zones of a key of integers, the vectors that cannot go in the top (#1374).

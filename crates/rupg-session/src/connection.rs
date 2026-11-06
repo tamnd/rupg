@@ -4312,6 +4312,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/columnar_numeric.test")));
     }
 
+    /// A join of tables with frozen columns reads only the rows that can join, and gives the same rows as a join of all the rows, also with a condition that can fail and after an update.
+    #[test]
+    fn join_reduce() {
+        big_stack(|| script_tasks(include_str!("connection/join_reduce.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
