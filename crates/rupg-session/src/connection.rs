@@ -4342,6 +4342,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/top_tasks.test")));
     }
 
+    /// The tasks of the server give only the groups of the result of a vector scan with `ORDER BY` of one count and `LIMIT`, when the counts of the result and the count after them are all different: in both orders, with `OFFSET`, a null key, other aggregates, a derived key, a filter and `count` of a column. A derived key that is out of range in a group that is not in the result gives the error, and equal counts take all the groups.
+    #[test]
+    fn top_groups_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/top_groups_tasks.test")));
+    }
+
     /// The tasks of the server find the first groups of a vector scan with `LIMIT` and no sort, whose groups go in the order of a sort of their keys, from the rows whose first key is not more than the first key of the last group of the limit: with `OFFSET`, a filter, a key of an expression, nulls of the first key, fewer values of the first key than the limit, and groups of a hash table or a first key of floats, which read each row.
     #[test]
     fn limit_groups_tasks() {

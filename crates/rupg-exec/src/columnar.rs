@@ -3056,7 +3056,24 @@ fn grouped(
     let mut found = None;
     if let Some((tasks, (plan, derived))) = parallel {
         session.interrupted()?;
-        let mut run = groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments)?;
+        // For `ORDER BY` of a count, the tasks can give only the groups of the result. A hash of the keys that can fail needs all the groups, as below.
+        let shapes: Vec<Shape> = keys.iter().map(|key| key_shape(scan.exec, key)).collect();
+        let wanted = top
+            .filter(|_| hashing.as_ref().is_none_or(|places| infallible(places, &shapes)))
+            .and_then(|(agg, descending, bound)| {
+                let fold = aggs.iter().position(|call| std::ptr::eq(call.key, agg))?;
+                let ranges = derived
+                    .iter()
+                    .flatten()
+                    .map(|d| {
+                        let by = i128::from(d.by);
+                        (d.from, i128::from(d.range.0) - by, i128::from(d.range.1) - by)
+                    })
+                    .collect();
+                Some(groups::Top { fold, descending, bound, ranges })
+            });
+        let mut run =
+            groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments, wanted.as_ref())?;
         session.interrupted()?;
         if keys.is_empty() {
             run.or_one();

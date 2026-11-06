@@ -1,0 +1,103 @@
+> CREATE TABLE tc (k int, v int, w int)
+CREATE TABLE
+> INSERT INTO tc SELECT CASE WHEN j = 1 THEN 2147483647 WHEN j = 500 THEN NULL ELSE j END, r, CASE WHEN r = 1 THEN NULL ELSE r END FROM generate_series(1, 900) j, generate_series(1, j) r
+INSERT 0 405450
+> CREATE TABLE tw (g int)
+CREATE TABLE
+> INSERT INTO tw SELECT j * 2 + c FROM generate_series(1, 600) j, generate_series(0, 1) c, generate_series(1, j) r
+INSERT 0 360600
+> ANALYZE tc
+ANALYZE
+> ANALYZE tw
+ANALYZE
+> SELECT k, count(*) FROM tc GROUP BY k ORDER BY count(*) DESC LIMIT 5
+fields k@tc.1:23:4:-1,count:20:8:-1
+row 900,900
+row 899,899
+row 898,898
+row 897,897
+row 896,896
+SELECT 5
+> SELECT k, count(*) FROM tc GROUP BY k ORDER BY count(*) LIMIT 4 OFFSET 2
+fields k@tc.1:23:4:-1,count:20:8:-1
+row 3,3
+row 4,4
+row 5,5
+row 6,6
+SELECT 4
+> SELECT k, k - 1, count(*), sum(v), min(v), max(w), avg(v) FROM tc GROUP BY k, k - 1 ORDER BY 3 DESC LIMIT 3
+fields k@tc.1:23:4:-1,?column?:23:4:-1,count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1,avg:1700:-1:-1
+row 900,899,900,405450,1,900,450.5000000000000000
+row 899,898,899,404550,1,899,450.0000000000000000
+row 898,897,898,403651,1,898,449.5000000000000000
+SELECT 3
+> SELECT k, k + 1, count(*) FROM tc GROUP BY k, k + 1 ORDER BY count(*) DESC LIMIT 3
+fields k@tc.1:23:4:-1,?column?:23:4:-1,count:20:8:-1
+ERROR 22003 integer out of range
+> SELECT k, count(w) FROM tc GROUP BY k ORDER BY count(w) DESC LIMIT 3
+fields k@tc.1:23:4:-1,count:20:8:-1
+row 900,899
+row 899,898
+row 898,897
+SELECT 3
+> SELECT k, count(*) FROM tc WHERE v > 100 GROUP BY k ORDER BY count(*) DESC LIMIT 3
+fields k@tc.1:23:4:-1,count:20:8:-1
+row 900,800
+row 899,799
+row 898,798
+SELECT 3
+> SET max_parallel_workers_per_gather = 0
+SET
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) DESC LIMIT 5
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 1201,600
+row 1200,600
+row 1198,599
+row 1199,599
+row 1196,598
+SELECT 5
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) LIMIT 3
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 3,1
+row 2,1
+row 5,2
+SELECT 3
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) DESC LIMIT 3
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 1200,600
+row 1201,600
+row 1199,599
+SELECT 3
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) DESC LIMIT 7
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 1200,600
+row 1201,600
+row 1198,599
+row 1199,599
+row 1197,598
+row 1196,598
+row 1194,597
+SELECT 7
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) DESC LIMIT 1
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 1200,600
+SELECT 1
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) LIMIT 5
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 2,1
+row 3,1
+row 4,2
+row 5,2
+row 6,3
+SELECT 5
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) LIMIT 1
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 2,1
+SELECT 1
+> SELECT g, count(*) FROM tw GROUP BY g ORDER BY count(*) DESC LIMIT 2 OFFSET 3
+fields g@tw.1:23:4:-1,count:20:8:-1
+row 1199,599
+row 1196,598
+SELECT 2
+> RESET max_parallel_workers_per_gather
+RESET
