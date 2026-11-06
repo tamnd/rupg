@@ -73,6 +73,7 @@ hmac = "0.13"
 icu_casemap = "2.3"
 icu_collator = "2.3"
 icu_locale_core = "2.3"
+icu_properties = "2.3"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 md-5 = "0.11"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }

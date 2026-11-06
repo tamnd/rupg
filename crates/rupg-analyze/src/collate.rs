@@ -333,8 +333,8 @@ pub(crate) enum Use {
     Order,
     /// The function maps the case of the letters in the language of the collation, as `upper`, `lower`, `initcap` and `casefold` do, which the kernels of `rupg-func` do in a collation of ICU.
     Case,
-    /// The function reads the collation in a way that rupg does not do yet for ICU: the classes of the characters of a regular expression, or `ILIKE`.
-    Unsupported,
+    /// The function matches a pattern with the classes and the cases of the characters of the collation, as the regular expressions and `ILIKE` do, which the kernels of `rupg-func` do in a collation of ICU.
+    Pattern,
 }
 
 /// [`Use`] of the function `func`.
@@ -389,8 +389,8 @@ pub(crate) fn collation_use(func: u32) -> Use {
     if matches!(src, "upper" | "lower" | "initcap" | "casefold") {
         return Use::Case;
     }
-    let unsupported = src.contains("regex") || src.contains("iclike") || src.contains("icnlike");
-    if unsupported { Use::Unsupported } else { Use::None }
+    let pattern = src.contains("regex") || src.contains("iclike") || src.contains("icnlike");
+    if pattern { Use::Pattern } else { Use::None }
 }
 
 /// The collation of the inputs of a call, as `inputcollid`, when it is a collation of ICU, or 0. A conflict of implicit collations gives 0.

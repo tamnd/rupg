@@ -319,7 +319,7 @@ impl Analyzer<'_> {
         };
         self.has_windows = true;
         let collation = match aggregate {
-            Some(_) => self.agg_collation(proc.oid, &args, at)?,
+            Some(_) => self.agg_collation(proc.oid, &args),
             None => 0,
         };
         let call = WindowFunc {

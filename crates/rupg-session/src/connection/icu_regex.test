@@ -1,0 +1,207 @@
+!details
+> select 'é' ~ '^[[:alpha:]]$' collate "en-x-icu", 'é' ~ '^[[:alpha:]]$', 'é' ~ '^\w$' collate "en-x-icu", 'é' ~ '^\w$', '٣' ~ '^\d$' collate "en-x-icu", '٣' ~ '^[[:digit:]]$' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,t
+SELECT 1
+> select c, c ~ '[[:punct:]]' collate "en-x-icu" as icu, c ~ '[[:punct:]]' as c_punct from unnest(array['$', '+', '<', '^', '`', '|', '~', '!', '_', '-', '«', '¿', '§']) c order by c collate "C"
+fields c:25:-1:-1,icu:16:1:-1,c_punct:16:1:-1
+row !,t,t
+row $,f,t
+row +,f,t
+row -,t,t
+row <,f,t
+row ^,f,t
+row _,t,t
+row `,f,t
+row |,f,t
+row ~,f,t
+row §,t,f
+row «,t,f
+row ¿,t,f
+SELECT 13
+> select to_hex(ascii(c)) as h, c ~ '[[:space:]]' collate "en-x-icu" as sp, c ~ '\s' collate "en-x-icu" as s, c ~ '[[:blank:]]' collate "en-x-icu" as bl, c ~ '[[:cntrl:]]' collate "en-x-icu" as ct, c ~ '[[:graph:]]' collate "en-x-icu" as gr, c ~ '[[:print:]]' collate "en-x-icu" as pr, c ~ '[[:punct:]]' collate "en-x-icu" as pu from unnest(array[E'\u0020', E'\u00a0', E'\u3000', E'\u0085', E'\u200b', E'\u2028', E'\u2003', 'a', E'\u00ad', E'\ue000', E'\u0009', E'\u001c', E'\u007f', E'\u00b4', E'\u0378']) c order by ascii(c)
+fields h:25:-1:-1,sp:16:1:-1,s:16:1:-1,bl:16:1:-1,ct:16:1:-1,gr:16:1:-1,pr:16:1:-1,pu:16:1:-1
+row 9,t,t,t,t,f,f,f
+row 1c,t,t,f,t,f,f,f
+row 20,t,t,t,f,f,t,f
+row 61,f,f,f,f,t,t,f
+row 7f,f,f,f,t,f,f,f
+row 85,t,t,f,t,f,f,f
+row a0,t,t,f,f,f,t,f
+row ad,f,f,f,f,f,f,f
+row b4,f,f,f,f,t,t,f
+row 378,f,f,f,f,f,f,f
+row 2003,t,t,f,f,f,t,f
+row 200b,f,f,f,f,f,f,f
+row 2028,t,t,f,f,f,t,f
+row 3000,t,t,f,f,f,t,f
+row e000,f,f,f,f,t,f,f
+SELECT 15
+> select c, c ~ '[[:xdigit:]]' collate "en-x-icu" as x, c ~ '[[:upper:]]' collate "en-x-icu" as u, c ~ '[[:lower:]]' collate "en-x-icu" as l, c ~ '[[:alnum:]]' collate "en-x-icu" as an, c ~ '[[:ascii:]]' collate "en-x-icu" as asc from unnest(array['Ａ', 'ｆ', 'Ｇ', '٣', 'Ǆ', 'ǅ', 'ǆ', 'ª', 'Ⅻ', '²', '中']) c order by c collate "C"
+fields c:25:-1:-1,x:16:1:-1,u:16:1:-1,l:16:1:-1,an:16:1:-1,asc:16:1:-1
+row ª,f,f,f,t,f
+row ²,f,f,f,f,f
+row Ǆ,f,t,f,t,f
+row ǅ,f,f,f,t,f
+row ǆ,f,f,t,t,f
+row ٣,f,f,f,t,f
+row Ⅻ,f,f,f,f,f
+row 中,f,f,f,t,f
+row Ａ,f,t,f,t,f
+row Ｇ,f,t,f,t,f
+row ｆ,f,f,t,t,f
+SELECT 11
+> select 'É' ~* 'é' collate "en-x-icu", 'É' ~* 'é', 'ß' ~* 'SS' collate "de-x-icu", 'İ' ~* 'i' collate "tr-x-icu", 'İ' ~* 'i' collate "en-x-icu", 'ı' ~* 'I' collate "tr-x-icu", 'ǅ' ~* 'ǆ' collate "en-x-icu", 'Σ' ~* 'ς' collate "el-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,f,f,f,t
+SELECT 1
+> select 'Ä' ~* '[ä-ö]' collate "en-x-icu", 'Ä' ~* '[ä-ö]', 'É' ~* '[[:lower:]]' collate "en-x-icu", 'É' ~ '[[:lower:]]' collate "en-x-icu", 'éÉ' ~* '^(.)\1$' collate "en-x-icu", 'éÉ' ~* '^(.)\1$'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f
+SELECT 1
+> select 'café crème' ~ '\mcr' collate "en-x-icu", 'caféx' ~ 'é\M' collate "en-x-icu", 'caféx' ~ 'é\M', 'café' ~ '\yé' collate "en-x-icu", 'xéy' ~ '\Bé\B' collate "en-x-icu", 'é' ~ '\W' collate "en-x-icu", 'é' ~ '\W', E' ' ~ '\S' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,f,f,t,f
+SELECT 1
+> select regexp_replace('Élan ÉLAN élan' collate "fr-x-icu", 'élan', 'x', 'gi'), regexp_replace('Élan ÉLAN élan', 'élan', 'x', 'gi'), regexp_match('Straße' collate "de-x-icu", '[[:alpha:]]+$'), regexp_count('añb ñ Ñ' collate "es-x-icu", 'ñ', 1, 'i'), substring('naïve' collate "en-x-icu" from '[[:alpha:]]+'), regexp_like('ÅNGSTRÖM' collate "sv-x-icu", 'ångström', 'i')
+fields regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_match:1009:-1:-1,regexp_count:23:4:-1,substring:25:-1:-1,regexp_like:16:1:-1
+row x x x,Élan ÉLAN x,{Straße},3,naïve,t
+SELECT 1
+> select regexp_split_to_array('a·b c' collate "en-x-icu", '[[:punct:][:space:]]'), regexp_instr('xÿz' collate "en-x-icu", '[[:lower:]]', 1, 2), 'ÿ' ~* 'Ÿ' collate "en-x-icu", 'ǅ' ~* 'Ǆ' collate "en-x-icu"
+fields regexp_split_to_array:1009:-1:-1,regexp_instr:23:4:-1,?column?:16:1:-1,?column?:16:1:-1
+row {a,b,c},2,t,f
+SELECT 1
+> select 'ÉCOLE' ilike 'école' collate "fr-x-icu", 'ÉCOLE' ilike 'école', 'İ' ilike 'i' collate "tr-x-icu", 'İ' ilike 'i' collate "en-x-icu", 'STRASSE' ilike 'straße' collate "de-x-icu", 'ΣΑΣ' ilike 'σας' collate "el-x-icu", 'ab' not ilike 'A_' collate "en-x-icu", 'Ä%' ilike 'ä\%' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f,t,f,t
+SELECT 1
+> select 'ÉCOLE'::char(6) ilike 'école%' collate "fr-x-icu", 'ÉCOLE'::name ilike 'é%' collate "fr-x-icu", 'ÉCOLE' ~~* 'é%' collate "fr-x-icu", 'ÉCOLE' !~~* 'é%' collate "fr-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> create table r as select s collate "en-x-icu" as s from (values ('Émile'), ('emile'), ('Ölaf'), ('ölaf'), ('olaf'), (null)) v(s)
+SELECT 6
+> select s from r where s ilike 'é%' order by s collate "C"
+fields s@r.1:25:-1:-1
+row Émile
+SELECT 1
+> select s from r where s ~* '^ö' order by s collate "C"
+fields s@r.1:25:-1:-1
+row Ölaf
+row ölaf
+SELECT 2
+> select s, s ~ '^[[:upper:]]' as up from r order by s collate "C"
+fields s@r.1:25:-1:-1,up:16:1:-1
+row emile,f
+row olaf,f
+row Émile,t
+row Ölaf,t
+row ölaf,f
+row NULL,NULL
+SELECT 6
+> select s from r where s ~ '^[[:alpha:]]+$' and s !~* 'o' order by s collate "C"
+fields s@r.1:25:-1:-1
+row emile
+row Émile
+row Ölaf
+row ölaf
+SELECT 4
+> select 'a' ~ 'a' collate "en-x-icu" collate "de-x-icu"
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select E'\u0085' ~ '[[:cntrl:]]', E'\u0090' ~ '[[:cntrl:]]', 'é' ~ '[[:print:]]', 'é' ~ '[[:graph:]]', E'\u0085' ~ '\s', E' ' ~ '\s'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,f,f
+SELECT 1
+> select 'f' ~ '[[:xdigit:]]' collate "en-x-icu", 'F' ~ '[[:xdigit:]]' collate "en-x-icu", '٣' ~ '\w' collate "en-x-icu", '_' ~ '[[:word:]]' collate "en-x-icu", 'Ⅻ' ~ '\w' collate "en-x-icu", E' ' ~ '[[:graph:]]' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,f,f
+SELECT 1
+> select 'É' ~ '[^[:lower:]]' collate "en-x-icu", 'é' ~* '[^[:upper:]]' collate "en-x-icu", 'Ω' ~* '[α-ω]' collate "el-x-icu", 'Ω' ~* '[α-ω]', 'ẞ' ~* 'ß' collate "de-x-icu", 'ß' ~* 'ẞ' collate "de-x-icu", 'K' ~* 'k' collate "en-x-icu", 'k' ~* 'K' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f,t,t,t
+SELECT 1
+> select 'ÉÉ' ~* '^(é)\1$' collate "en-x-icu", 'Éé' ~* '^(é)\1$' collate "en-x-icu", 'éÉé' ~* '^(é)\1*$' collate "en-x-icu", 'élan' ~ '\melan' collate "en-x-icu", 'xélan' ~ '\yélan' collate "en-x-icu", 'x élan' ~ '\yélan' collate "en-x-icu", '中文' ~ '^\w+$' collate "zh-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,f,t,t
+SELECT 1
+> select 'ÉCOLE' ilike 'É%' collate "fr-x-icu", 'K' ilike 'k' collate "en-x-icu", 'ǅ' ilike 'ǆ' collate "en-x-icu", 'ǅ' ilike 'Ǆ' collate "en-x-icu", 'I' ilike 'ı' collate "tr-x-icu", 'I' ilike 'i' collate "tr-x-icu", 'ß' ilike 'ẞ' collate "de-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,f,t
+SELECT 1
+> select regexp_matches('Ab aB ÄB äb' collate "en-x-icu", '(ä)b', 'gi'), 'x' ~ '(?i)X' collate "en-x-icu"
+fields regexp_matches:1009:-1:-1,?column?:16:1:-1
+row {Ä},t
+row {ä},t
+SELECT 2
+> select x ~* 'É' from (select 'é' collate "en-x-icu" as x) s
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> select 'Émile' similar to 'é%' collate "en-x-icu", 'éa' similar to '[[:alpha:]]+' collate "en-x-icu", 'éa' similar to '[[:alpha:]]+'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,f
+SELECT 1
+> select substring('xéy1' collate "en-x-icu" similar '%#"[[:alpha:]]+#"%' escape '#'), substring('xéy1' similar '%#"[[:alpha:]]+#"%' escape '#')
+fields substring:25:-1:-1,substring:25:-1:-1
+row x,x
+SELECT 1
+> select * from regexp_matches('ÀB àb' collate "en-x-icu", '(à)(b)', 'gi')
+fields regexp_matches:1009:-1:-1
+row {À,B}
+row {à,b}
+SELECT 2
+> select regexp_split_to_table('a1b٣c' collate "en-x-icu", '\d')
+fields regexp_split_to_table:25:-1:-1
+row a
+row b
+row c
+SELECT 3
+> select regexp_split_to_table('a1b٣c', '\d')
+fields regexp_split_to_table:25:-1:-1
+row a
+row b٣c
+SELECT 2
+> create collation tr_re (provider = icu, locale = 'tr')
+CREATE COLLATION
+> select 'I' ilike 'ı' collate tr_re, 'I' ~* 'ı' collate tr_re, upper('ı' collate tr_re) ~ 'I'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> prepare p(text) as select $1 ~* 'é' collate "en-x-icu", $1 ilike 'é' collate "en-x-icu"
+PREPARE
+> execute p('É')
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> select 'É' ~* x, 'ÉCOLE' ilike x || '%' from (select 'é' collate "en-x-icu" as x) s
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> select regexp_replace('ÉÉ éÉ' collate "en-x-icu", '(é)\1', 'x', 'gi'), regexp_replace('ÉÉ éÉ', '(é)\1', 'x', 'gi')
+fields regexp_replace:25:-1:-1,regexp_replace:25:-1:-1
+row x x,ÉÉ éÉ
+SELECT 1
+> select 'é' ~ '[[:alpha:]]' collate "unicode", '中' ~ '^[[:alpha:]]$' collate "und-x-icu", 'é' ~ '[[:alpha:]]', 'é' ~ '[[:alpha:]]' collate "en-x-icu", 'é' ~ '[[:alpha:]]'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,f
+SELECT 1
+> select E'\u0085' ~ '^[^[:cntrl:]]$', E'\u0085' ~ '^[[:cntrl:]]+$', E'a\u0090b' ~ '^a[[:cntrl:]]b$', E' ' ~ '[[:blank:]]' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f
+SELECT 1
+> select 'Ω' ~* '[\u0001-￿]' collate "en-x-icu", 'ω' ~* '[Α-Ω]' collate "el-x-icu", 'ω' ~* '[Α-Ω]', 'ǅ' ~* '[Ǆ]' collate "en-x-icu", 'ǅ' ~* '[Ǆ-ǆ]' collate "en-x-icu"
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,t
+SELECT 1
+> select 'a' ~ '[[:foo:]]' collate "en-x-icu"
+ERROR 2201B invalid regular expression: invalid character class
+> select regexp_count('Ñandú ñandú' collate "es-x-icu", '\mñ', 1, 'i'), regexp_substr('ÉLAN élan' collate "fr-x-icu", 'É\w+', 1, 2, 'i'), regexp_like('Σ' collate "el-x-icu", 'σ', 'i')
+fields regexp_count:23:4:-1,regexp_substr:25:-1:-1,regexp_like:16:1:-1
+row 2,élan,t
+SELECT 1
+> drop table r
+DROP TABLE
+> drop collation tr_re
+DROP COLLATION

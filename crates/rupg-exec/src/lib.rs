@@ -2836,7 +2836,7 @@ impl<'a> Eval<'a> {
             ret: call.ty,
             variadic: f.variadic,
             want,
-            collation: 0,
+            collation: f.collation,
         };
         kernel(&c, &args)
     }

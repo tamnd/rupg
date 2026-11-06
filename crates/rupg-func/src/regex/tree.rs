@@ -115,6 +115,8 @@ pub(super) struct Tree {
     progs: Vec<Program>,
     groups: usize,
     icase: bool,
+    /// True in a collation of ICU, where a back reference without the case compares the cases of Unicode.
+    unicode: bool,
     /// The map and the arena of the last [`Dissect`] of [`Tree::find`], which the next search uses again with no allocation.
     scratch: RefCell<Scratch>,
 }
@@ -310,6 +312,7 @@ impl Tree {
             progs,
             groups: parsed.groups,
             icase: parsed.cflags & flags::ICASE != 0,
+            unicode: parsed.cflags & flags::UNICODE != 0,
             scratch: RefCell::default(),
         })
     }
@@ -563,7 +566,8 @@ impl<'a> Dissect<'a> {
         let group = &self.s[so..eo];
         self.s[begin..end].chunks(len).all(|copy| {
             if self.tree.icase {
-                copy.iter().zip(group).all(|(&a, &b)| to_lower(a) == to_lower(b))
+                let unicode = self.tree.unicode;
+                copy.iter().zip(group).all(|(&a, &b)| to_lower(a, unicode) == to_lower(b, unicode))
             } else {
                 copy == group
             }
