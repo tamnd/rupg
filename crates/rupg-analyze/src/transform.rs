@@ -266,6 +266,15 @@ impl Analyzer<'_> {
         self.lookup_collation(list, at, false)
     }
 
+    /// [`Analyzer::collation_oid`] for the `COLLATE` of a column of a table, which also takes a deterministic collation of ICU with no rules. The comparisons, the sorts and the case mappings of the column follow ICU; an index or a partition key on such a column is not supported yet.
+    pub(crate) fn column_collation_oid(
+        &self,
+        list: &[Option<Node>],
+        at: Option<usize>,
+    ) -> Result<u32> {
+        self.lookup_collation(list, at, true)
+    }
+
     /// The collation of ICU of the inputs of a call, or 0, with the relations of the query that the analyzer reads now.
     pub(crate) fn icu_input(&self, args: &[Expr]) -> u32 {
         let mut levels = vec![&self.scope.relations[..]];

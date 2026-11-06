@@ -1,0 +1,188 @@
+!details
+> create table w (id int, s text collate "sv-x-icu", t varchar(10) collate "en-x-icu", u text collate "unicode", c text)
+CREATE TABLE
+> insert into w values (1, 'ö', 'b', 'é', 'z'), (2, 'z', 'B', 'e', 'a'), (3, 'å', 'a', 'E', 'b'), (4, 'ä', 'A', 'f', 'Z'), (5, 'a', 'ä', 'd', 'å'), (6, null, null, null, null)
+INSERT 0 6
+> select a.attname, c.collname from pg_attribute a left join pg_collation c on c.oid = a.attcollation where a.attrelid = 'w'::regclass and a.attnum > 0 order by a.attnum
+fields attname@pg_attribute.2:19:64:-1,collname@pg_collation.2:19:64:-1
+row id,NULL
+row s,sv-x-icu
+row t,en-x-icu
+row u,unicode
+row c,default
+SELECT 5
+> select id, s from w order by s, id
+fields id@w.1:23:4:-1,s@w.2:25:-1:-1
+row 5,a
+row 2,z
+row 3,å
+row 4,ä
+row 1,ö
+row 6,NULL
+SELECT 6
+> select id, s from w order by s desc nulls last, id
+fields id@w.1:23:4:-1,s@w.2:25:-1:-1
+row 1,ö
+row 4,ä
+row 3,å
+row 2,z
+row 5,a
+row 6,NULL
+SELECT 6
+> select id, t from w order by t, id
+fields id@w.1:23:4:-1,t@w.3:1043:-1:14
+row 3,a
+row 4,A
+row 5,ä
+row 1,b
+row 2,B
+row 6,NULL
+SELECT 6
+> select id, u from w order by u, id
+fields id@w.1:23:4:-1,u@w.4:25:-1:-1
+row 5,d
+row 2,e
+row 3,E
+row 1,é
+row 4,f
+row 6,NULL
+SELECT 6
+> select id, c from w order by c, id
+fields id@w.1:23:4:-1,c@w.5:25:-1:-1
+row 4,Z
+row 2,a
+row 3,b
+row 1,z
+row 5,å
+row 6,NULL
+SELECT 6
+> select id, s, c from w order by s collate "C", id
+fields id@w.1:23:4:-1,s@w.2:25:-1:-1,c@w.5:25:-1:-1
+row 5,a,å
+row 2,z,a
+row 4,ä,Z
+row 3,å,b
+row 1,ö,z
+row 6,NULL,NULL
+SELECT 6
+> select min(s), max(s), min(t), max(t), min(u), max(u) from w
+fields min:25:-1:-1,max:25:-1:-1,min:25:-1:-1,max:25:-1:-1,min:25:-1:-1,max:25:-1:-1
+row a,ö,a,B,d,f
+SELECT 1
+> select string_agg(s, ',' order by s), array_agg(t order by t), string_agg(u, '' order by u desc) from w
+fields string_agg:25:-1:-1,array_agg:1015:-1:-1,string_agg:25:-1:-1
+row a,z,å,ä,ö,{a,A,ä,b,B,NULL},féEed
+SELECT 1
+> select s, row_number() over (order by s) from w where s is not null order by s
+fields s@w.2:25:-1:-1,row_number:20:8:-1
+row a,1
+row z,2
+row å,3
+row ä,4
+row ö,5
+SELECT 5
+> select id from w where s > 'z' order by id
+fields id@w.1:23:4:-1
+row 1
+row 3
+row 4
+SELECT 3
+> select id from w where t between 'a' and 'B' order by id
+fields id@w.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> select id from w where u < 'f' order by id
+fields id@w.1:23:4:-1
+row 1
+row 2
+row 3
+row 5
+SELECT 4
+> select id, s < c as lt from w order by id
+fields id@w.1:23:4:-1,lt:16:1:-1
+row 1,f
+row 2,f
+row 3,f
+row 4,f
+row 5,t
+row 6,NULL
+SELECT 6
+> select t, count(*) from w group by t order by t
+fields t@w.3:1043:-1:14,count:20:8:-1
+row a,1
+row A,1
+row ä,1
+row b,1
+row B,1
+row NULL,1
+SELECT 6
+> select distinct lower(t) from w order by 1
+fields lower:25:-1:-1
+row a
+row ä
+row b
+row NULL
+SELECT 4
+> select upper(s), s ~ '^[[:alpha:]]$' as alpha, t ilike 'ä' as il from w order by id
+fields upper:25:-1:-1,alpha:16:1:-1,il:16:1:-1
+row Ö,t,f
+row Z,t,f
+row Å,t,f
+row Ä,t,f
+row A,t,t
+row NULL,NULL,NULL
+SELECT 6
+> alter table w add column v text collate "de-x-icu" default 'ß'
+ALTER TABLE
+> select v, upper(v) from w where id = 1
+fields v@w.6:25:-1:-1,upper:25:-1:-1
+row ß,SS
+SELECT 1
+> create table w2 (like w)
+CREATE TABLE
+> select a.attname, c.collname from pg_attribute a left join pg_collation c on c.oid = a.attcollation where a.attrelid = 'w2'::regclass and a.attnum > 0 order by a.attnum
+fields attname@pg_attribute.2:19:64:-1,collname@pg_collation.2:19:64:-1
+row id,NULL
+row s,sv-x-icu
+row t,en-x-icu
+row u,unicode
+row c,default
+row v,de-x-icu
+SELECT 6
+> create table w3 (x int collate "en-x-icu")
+ERROR 42804 collations are not supported by type integer at 24
+> create table w4 (x text collate "nonesuch-x-icu")
+ERROR 42704 collation "nonesuch-x-icu" for encoding "UTF8" does not exist at 25
+> select s from w union select t from w order by 1
+ERROR 42P21 collation mismatch between implicit collations "sv-x-icu" and "en-x-icu" at 30
+HINT You can choose the collation by applying the COLLATE clause to one or both expressions.
+> select s from w intersect select c from w order by 1
+fields s:25:-1:-1
+row a
+row z
+row å
+row NULL
+SELECT 4
+> select x.s, y.t from w x join w y on x.id = y.id + 1 order by x.s, y.t
+fields s@w.2:25:-1:-1,t@w.3:1043:-1:14
+row a,A
+row z,b
+row å,B
+row ä,a
+row NULL,ä
+SELECT 5
+> select greatest(s, 'b'), least(t, 'b') from w order by id
+fields greatest:25:-1:-1,least:1043:-1:-1
+row ö,b
+row z,b
+row å,a
+row ä,A
+row b,ä
+row b,b
+SELECT 6
+> drop table w, w2
+DROP TABLE

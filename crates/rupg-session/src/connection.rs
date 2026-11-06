@@ -7892,6 +7892,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_regex.test")));
     }
 
+    /// A column of `CREATE TABLE`, `ALTER TABLE ADD COLUMN` and `LIKE` in a collation of ICU: its sorts, comparisons, aggregates, windows, case mappings and patterns follow the collation, and the collation wins over the default collation. `connection/icu_column.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_column() {
+        big_stack(|| script(include_str!("connection/icu_column.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {
