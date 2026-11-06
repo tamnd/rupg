@@ -19,6 +19,9 @@ const PARTS: usize = 256;
 /// The most groups of the table of a task before the task moves the groups into the buffers of the parts. The table then fits in the cache of one core.
 const LOCAL: usize = 1 << 13;
 
+/// The least number of rows of the scan for each group for which [`run`] puts the groups in the order of their first rows with a sort of the first rows, in place of a map of one bit for each row. The sort reads each group, and the map clears and reads one word for 64 rows.
+const SORT_GROUPS: usize = 1024;
+
 /// The rows of a vector after a merge of the buffers, by which a probe asks for its slot first.
 const PREFETCH: usize = 16;
 
@@ -431,7 +434,11 @@ fn push_direct<const W: usize>(
 fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut [Buf]) {
     for g in 0..local.len() {
         let key = local.key::<W>(g);
-        let part = &mut parts[part_of(WordTable::<W>::hash(&key))];
+        let part = if parts.len() == 1 {
+            &mut parts[0]
+        } else {
+            &mut parts[part_of(WordTable::<W>::hash(&key))]
+        };
         part.push(&key, local.firsts[g]);
         for (to, from) in part.states.iter_mut().zip(&local.states) {
             to.take(from, g);
@@ -912,7 +919,9 @@ fn scan_run<const W: usize>(
     rows: usize,
 ) -> Result<Run> {
     let width = plan.keys.len();
-    let mut parts: Vec<Buf> = (0..PARTS).map(|_| Buf::new(&plan.folds, width + 1)).collect();
+    // With no keys the scan has one group, so one part holds it.
+    let count = if width == 0 { 1 } else { PARTS };
+    let mut parts: Vec<Buf> = (0..count).map(|_| Buf::new(&plan.folds, width + 1)).collect();
     let mut extremes: Vec<Option<(i64, i64)>> = vec![None; plan.bases];
     let first_base = plan.folds.len() - plan.bases;
     let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
@@ -1253,7 +1262,8 @@ pub(super) fn run(
     let runs: Vec<Run> = runs.into_iter().flatten().collect::<Result<_>>()?;
     let mut extremes = vec![None; plan.bases];
     let mut last = None;
-    let mut by_part: Vec<Vec<Buf>> = (0..PARTS).map(|_| Vec::with_capacity(runs.len())).collect();
+    let count = runs.first().map_or(PARTS, |run| run.parts.len());
+    let mut by_part: Vec<Vec<Buf>> = (0..count).map(|_| Vec::with_capacity(runs.len())).collect();
     for run in runs {
         for (e, r) in extremes.iter_mut().zip(&run.extremes) {
             if let Some((lo, hi)) = *r {
@@ -1267,8 +1277,8 @@ pub(super) fn run(
     }
     let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
     let width = plan.keys.len() + 1;
-    let mut parts: Vec<Option<Buf>> = (0..PARTS).map(|_| None).collect();
-    let per = PARTS.div_ceil(jobs);
+    let mut parts: Vec<Option<Buf>> = (0..count).map(|_| None).collect();
+    let per = count.div_ceil(jobs);
     let work: Vec<Job<'_>> = parts
         .chunks_mut(per)
         .zip(by_part.chunks_mut(per))
@@ -1293,30 +1303,21 @@ pub(super) fn run(
     if let Some(found) = top.and_then(|top| top_groups(&parts, plan, top, last, &extremes)) {
         return Ok(found);
     }
-    // The place of each group is the number of first rows before its first row, which a map of the first rows gives.
-    let mut map = vec![0_u64; rows / 64 + 1];
-    for part in &parts {
-        for &first in &part.firsts {
-            map[(first / 64) as usize] |= 1 << (first % 64);
-        }
-    }
-    let mut before = Vec::with_capacity(map.len());
-    let mut count = 0_u32;
-    for word in &map {
-        before.push(count);
-        count += word.count_ones();
-    }
-    let groups = count as usize;
-    let mut order: Vec<(u32, u32)> = vec![(0, 0); groups];
-    for (p, part) in parts.iter().enumerate() {
-        for (g, &first) in part.firsts.iter().enumerate() {
-            let (word, bit) = ((first / 64) as usize, first % 64);
-            let place = before[word] + (map[word] & ((1 << bit) - 1)).count_ones();
-            order[place as usize] = (p as u32, g as u32);
-        }
-    }
-    drop(map);
-    drop(before);
+    let groups: usize = parts.iter().map(Buf::len).sum();
+    let order = if groups.saturating_mul(SORT_GROUPS) < rows {
+        // For few groups, a sort of their first rows costs less than a map of all the rows.
+        let mut order: Vec<(u64, u32, u32)> = parts
+            .iter()
+            .enumerate()
+            .flat_map(|(p, part)| {
+                part.firsts.iter().enumerate().map(move |(g, &first)| (first, p as u32, g as u32))
+            })
+            .collect();
+        order.sort_unstable_by_key(|&(first, ..)| first);
+        order.into_iter().map(|(_, p, g)| (p, g)).collect()
+    } else {
+        order_by_map(&parts, rows, groups)
+    };
     // The tasks copy the keys, the first rows and the states of the groups in their order, each task a run of the groups.
     let mut words = vec![0_u64; groups * width];
     let mut firsts = vec![0_u64; groups];
@@ -1396,6 +1397,32 @@ pub(super) fn run(
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && firsts.last() != last.as_ref();
     Ok(Found { words, firsts, states, extremes, trailing })
+}
+
+/// The part and the place in the part of each group of `parts`, in the order of their first rows of the `rows` rows of the scan. The place of each group is the number of first rows before its first row, which a map of the first rows gives.
+fn order_by_map(parts: &[Buf], rows: usize, groups: usize) -> Vec<(u32, u32)> {
+    let mut map = vec![0_u64; rows / 64 + 1];
+    for part in parts {
+        for &first in &part.firsts {
+            map[(first / 64) as usize] |= 1 << (first % 64);
+        }
+    }
+    let mut before = Vec::with_capacity(map.len());
+    let mut count = 0_u32;
+    for word in &map {
+        before.push(count);
+        count += word.count_ones();
+    }
+    debug_assert_eq!(count as usize, groups);
+    let mut order: Vec<(u32, u32)> = vec![(0, 0); groups];
+    for (p, part) in parts.iter().enumerate() {
+        for (g, &first) in part.firsts.iter().enumerate() {
+            let (word, bit) = ((first / 64) as usize, first % 64);
+            let place = before[word] + (map[word] & ((1 << bit) - 1)).count_ones();
+            order[place as usize] = (p as u32, g as u32);
+        }
+    }
+    order
 }
 
 /// A run of the states of one fold in the order of the groups, which one task fills.
