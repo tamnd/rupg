@@ -340,7 +340,7 @@ impl Analyzer<'_> {
             .at_opt(inner.location));
         }
         self.check_agg_place(level, "aggregate functions", at)?;
-        let collation = self.agg_collation(oid, &args[..nargs], at)?;
+        let collation = self.agg_collation(oid, &args[..nargs]);
         let agg = Aggref {
             oid,
             kind,

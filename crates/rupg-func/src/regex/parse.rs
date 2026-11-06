@@ -77,22 +77,38 @@ pub(super) struct Set {
     no_newline: bool,
     /// The answer of [`Set::contains`] for each ASCII character, when [`Set::with_ascii`] made it.
     ascii: Option<u128>,
+    /// True in a collation of ICU, where the classes and the cases of the characters are those of Unicode.
+    unicode: bool,
 }
 
 /// The class numbers of `enum char_classes`.
 const CC_ALPHA: u32 = 1;
+const CC_CNTRL: u32 = 4;
 const CC_LOWER: u32 = 7;
 const CC_UPPER: u32 = 11;
+const CC_WORD: u32 = 13;
 
-/// True when `c` is in the class `class` in the C locale, as `pg_char_properties` and `cclasscvec` give it.
-fn in_class(class: u32, c: u32) -> bool {
+/// The most characters that the other cases of a range can add, as `range` of `regc_locale.c` limits them.
+const MAX_CASES: u32 = 100_000;
+
+/// True when `c` is in the class `class`, as `cclass` gives it: in the C locale, or with the properties of Unicode of `u_isalpha` and the others of ICU when `unicode` is true.
+fn in_class(class: u32, c: u32, unicode: bool) -> bool {
+    let name = CLASS_NAMES.get(class as usize).copied().unwrap_or("");
+    // `cclass` gives these classes the same characters in each locale.
+    match name {
+        "ascii" => return c < 0x80,
+        "blank" => return c == u32::from(b' ') || c == u32::from(b'\t'),
+        "cntrl" => return c < 0x20 || (0x7f..=0x9f).contains(&c),
+        "xdigit" => return char::from_u32(c).is_some_and(|c| c.is_ascii_hexdigit()),
+        _ => {}
+    }
+    if unicode {
+        return in_unicode_class(name, c);
+    }
     let Some(b) = u8::try_from(c).ok().filter(u8::is_ascii) else { return false };
-    match CLASS_NAMES.get(class as usize).copied().unwrap_or("") {
+    match name {
         "alnum" => b.is_ascii_alphanumeric(),
         "alpha" => b.is_ascii_alphabetic(),
-        "ascii" => true,
-        "blank" => b == b' ' || b == b'\t',
-        "cntrl" => b < 0x20 || b == 0x7f,
         "digit" => b.is_ascii_digit(),
         "graph" => b.is_ascii_graphic(),
         "lower" => b.is_ascii_lowercase(),
@@ -100,19 +116,55 @@ fn in_class(class: u32, c: u32) -> bool {
         "punct" => b.is_ascii_punctuation(),
         "space" => is_space(c),
         "upper" => b.is_ascii_uppercase(),
-        "xdigit" => b.is_ascii_hexdigit(),
         "word" => b.is_ascii_alphanumeric() || b == b'_',
         _ => false,
     }
 }
 
-/// `regc_wc_tolower` in the C locale.
-pub(super) fn to_lower(c: u32) -> u32 {
+/// The classes of ICU by the general category of `c`: `u_isalpha` is a letter, `u_isdigit` a decimal digit, `u_isspace` a separator or a control of space, `u_isgraph` neither a separator nor a control, a format, a surrogate or an unassigned character, and `u_isprint` not of the category C.
+fn in_unicode_class(name: &str, c: u32) -> bool {
+    use icu_properties::CodePointMapData;
+    use icu_properties::props::{GeneralCategory as Gc, GeneralCategoryGroup as Group};
+    let gc = CodePointMapData::<Gc>::new().get32(c);
+    let alnum = Group::Letter.contains(gc) || gc == Gc::DecimalNumber;
+    match name {
+        "alnum" => alnum,
+        "alpha" => Group::Letter.contains(gc),
+        "digit" => gc == Gc::DecimalNumber,
+        "graph" => {
+            !Group::Separator.contains(gc)
+                && !matches!(gc, Gc::Control | Gc::Format | Gc::Surrogate | Gc::Unassigned)
+        }
+        "lower" => gc == Gc::LowercaseLetter,
+        "print" => !Group::Other.contains(gc),
+        "punct" => Group::Punctuation.contains(gc),
+        "space" => Group::Separator.contains(gc) || matches!(c, 0x09..=0x0d | 0x1c..=0x1f | 0x85),
+        "upper" => gc == Gc::UppercaseLetter,
+        "word" => alnum || c == u32::from(b'_'),
+        _ => false,
+    }
+}
+
+/// True when `c` is a character of a word for the constraints `\m`, `\M`, `\y` and `\Y`.
+pub(super) fn is_word(c: u32, unicode: bool) -> bool {
+    in_class(CC_WORD, c, unicode)
+}
+
+/// `pg_wc_tolower`: in the C locale, or `u_tolower` of ICU, the simple mapping of Unicode in no language, when `unicode` is true.
+pub(super) fn to_lower(c: u32, unicode: bool) -> u32 {
+    if unicode {
+        return char::from_u32(c)
+            .map_or(c, |ch| u32::from(icu_casemap::CaseMapper::new().simple_lowercase(ch)));
+    }
     if (u32::from(b'A')..=u32::from(b'Z')).contains(&c) { c + 32 } else { c }
 }
 
-/// `regc_wc_toupper` in the C locale.
-fn to_upper(c: u32) -> u32 {
+/// `pg_wc_toupper`, as [`to_lower`].
+fn to_upper(c: u32, unicode: bool) -> u32 {
+    if unicode {
+        return char::from_u32(c)
+            .map_or(c, |ch| u32::from(icu_casemap::CaseMapper::new().simple_uppercase(ch)));
+    }
     if (u32::from(b'a')..=u32::from(b'z')).contains(&c) { c - 32 } else { c }
 }
 
@@ -126,8 +178,11 @@ impl Set {
         }
         let inside = self.chars.contains(&c)
             || self.ranges.iter().any(|&(a, b)| a <= c && c <= b)
-            || (0..14).any(|class| self.classes & (1 << class) != 0 && in_class(class, c))
-            || (0..14).any(|class| self.not_classes & (1 << class) != 0 && !in_class(class, c));
+            || (0..14)
+                .any(|class| self.classes & (1 << class) != 0 && in_class(class, c, self.unicode))
+            || (0..14).any(|class| {
+                self.not_classes & (1 << class) != 0 && !in_class(class, c, self.unicode)
+            });
         if self.complement {
             !inside && !(self.no_newline && c == u32::from(b'\n'))
         } else {
@@ -135,9 +190,11 @@ impl Set {
         }
     }
 
-    /// True when [`Set::contains`] gives the same answer for each character that is not ASCII: the set names no such character, and a class holds no such character in the C locale.
+    /// True when [`Set::contains`] gives the same answer for each character that is not ASCII: the set names no such character, and a class holds no such character. In the C locale only `cntrl` holds such characters, and in a collation of ICU most classes do.
     pub(super) fn wide_same(&self) -> bool {
-        self.chars.iter().all(|&c| c < 128) && self.ranges.iter().all(|&(_, b)| b < 128)
+        let classes = self.classes | self.not_classes;
+        let wide = if self.unicode { classes != 0 } else { classes & (1 << CC_CNTRL) != 0 };
+        !wide && self.chars.iter().all(|&c| c < 128) && self.ranges.iter().all(|&(_, b)| b < 128)
     }
 
     /// The set with a table of [`Set::contains`] for the ASCII characters, so that a search tests an ASCII character with one bit and not with each part of the set.
@@ -150,7 +207,7 @@ impl Set {
 
     /// `allcases`: a character and its other case.
     fn add_cases(&mut self, c: u32) {
-        let (lower, upper) = (to_lower(c), to_upper(c));
+        let (lower, upper) = (to_lower(c, self.unicode), to_upper(c, self.unicode));
         self.chars.push(lower);
         if lower != upper {
             self.chars.push(upper);
@@ -174,9 +231,20 @@ impl Set {
         self.ranges.push((a, b));
         if icase {
             // Only the ASCII letters have another case in the C locale.
-            for c in a.max(u32::from(b'A'))..=b.min(u32::from(b'z')) {
-                for other in [to_lower(c), to_upper(c)] {
+            let (from, to) = if self.unicode {
+                (a, b)
+            } else {
+                (a.max(u32::from(b'A')), b.min(u32::from(b'z')))
+            };
+            let room = (b - a).saturating_add(1).min(MAX_CASES);
+            let mut added = 0;
+            for c in from..=to {
+                for other in [to_lower(c, self.unicode), to_upper(c, self.unicode)] {
                     if other != c && (other < a || b < other) {
+                        if added == room {
+                            return Err(Code::TooBig);
+                        }
+                        added += 1;
                         self.chars.push(other);
                     }
                 }
@@ -359,6 +427,11 @@ impl<'a> Parser<'a> {
         self.lex.cflags & flags::ICASE != 0
     }
 
+    /// An empty set, with the classes and the cases of Unicode in a collation of ICU.
+    fn new_set(&self) -> Set {
+        Set { unicode: self.lex.cflags & flags::UNICODE != 0, ..Set::default() }
+    }
+
     fn see_stop(&self, stop: Stop) -> bool {
         match stop {
             Stop::Eos => self.lex.see(Tok::Eos),
@@ -443,12 +516,12 @@ impl<'a> Parser<'a> {
                 if self.lex.cflags & flags::ADVANCED != flags::EXTENDED {
                     return Err(Code::Paren);
                 }
-                let mut set = Set::default();
+                let mut set = self.new_set();
                 set.add_char(u32::from(b')'), icase);
                 self.set(set)?
             }
             Tok::Plain => {
-                let mut set = Set::default();
+                let mut set = self.new_set();
                 set.add_char(value, icase);
                 self.set(set)?
             }
@@ -461,18 +534,18 @@ impl<'a> Parser<'a> {
                 self.set(set)?
             }
             Tok::Cclasss => {
-                let mut set = Set::default();
+                let mut set = self.new_set();
                 set.add_class(value, icase);
                 self.set(set)?
             }
             Tok::Cclassc => {
-                let mut set = Set::default();
+                let mut set = self.new_set();
                 set.add_not_class(value, icase);
                 self.set(set)?
             }
             Tok::Op(b'.') => {
                 let no_newline = self.lex.cflags & flags::NLSTOP != 0;
-                self.set(Set { complement: true, no_newline, ..Set::default() })?
+                self.set(Set { complement: true, no_newline, ..self.new_set() })?
             }
             Tok::Op(b'(') => {
                 let cap = !lacon && value != 0;
@@ -564,7 +637,7 @@ impl<'a> Parser<'a> {
 
     /// `bracket`: the parts of a bracket expression, up to the `]`.
     fn bracket(&mut self) -> Result<Set, Code> {
-        let mut set = Set::default();
+        let mut set = self.new_set();
         self.lex.next()?;
         while !self.lex.see_op(b']') && !self.lex.see(Tok::Eos) {
             self.bracket_part(&mut set)?;

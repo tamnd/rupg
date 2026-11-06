@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use super::parse::{Assert, DUPINF, Look, Node, Set, to_lower};
+use super::parse::{Assert, DUPINF, Look, Node, Set, is_word, to_lower};
 use super::{Code, flags};
 
 /// The largest number of instructions of a program, after the copies of the counted repeats.
@@ -179,6 +179,8 @@ pub(super) struct Program {
     backrefs: bool,
     nlanch: bool,
     icase: bool,
+    /// True in a collation of ICU, where the characters of words and the cases are those of Unicode.
+    unicode: bool,
     /// True when a match can only start at the start of the string, because the pattern starts with `^` without `REG_NLANCH` or with `\A`.
     anchored: bool,
     /// The DFA of the main program, or `None` when the program has an instruction that a DFA cannot run: a lookaround or a back reference. The guards of empty loops only stop paths back to a pair of instruction and position that the machine tried already, so the DFA follows them as if they were not there.
@@ -333,10 +335,6 @@ struct Search<'a> {
     looks: Vec<Vec<u8>>,
 }
 
-fn is_word(c: u32) -> bool {
-    char::from_u32(c).is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 impl Program {
     /// The program of a node, with the number of the groups of the pattern and the flags after the embedded options.
     pub(super) fn new(node: &Node, groups: usize, cflags: u32) -> Result<Self, Code> {
@@ -370,6 +368,7 @@ impl Program {
             backrefs: compiler.backrefs,
             nlanch,
             icase: cflags & flags::ICASE != 0,
+            unicode: cflags & flags::UNICODE != 0,
         })
     }
 
@@ -574,8 +573,8 @@ impl Program {
         let eol = eos || (self.nlanch && s[pos] == newline);
         let mut mask = u8::from(bol) | u8::from(eol) << 1 | u8::from(bos) << 2 | u8::from(eos) << 3;
         if self.asserts & 0xf0 != 0 {
-            let before = !bos && is_word(s[pos - 1]);
-            let after = !eos && is_word(s[pos]);
+            let before = !bos && is_word(s[pos - 1], self.unicode);
+            let after = !eos && is_word(s[pos], self.unicode);
             mask |= u8::from(!before && after) << 4
                 | u8::from(before && !after) << 5
                 | u8::from(before != after) << 6
@@ -678,8 +677,9 @@ impl Search<'_> {
     fn holds(&self, assert: Assert, pos: usize) -> bool {
         let s = self.s;
         let newline = u32::from(b'\n');
-        let word_before = pos > 0 && is_word(s[pos - 1]);
-        let word_after = pos < s.len() && is_word(s[pos]);
+        let unicode = self.program.unicode;
+        let word_before = pos > 0 && is_word(s[pos - 1], unicode);
+        let word_after = pos < s.len() && is_word(s[pos], unicode);
         match assert {
             Assert::Bol => pos == 0 || (self.program.nlanch && s[pos - 1] == newline),
             Assert::Eol => pos == s.len() || (self.program.nlanch && s[pos] == newline),
@@ -730,7 +730,10 @@ impl Search<'_> {
         let len = end.checked_sub(start)?;
         let here = self.s.get(pos..pos + len)?;
         let same = if self.program.icase {
-            here.iter().zip(&self.s[start..end]).all(|(&a, &b)| to_lower(a) == to_lower(b))
+            let unicode = self.program.unicode;
+            here.iter()
+                .zip(&self.s[start..end])
+                .all(|(&a, &b)| to_lower(a, unicode) == to_lower(b, unicode))
         } else {
             here == &self.s[start..end]
         };

@@ -596,12 +596,22 @@ pub fn pattern_match(op: u32, value: &Value, pattern: &Value) -> Option<bool> {
     result.ok()
 }
 
-fn texticlike(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(ilike(args)?))
+/// `Generic_Text_IC_like`: in a collation of ICU, `LIKE` of the string and the pattern after the `lower` of the language of the collation.
+fn ilike_in(call: &Call<'_>, args: &[Value]) -> Result<bool> {
+    let Some(language) = crate::collator::case_language(call.session, call.collation) else {
+        return ilike(args);
+    };
+    let mapper = icu_casemap::CaseMapper::new();
+    let lower = |s: &str| mapper.lowercase_to_string(s, &language).into_owned();
+    like(&lower(arg(args, 0)?), &lower(arg(args, 1)?))
 }
 
-fn texticnlike(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(!ilike(args)?))
+fn texticlike(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(ilike_in(call, args)?))
+}
+
+fn texticnlike(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(!ilike_in(call, args)?))
 }
 
 /// `like_escape`: the pattern with `\` as its escape character.

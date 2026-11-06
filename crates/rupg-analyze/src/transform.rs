@@ -178,7 +178,7 @@ impl Analyzer<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 let at = place(m.location);
                 let less = self.comparison(ty, at)?;
-                let collation = self.call_collation(less, &args, at)?;
+                let collation = self.call_collation(less, &args);
                 // `exprTypmod` of a `MinMaxExpr`: the typmod of the arguments when they all have the same type and typmod.
                 let typmod = match args.first() {
                     Some(first) if args.iter().all(|a| a.ty == ty && a.typmod == first.typmod) => {
@@ -273,32 +273,18 @@ impl Analyzer<'_> {
         crate::collate::icu_input(args, &levels, self.env.catalog())
     }
 
-    /// `inputcollid` of a call of the function `func` when the function orders strings or maps their case in a collation of ICU, or 0. A function that reads the collation in another way, such as the regular expressions, is not supported yet in a collation of ICU.
-    pub(crate) fn call_collation(
-        &self,
-        func: u32,
-        args: &[Expr],
-        at: Option<usize>,
-    ) -> Result<u32> {
-        use crate::collate::Use;
-        let usage = crate::collate::collation_use(func);
-        if usage == Use::None {
-            return Ok(0);
+    /// `inputcollid` of a call of the function `func` when the function orders strings, maps their case or matches a pattern in a collation of ICU, or 0.
+    pub(crate) fn call_collation(&self, func: u32, args: &[Expr]) -> u32 {
+        if crate::collate::collation_use(func) == crate::collate::Use::None {
+            return 0;
         }
-        let collation = self.icu_input(args);
-        if collation != 0 && usage == Use::Unsupported {
-            let name = rupg_pgcatalog::builtin::proc_by_oid(func).map_or("", |p| p.name);
-            return Err(not_yet(&format!("the function {name} in a collation of ICU"), at));
-        }
-        Ok(collation)
+        self.icu_input(args)
     }
 
     /// `inputcollid` of a call of the built-in aggregate `agg`, which its transition function reads, as [`Analyzer::call_collation`] gives it. An aggregate of `CREATE AGGREGATE` has none.
-    pub(crate) fn agg_collation(&self, agg: u32, args: &[Expr], at: Option<usize>) -> Result<u32> {
-        match rupg_pgcatalog::builtin::aggregate(agg) {
-            Some(row) => self.call_collation(row.transfn, args, at),
-            None => Ok(0),
-        }
+    pub(crate) fn agg_collation(&self, agg: u32, args: &[Expr]) -> u32 {
+        rupg_pgcatalog::builtin::aggregate(agg)
+            .map_or(0, |row| self.call_collation(row.transfn, args))
     }
 
     /// [`Analyzer::collation_oid`], which also takes a deterministic collation of ICU with no rules when `icu` is true, for `COLLATE` in an expression.
@@ -773,7 +759,7 @@ impl Analyzer<'_> {
             self.coerce(right, array_decl, -1, Context::Implicit, None)?
         };
         let args = vec![left, right];
-        let collation = self.call_collation(op.code, &args, at)?;
+        let collation = self.call_collation(op.code, &args);
         Ok(Expr::new(ExprKind::ScalarArrayOp { func: op.code, any, args, collation }, oid::BOOL)
             .at(at))
     }

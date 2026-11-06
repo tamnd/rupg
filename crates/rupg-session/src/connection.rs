@@ -7886,6 +7886,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_case.test")));
     }
 
+    /// Regular expressions and `ILIKE` in a collation of ICU: the classes of the characters by their general category, `icase` with the simple case mapping of Unicode, the characters of words, and `ILIKE` after the `lower` of the language. `connection/icu_regex.test` is the output of PostgreSQL 19 with ICU 74 for the same script in a new database.
+    #[test]
+    fn icu_regex() {
+        big_stack(|| script(include_str!("connection/icu_regex.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {

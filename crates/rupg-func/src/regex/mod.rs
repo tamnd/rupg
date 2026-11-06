@@ -1,4 +1,4 @@
-//! The regular expressions of PostgreSQL, the engine of Henry Spencer in `src/backend/regex`, for the C locale.
+//! The regular expressions of PostgreSQL, the engine of Henry Spencer in `src/backend/regex`, for the C locale and for the collations of ICU.
 //!
 //! The lexer and the parser are ports of `regc_lex.c` and `regcomp.c`, so that a pattern gives the same error as in PostgreSQL. The matcher is not a port: it is a backtracking machine that tells if a match is in the string and where the leftmost match starts. The positions of the match and of its groups follow the rules of preference of Spencer: the tree of subexpressions of `regcomp.c` and the dissection of `regexec.c` find them.
 //!
@@ -28,6 +28,8 @@ pub(super) mod flags {
     pub(crate) const NLSTOP: u32 = 0o100;
     pub(crate) const NLANCH: u32 = 0o200;
     pub(crate) const NEWLINE: u32 = 0o300;
+    /// Not a flag of `regex.h`: the pattern is in a collation of ICU, where the classes and the cases of the characters are those of Unicode, as `pg_set_regex_collation` makes them.
+    pub(crate) const UNICODE: u32 = 0o1_000_000;
 }
 
 /// The error codes of `regex.h` that the compiler can give.
@@ -237,6 +239,15 @@ fn arg(args: &[Value], at: usize) -> Result<&str> {
     args.get(at).and_then(Value::as_str).ok_or_else(bad_value)
 }
 
+/// [`flags::UNICODE`] when the call is in a collation of ICU, or 0.
+fn in_collation(call: &Call<'_>) -> u32 {
+    if crate::collator::case_language(call.session, call.collation).is_some() {
+        flags::UNICODE
+    } else {
+        0
+    }
+}
+
 /// `RE_compile_and_execute` for an operator: the string and the pattern of the call.
 fn matches(args: &[Value], cflags: u32) -> Result<bool> {
     Ok(compile(arg(args, 1)?, cflags)?.is_match(arg(args, 0)?))
@@ -247,20 +258,20 @@ pub(crate) fn regex_match(args: &[Value], icase: bool) -> Result<bool> {
     matches(args, if icase { flags::ADVANCED | flags::ICASE } else { flags::ADVANCED })
 }
 
-fn regexeq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(matches(args, flags::ADVANCED)?))
+fn regexeq(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches(args, flags::ADVANCED | in_collation(call))?))
 }
 
-fn regexne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(!matches(args, flags::ADVANCED)?))
+fn regexne(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(!matches(args, flags::ADVANCED | in_collation(call))?))
 }
 
-fn icregexeq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(matches(args, flags::ADVANCED | flags::ICASE)?))
+fn icregexeq(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches(args, flags::ADVANCED | flags::ICASE | in_collation(call))?))
 }
 
-fn icregexne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(!matches(args, flags::ADVANCED | flags::ICASE)?))
+fn icregexne(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(!matches(args, flags::ADVANCED | flags::ICASE | in_collation(call))?))
 }
 
 /// The text of `s` from the character `so` up to the character `eo`.
@@ -276,15 +287,15 @@ fn substring(s: &str, re: &Regex) -> Result<Value> {
 }
 
 /// `textregexsubstr`: `substring(string FROM pattern)`.
-fn textregexsubstr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    substring(arg(args, 0)?, &*compile(arg(args, 1)?, flags::ADVANCED)?)
+fn textregexsubstr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    substring(arg(args, 0)?, &*compile(arg(args, 1)?, flags::ADVANCED | in_collation(call))?)
 }
 
 /// `substring(string SIMILAR pattern ESCAPE escape)`, the function in SQL of `system_functions.sql` that calls `substring` with `similar_to_escape`.
-pub(crate) fn similar_substring(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+pub(crate) fn similar_substring(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let run = || {
         let pattern = similar_escape_internal(arg(args, 1)?, Some(arg(args, 2)?))?;
-        substring(arg(args, 0)?, &*compile(&pattern, flags::ADVANCED)?)
+        substring(arg(args, 0)?, &*compile(&pattern, flags::ADVANCED | in_collation(call))?)
     };
     // `fmgr_sql` runs the body, and its error context names the statement.
     run().map_err(|e| e.with_context("SQL function \"substring\" statement 1"))
@@ -464,7 +475,7 @@ fn no_global(function: &str) -> Error {
 }
 
 /// `regexp_match(string, pattern [, flags])`: the text of each group of the first match, or of the whole match when the pattern has no group.
-fn regexp_match(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn regexp_match(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let (cflags, glob) = options(args)?;
     if glob {
         return Err(
@@ -472,7 +483,7 @@ fn regexp_match(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         );
     }
     let s = arg(args, 0)?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let Some(groups) = re.find(s)? else { return Ok(Value::Null) };
     let spans = if re.groups() > 0 { &groups[1..] } else { &groups[..1] };
     let values = spans.iter().map(|span| span.map(|span| Value::Text(chars(s, span))));
@@ -480,12 +491,12 @@ fn regexp_match(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `regexp_like(string, pattern [, flags])`.
-fn regexp_like(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn regexp_like(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let (cflags, glob) = options(args)?;
     if glob {
         return Err(no_global("regexp_like()"));
     }
-    Ok(Value::Bool(compile(arg(args, 1)?, cflags)?.is_match(arg(args, 0)?)))
+    Ok(Value::Bool(compile(arg(args, 1)?, cflags | in_collation(call))?.is_match(arg(args, 0)?)))
 }
 
 /// The text of the characters `chars` from `so` up to `eo`.
@@ -628,13 +639,13 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
 }
 
 /// `textregexreplace_noopt`: `regexp_replace(string, pattern, replacement)`, which replaces the first match.
-fn textregexreplace_noopt(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let re = compile(arg(args, 1)?, flags::ADVANCED)?;
+fn textregexreplace_noopt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let re = compile(arg(args, 1)?, flags::ADVANCED | in_collation(call))?;
     replace(arg(args, 0)?, &re, arg(args, 2)?, 0, 1)
 }
 
 /// `textregexreplace`: `regexp_replace(string, pattern, replacement, flags)`. Options that start with a digit give an error with a hint, as the call may need the form with a start.
-fn textregexreplace(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn textregexreplace(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let options = arg(args, 3)?;
     if let Some(first) = options.chars().next().filter(char::is_ascii_digit) {
         return Err(Error::new(
@@ -644,17 +655,17 @@ fn textregexreplace(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         .with_hint("If you meant to use regexp_replace() with a start parameter, cast the fourth argument to integer explicitly."));
     }
     let (cflags, glob) = re_flags(Some(options))?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     replace(arg(args, 0)?, &re, arg(args, 2)?, 0, i64::from(!glob))
 }
 
 /// `textregexreplace_extended`: `regexp_replace(string, pattern, replacement, start [, n [, flags]])`. Without `n`, the option `g` tells if each match is replaced.
-fn textregexreplace_extended(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn textregexreplace_extended(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (3, "start"), 1, |v| v > 0)?;
     let n = param(args, (4, "n"), 1, |v| v >= 0)?;
     let (cflags, glob) = flags_at(args, 5)?;
     let n = if args.len() <= 4 { i64::from(!glob) } else { n };
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     replace(arg(args, 0)?, &re, arg(args, 2)?, start_at(start), n)
 }
 
@@ -668,10 +679,10 @@ fn all_flags(args: &[Value], at: usize, function: &str) -> Result<u32> {
 }
 
 /// `regexp_count(string, pattern [, start [, flags]])`: the number of the matches.
-fn regexp_count(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn regexp_count(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (2, "start"), 1, |v| v > 0)?;
     let cflags = all_flags(args, 3, "regexp_count()")?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, start_at(start), true, false, false)?;
     Ok(Value::Int4(i32::try_from(found.len()).unwrap_or(i32::MAX)))
@@ -697,13 +708,13 @@ fn nth_span(
 }
 
 /// `regexp_instr(string, pattern [, start [, n [, endoption [, flags [, subexpr]]]]])`: the position from 1 of the start of the match, or of the character after it when `endoption` is 1, or 0.
-fn regexp_instr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn regexp_instr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (2, "start"), 1, |v| v > 0)?;
     let n = param(args, (3, "n"), 1, |v| v > 0)?;
     let endoption = param(args, (4, "endoption"), 0, |v| v == 0 || v == 1)?;
     let subexpr = param(args, (6, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 5, "regexp_instr()")?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let chars: Vec<u32> = points(arg(args, 0)?);
     let pos = nth_span(&chars, &re, start, n, subexpr)?
         .map_or(0, |(so, eo)| if endoption == 1 { eo + 1 } else { so + 1 });
@@ -711,21 +722,21 @@ fn regexp_instr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `regexp_substr(string, pattern [, start [, n [, flags [, subexpr]]]])`: the text of the match, or null.
-fn regexp_substr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn regexp_substr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (2, "start"), 1, |v| v > 0)?;
     let n = param(args, (3, "n"), 1, |v| v > 0)?;
     let subexpr = param(args, (5, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 4, "regexp_substr()")?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let chars: Vec<u32> = points(arg(args, 0)?);
     Ok(nth_span(&chars, &re, start, n, subexpr)?
         .map_or(Value::Null, |span| Value::Text(text(&chars, span))))
 }
 
 /// `regexp_matches(string, pattern [, flags])`: one row for each match, or for the first match without the option `g`. Each row is an array with the text of each group, or of the match when the pattern has no group.
-pub(crate) fn regexp_matches(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+pub(crate) fn regexp_matches(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let (cflags, glob) = options(args)?;
-    let re = compile(arg(args, 1)?, cflags)?;
+    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, 0, glob, true, false)?;
     Ok(found
@@ -738,8 +749,8 @@ pub(crate) fn regexp_matches(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Val
 }
 
 /// The parts of the string between the matches, for `regexp_split_to_table` and `regexp_split_to_array`. An empty match at the end of the string or just after a match does not split.
-fn split(args: &[Value], function: &str) -> Result<Vec<String>> {
-    let cflags = all_flags(args, 2, function)?;
+fn split(call: &Call<'_>, args: &[Value], function: &str) -> Result<Vec<String>> {
+    let cflags = all_flags(args, 2, function)? | in_collation(call);
     let re = compile(arg(args, 1)?, cflags)?;
     let chars: Vec<u32> = points(arg(args, 0)?);
     let found = setup_matches(&chars, &re, 0, true, false, true)?;
@@ -755,16 +766,16 @@ fn split(args: &[Value], function: &str) -> Result<Vec<String>> {
 }
 
 /// `regexp_split_to_table(string, pattern [, flags])`: one row for each part.
-pub(crate) fn regexp_split_to_table(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    Ok(split(args, "regexp_split_to_table()")?
+pub(crate) fn regexp_split_to_table(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(split(call, args, "regexp_split_to_table()")?
         .into_iter()
         .map(|part| vec![Value::Text(part)])
         .collect())
 }
 
 /// `regexp_split_to_array(string, pattern [, flags])`: the parts as an array.
-fn regexp_split_to_array(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let parts = split(args, "regexp_split_to_array()")?;
+fn regexp_split_to_array(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let parts = split(call, args, "regexp_split_to_array()")?;
     let values = parts.into_iter().map(|part| Some(Value::Text(part))).collect();
     Ok(Value::Array(Box::new(Array::one(values))))
 }

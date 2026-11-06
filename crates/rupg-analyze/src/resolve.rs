@@ -1030,7 +1030,7 @@ impl Analyzer<'_> {
         if proc.retset {
             self.srfs = (self.srfs.0 + 1, at);
         }
-        let collation = self.call_collation(proc.oid, &args, at)?;
+        let collation = self.call_collation(proc.oid, &args);
         Ok(Expr {
             kind: ExprKind::Func(Func {
                 oid: proc.oid,
@@ -1314,7 +1314,7 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         self.funcs.push(op.code);
-        let collation = self.call_collation(op.code, &args, at)?;
+        let collation = self.call_collation(op.code, &args);
         Ok(Expr {
             kind: ExprKind::Func(Func {
                 oid: op.code,
