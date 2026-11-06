@@ -1225,7 +1225,8 @@ impl<'q> Builder<'q> {
         }
         // `set_subquery_pathlist`: a `Subquery Scan` of each plan of the subquery, with the order of its rows in the columns of the scan.
         if let Some(paths) = sub_paths {
-            let order = |columns: &[(usize, bool, bool, u32)]| sub_order(relation, r, columns, stats);
+            let order =
+                |columns: &[(usize, bool, bool, u32)]| sub_order(relation, r, columns, stats);
             seq.order = order(&paths.order);
             let mut kept = Paths::new(stats.startup);
             let others: Vec<Rel<'q>> = paths
@@ -1970,8 +1971,9 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
         && crate::enable().presorted_aggregate
     {
         let ordered = upper::aggregate_order(query, stats);
-        let ordered =
-            ordered.into_iter().map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first, k.collation));
+        let ordered = ordered
+            .into_iter()
+            .map(|k| (k.item.expr.into_owned(), k.desc, k.nulls_first, k.collation));
         stats.canonical(ordered.collect(), |k| &k.0)
     } else {
         group

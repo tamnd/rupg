@@ -2073,8 +2073,9 @@ const DEFAULT_COLLATION: u32 = 100;
 /// `generate_collation_name`: the name of the collation, with its schema when the name alone does not find it.
 fn collation_name(collation: u32, session: &dyn Session) -> Result<String> {
     let Some(row) = builtin::named_by_oid(Named::Collation, collation) else {
-        return reg::catalog_text(Named::Collation, collation, session)
-            .ok_or_else(|| Error::internal(format!("cache lookup failed for collation {collation}")));
+        return reg::catalog_text(Named::Collation, collation, session).ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for collation {collation}"))
+        });
     };
     if reg::visible(Named::Collation, row, session) {
         Ok(quote_identifier(row.name))

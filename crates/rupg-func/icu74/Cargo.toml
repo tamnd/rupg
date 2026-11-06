@@ -1,0 +1,18 @@
+# The export of `src/collator/icu74.postcard`. It is not a member of the workspace, because the exporter of ICU4X pulls in the whole of CLDR's parser.
+#
+# cargo run --release --manifest-path crates/rupg-func/icu74/Cargo.toml -- CLDR ICUEXPORT OUT
+#
+# CLDR is `cldr-44.1.0-json-full.zip` and ICUEXPORT is `icuexportdata_release-74-1.zip` of the ICU 74.1 release, unzipped.
+[package]
+name = "icu74"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+icu_collator = { version = "2.4", features = ["datagen"] }
+icu_locale_fallback = { version = "2.4", features = ["datagen"] }
+icu_provider_export = { version = "2.4", features = ["blob_exporter"] }
+icu_provider_source = "2.4"
+
+[workspace]
