@@ -63,8 +63,10 @@ struct Dispatch {
     hashers: Vec<Option<(u32, u32)>>,
     /// The operators of the operator families of the catalog of the key columns, as the family, the operator and its strategy, for the rows of `pg_amop` that are not built in.
     amops: Vec<(u32, u32, i16)>,
-    /// True for each key column with a collation.
-    collated: Vec<bool>,
+    /// The collation of each key column, as `partcollation` has it, or 0.
+    collations: Vec<u32>,
+    /// The collator of each key column in a collation of ICU, which orders the bounds and the values of the key.
+    collators: Vec<Option<rupg_func::Collator>>,
     parts: Vec<Part>,
 }
 
@@ -251,7 +253,8 @@ impl Dispatch {
             families,
             hashers,
             amops,
-            collated: key.collations.iter().map(|&c| c != 0).collect(),
+            collations: key.collations.clone(),
+            collators: key.collations.iter().map(|&c| rupg_func::collator(session, c)).collect(),
             parts,
         };
         d.sort()?;
@@ -325,7 +328,6 @@ impl Dispatch {
                 });
             }
             PartStrategy::List => {
-                let ty = self.types.first().copied().unwrap_or(0);
                 let value = values.first().unwrap_or(&Value::Null);
                 for part in &self.parts {
                     let Bound::List(datums) = &part.bound else { continue };
@@ -333,9 +335,7 @@ impl Dispatch {
                         let hit = match (datum, value) {
                             (None, Value::Null) => true,
                             (None, _) | (Some(_), Value::Null) => false,
-                            (Some(datum), value) => {
-                                rupg_func::compare(ty, datum, ty, value)? == Ordering::Equal
-                            }
+                            (Some(datum), value) => self.compare(0, datum, value)? == Ordering::Equal,
                         };
                         if hit {
                             found = Some(part);
@@ -364,11 +364,11 @@ impl Dispatch {
 
     /// `partition_rbound_datum_cmp`: the order of a range bound against the values of a key.
     fn datum_cmp(&self, datums: &[Datum], values: &[Value]) -> Result<Ordering> {
-        for ((datum, value), &ty) in datums.iter().zip(values).zip(&self.types) {
+        for (i, (datum, value)) in datums.iter().zip(values).enumerate().take(self.types.len()) {
             let order = match datum {
                 Datum::MinValue => Ordering::Less,
                 Datum::MaxValue => Ordering::Greater,
-                Datum::Value(datum) => rupg_func::compare(ty, datum, ty, value)?,
+                Datum::Value(datum) => self.compare(i, datum, value)?,
             };
             if order != Ordering::Equal {
                 return Ok(order);
@@ -379,9 +379,9 @@ impl Dispatch {
 
     /// `partition_rbound_cmp` of two lower bounds: a lower bound that ends at an infinite datum sorts by its kind.
     fn bound_cmp(&self, a: &[Datum], b: &[Datum]) -> Result<Ordering> {
-        for ((a, b), &ty) in a.iter().zip(b).zip(&self.types) {
+        for (i, (a, b)) in a.iter().zip(b).enumerate().take(self.types.len()) {
             let order = match (a, b) {
-                (Datum::Value(a), Datum::Value(b)) => rupg_func::compare(ty, a, ty, b)?,
+                (Datum::Value(a), Datum::Value(b)) => self.compare(i, a, b)?,
                 (a, b) => rank(a).cmp(&rank(b)),
             };
             if order != Ordering::Equal {
@@ -394,20 +394,26 @@ impl Dispatch {
         Ok(Ordering::Equal)
     }
 
+    /// The order of two values of the key column `i`, in the collation of the column, as `partsupfunc` with `partcollation` gives it.
+    fn compare(&self, i: usize, a: &Value, b: &Value) -> Result<Ordering> {
+        let ty = self.types.get(i).copied().unwrap_or(0);
+        let collator = self.collators.get(i).copied().flatten();
+        rupg_func::compare_in(collator.as_ref(), ty, a, ty, b)
+    }
+
     /// The canonical order of `partition_bounds_create`: hash partitions by modulus and remainder, list partitions by their least value with the partition of the null value after them, and range partitions by their lower bound. The default partition comes last.
     fn sort(&mut self) -> Result<()> {
         let parts = std::mem::take(&mut self.parts);
         let mut keys: Vec<(usize, Option<Value>)> = Vec::with_capacity(parts.len());
         // The first error of a compare, as the sort cannot stop.
         let mut failed = None;
-        let ty = self.types.first().copied().unwrap_or(0);
         for (i, part) in parts.iter().enumerate() {
             let least = match &part.bound {
                 Bound::List(datums) => {
                     let mut least: Option<&Value> = None;
                     for datum in datums.iter().flatten() {
                         if least.is_none_or(|l| {
-                            rupg_func::compare(ty, datum, ty, l).is_ok_and(|o| o == Ordering::Less)
+                            self.compare(0, datum, l).is_ok_and(|o| o == Ordering::Less)
                         }) {
                             least = Some(datum);
                         }
@@ -433,7 +439,7 @@ impl Dispatch {
                     self.bound_cmp(la, lb)
                 }
                 _ => match (&a.1, &b.1) {
-                    (Some(x), Some(y)) => rupg_func::compare(ty, x, ty, y),
+                    (Some(x), Some(y)) => self.compare(0, x, y),
                     (x, y) => Ok(x.is_none().cmp(&y.is_none())),
                 },
             };

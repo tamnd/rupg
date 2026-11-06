@@ -2111,6 +2111,17 @@ impl Env for Reader<'_> {
         rupg_func::compare(ty, a, ty, b)
     }
 
+    fn compare_in(
+        &self,
+        ty: u32,
+        a: &Value,
+        b: &Value,
+        collation: u32,
+    ) -> Result<std::cmp::Ordering> {
+        let collator = rupg_func::collator(self, collation);
+        rupg_func::compare_in(collator.as_ref(), ty, a, ty, b)
+    }
+
     fn deparse_constant(&self, text: &str) -> Result<String> {
         rupg_func::deparse_constant(text, self)
     }

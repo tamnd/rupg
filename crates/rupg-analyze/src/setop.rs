@@ -326,6 +326,7 @@ impl Analyzer<'_> {
             if kind != SetKind::Union || !s.all {
                 state = state.check(catalog)?;
             }
+            let collation = state.oid();
             let l = self.set_column(&left, i, l, ty, context)?;
             let r = self.set_column(&right, i, r, ty, context)?;
             // select_common_typmod: the typmod of the columns when they have the type and the same typmod.
@@ -333,6 +334,8 @@ impl Analyzer<'_> {
                 if l.ty == ty && r.ty == ty && l.typmod == r.typmod { l.typmod } else { -1 };
             if kind != SetKind::Union || !s.all {
                 let mut group = set_group(i, ty, at)?;
+                // `generate_setop_grouplist`: the column sorts in its collation, `colCollations`.
+                group.collation = collation;
                 group.hashable = self.hashable(typcache::operators(ty).eq, ty);
                 // A recursive `UNION` must hash the rows, and a record can hash when each of its fields can, which the executor finds out.
                 if recursive && matches!(ty, oid::RECORD | oid::RECORD_ARRAY) {
@@ -341,7 +344,6 @@ impl Analyzer<'_> {
                 groups.push(group);
             }
             columns.push((ty, typmod));
-            let collation = state.oid();
             collations.push(collation);
             states.push(if collation == 0 { State::None } else { State::Implicit(collation, at) });
             exprs.push(Expr { kind: ExprKind::CaseTest, ty, typmod, location: at });

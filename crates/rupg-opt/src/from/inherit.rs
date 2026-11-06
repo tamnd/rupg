@@ -591,9 +591,9 @@ fn sort_keys(
     r: usize,
     relation: &rupg_analyze::Relation,
     base: &[Qual<'_>],
-    keys: Vec<i16>,
+    keys: Vec<(i16, u32)>,
     stats: &Stats,
-) -> Vec<i16> {
+) -> Vec<(i16, u32)> {
     let constant = |attnum: i16| {
         let column = usize::try_from(attnum - 1).ok().and_then(|c| relation.columns.get(c));
         if column.is_none_or(|c| c.ty != rupg_types::oid::BOOL) {
@@ -612,7 +612,7 @@ fn sort_keys(
         };
         !stats.has_class(key)
     };
-    keys.into_iter().filter(|&k| !constant(k)).collect()
+    keys.into_iter().filter(|&(k, _)| !constant(k)).collect()
 }
 
 /// True when the two orders have the same keys.
@@ -632,8 +632,8 @@ struct Ordered<'a, 'q> {
     r: usize,
     /// The plans of each member that `add_path` keeps, the cheapest first.
     lists: &'a [Vec<Rel<'q>>],
-    /// The columns of the key of a partitioned table whose partitions are in the order of the key.
-    partition: Option<&'a [i16]>,
+    /// The columns of the key of a partitioned table whose partitions are in the order of the key, with the collation of each.
+    partition: Option<&'a [(i16, u32)]>,
     width: i32,
 }
 
@@ -688,12 +688,15 @@ impl<'q> Ordered<'_, 'q> {
         out
     }
 
-    /// `match_partition_order`: true when the keys are the first keys of the partitions, each in the direction `desc` with the nulls last for an ascending order, or all the keys of the partitions and more.
+    /// `match_partition_order`: true when the keys are the first keys of the partitions, each in the direction `desc` with the nulls last for an ascending order and in the order of the collation of the key, or all the keys of the partitions and more.
     fn partition_order(&self, keys: &[OrderKey], desc: bool) -> bool {
         let Some(attnums) = self.partition else { return false };
         let var = |e: &Expr, attnum: i16| matches!(e.kind, ExprKind::Var(v) if v.relation == self.r && v.levels_up == 0 && v.attnum == attnum);
-        keys.iter().zip(attnums).all(|(k, &a)| {
-            k.desc == desc && k.nulls_first == desc && k.exprs.iter().any(|e| var(e, a))
+        keys.iter().zip(attnums).all(|(k, &(a, collation))| {
+            k.desc == desc
+                && k.nulls_first == desc
+                && super::same_order(k.collation, collation)
+                && k.exprs.iter().any(|e| var(e, a))
         })
     }
 
@@ -711,7 +714,7 @@ impl<'q> Ordered<'_, 'q> {
                     desc: k.desc,
                     using: None,
                     nulls_first: k.nulls_first,
-                    collation: 0,
+                    collation: k.collation,
                 })
             })
             .collect();

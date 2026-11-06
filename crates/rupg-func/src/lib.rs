@@ -104,7 +104,7 @@ pub use activity::{Backend, BackendState, Client, PROGRESS_PARAMS, Process, Prog
 pub use agg::check_percentile;
 pub use cast::local_time;
 pub use collator::{Collator, collator};
-pub use compare::{OrderingTest, compare, equal, ordering_test};
+pub use compare::{OrderingTest, compare, compare_in, equal, ordering_test};
 pub use datetime::{IntervalSum, interval_lerp};
 pub use datumsize::column_size;
 pub use deparse::{

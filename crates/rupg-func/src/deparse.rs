@@ -130,6 +130,8 @@ struct Deparser<'a> {
     names_visible: bool,
     /// `inGroupBy`.
     in_group_by: bool,
+    /// A `COLLATE` of a constant is the `constcollid` of a `Const`, as the planner and the partition constraints make it, which `get_const_collation` shows with no parentheses.
+    const_collations: bool,
     /// The name of each column of the result of the query, with the column of `FROM` that the column shows. A column in `ORDER BY` with the name of another column of the result shows the name of its relation, as `get_variable` does.
     outputs: Vec<(String, Option<Var>)>,
     /// `windowClause`: the windows of the query, which a window function call names by number.
@@ -203,6 +205,7 @@ impl<'a> Deparser<'a> {
             prefix: false,
             names_visible: true,
             in_group_by: false,
+            const_collations: false,
             outputs: Vec::new(),
             windows: Vec::new(),
             window_targets: Vec::new(),
@@ -478,6 +481,13 @@ impl<'a> Deparser<'a> {
                 self.expr(&na.arg, implicit)?;
             }
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
+            ExprKind::Collate(arg, collation)
+                if self.const_collations && matches!(arg.kind, ExprKind::Const(_)) =>
+            {
+                self.expr(arg, implicit)?;
+                self.buf.push_str(" COLLATE ");
+                self.buf.push_str(&collation_name(*collation, self.session)?);
+            }
             ExprKind::Collate(arg, collation) => {
                 self.open();
                 self.paren(arg, implicit, e)?;
@@ -2062,8 +2072,10 @@ const DEFAULT_COLLATION: u32 = 100;
 
 /// `generate_collation_name`: the name of the collation, with its schema when the name alone does not find it.
 fn collation_name(collation: u32, session: &dyn Session) -> Result<String> {
-    let row = builtin::named_by_oid(Named::Collation, collation)
-        .ok_or_else(|| Error::internal(format!("cache lookup failed for collation {collation}")))?;
+    let Some(row) = builtin::named_by_oid(Named::Collation, collation) else {
+        return reg::catalog_text(Named::Collation, collation, session)
+            .ok_or_else(|| Error::internal(format!("cache lookup failed for collation {collation}")));
+    };
     if reg::visible(Named::Collation, row, session) {
         Ok(quote_identifier(row.name))
     } else {
@@ -2454,7 +2466,7 @@ fn get_partition_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value>
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
     let Some(catalog) = call.session.catalog() else { return Ok(Value::Null) };
     let Some(rel) = catalog.relation(oid) else { return Ok(Value::Null) };
-    let mut qual = partqual::partition_qual(catalog, rel)?;
+    let mut qual = partqual::partition_qual(call.session, catalog, rel)?;
     let expr = match qual.len() {
         0 => return Ok(Value::Null),
         1 => qual.remove(0),
@@ -2467,6 +2479,7 @@ fn get_partition_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value>
     };
     let columns = rel.columns.iter().map(|c| c.name.clone()).collect();
     let mut d = Deparser::for_columns(call.session, &rel.name, columns, false);
+    d.const_collations = true;
     d.expr(&expr, false)?;
     Ok(Value::text(d.buf))
 }

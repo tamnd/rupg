@@ -76,8 +76,8 @@ pub trait Members: std::fmt::Debug {
         None
     }
 
-    /// `partitions_are_ordered` and `build_partition_pathkeys`: the column numbers of the key of the partitioned table `table` when the partitions `members`, in the order of their bounds, hold the rows in the order of the key, or `None`.
-    fn ordered_partitions(&self, _table: u32, _members: &[u32]) -> Option<Vec<i16>> {
+    /// `partitions_are_ordered` and `build_partition_pathkeys`: the column numbers of the key of the partitioned table `table` with the collation of each when the partitions `members`, in the order of their bounds, hold the rows in the order of the key, or `None`.
+    fn ordered_partitions(&self, _table: u32, _members: &[u32]) -> Option<Vec<(i16, u32)>> {
         None
     }
 

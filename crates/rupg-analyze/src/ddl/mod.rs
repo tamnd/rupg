@@ -817,6 +817,16 @@ impl Env for SchemaEnv<'_> {
         self.env.compare(ty, a, b)
     }
 
+    fn compare_in(
+        &self,
+        ty: u32,
+        a: &Value,
+        b: &Value,
+        collation: u32,
+    ) -> Result<std::cmp::Ordering> {
+        self.env.compare_in(ty, a, b, collation)
+    }
+
     fn deparse_constant(&self, text: &str) -> Result<String> {
         self.env.deparse_constant(text)
     }

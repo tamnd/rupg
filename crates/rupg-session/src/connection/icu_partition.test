@@ -1,0 +1,316 @@
+!details
+> create table rp (id int, s text collate "en-x-icu") partition by range (s)
+CREATE TABLE
+> select partcollation[0]::regcollation from pg_partitioned_table where partrelid = 'rp'::regclass
+fields partcollation:4191:4:-1
+row "en-x-icu"
+SELECT 1
+> create table rp1 partition of rp for values from (minvalue) to ('b')
+CREATE TABLE
+> create table rp2 partition of rp for values from ('b') to ('p')
+CREATE TABLE
+> create table rp3 partition of rp for values from ('p') to ('Z')
+CREATE TABLE
+> create table rpx partition of rp for values from ('Z') to ('b')
+ERROR 42P17 empty range bound specified for partition "rpx" at 51
+DETAIL Specified lower bound ('Z') is greater than or equal to upper bound ('b').
+> create table rpy partition of rp for values from ('c') to ('q')
+ERROR 42P17 partition "rpy" would overlap partition "rp2" at 51
+> create table rp4 partition of rp for values from ('zz') to (maxvalue)
+CREATE TABLE
+> insert into rp values (1, 'a'), (2, 'B'), (3, 'ö'), (4, 'Ö'), (5, 'z'), (7, 'ä'), (8, 'p'), (9, 'é'), (10, 'zzz')
+INSERT 0 9
+> insert into rp values (11, 'zy')
+ERROR 23514 no partition of relation "rp" found for row
+DETAIL Partition key of the failing row contains (s) = (zy).
+> insert into rp values (12, 'Zebra')
+ERROR 23514 no partition of relation "rp" found for row
+DETAIL Partition key of the failing row contains (s) = (Zebra).
+> select tableoid::regclass, id, s from rp order by s, id
+fields tableoid:2205:4:-1,id@rp.1:23:4:-1,s@rp.2:25:-1:-1
+row rp1,1,a
+row rp1,7,ä
+row rp2,2,B
+row rp2,9,é
+row rp2,3,ö
+row rp2,4,Ö
+row rp3,8,p
+row rp3,5,z
+row rp4,10,zzz
+SELECT 9
+> select tableoid::regclass, id, s from rp order by s collate "C", id
+fields tableoid:2205:4:-1,id@rp.1:23:4:-1,s@rp.2:25:-1:-1
+row rp2,2,B
+row rp1,1,a
+row rp3,8,p
+row rp3,5,z
+row rp4,10,zzz
+row rp2,4,Ö
+row rp1,7,ä
+row rp2,9,é
+row rp2,3,ö
+SELECT 9
+> select pg_get_partition_constraintdef('rp2'::regclass)
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((s IS NOT NULL) AND (s >= 'b'::text COLLATE "en-x-icu") AND (s < 'p'::text COLLATE "en-x-icu"))
+SELECT 1
+> explain (costs off) select * from rp where s < 'c'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rp1 rp_1
+row         Filter: (s < 'c'::text)
+row   ->  Seq Scan on rp2 rp_2
+row         Filter: (s < 'c'::text)
+EXPLAIN
+> select id from rp where s < 'c' order by id
+fields id@rp.1:23:4:-1
+row 1
+row 2
+row 7
+SELECT 3
+> explain (costs off) select * from rp where s >= 'q'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rp3 rp_1
+row         Filter: (s >= 'q'::text)
+row   ->  Seq Scan on rp4 rp_2
+row         Filter: (s >= 'q'::text)
+EXPLAIN
+> select id from rp where s >= 'q' order by id
+fields id@rp.1:23:4:-1
+row 5
+row 10
+SELECT 2
+> explain (costs off) select * from rp where s = 'ö'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on rp2 rp
+row   Filter: (s = 'ö'::text)
+EXPLAIN
+> explain (costs off) select * from rp where s in ('a', 'z')
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rp1 rp_1
+row         Filter: (s = ANY ('{a,z}'::text[]))
+row   ->  Seq Scan on rp3 rp_2
+row         Filter: (s = ANY ('{a,z}'::text[]))
+EXPLAIN
+> select id from rp where s collate "C" < 'c' order by id
+fields id@rp.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> explain (costs off) select * from rp where s between 'Ö' and 'q'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rp2 rp_1
+row         Filter: ((s >= 'Ö'::text) AND (s <= 'q'::text))
+row   ->  Seq Scan on rp3 rp_2
+row         Filter: ((s >= 'Ö'::text) AND (s <= 'q'::text))
+EXPLAIN
+> select id from rp where s between 'Ö' and 'q' order by id
+fields id@rp.1:23:4:-1
+row 4
+row 8
+SELECT 2
+> update rp set s = 'Ab' where id = 8
+UPDATE 1
+> select tableoid::regclass, id, s from rp where id = 8
+fields tableoid:2205:4:-1,id@rp.1:23:4:-1,s@rp.2:25:-1:-1
+row rp1,8,Ab
+SELECT 1
+> create index on rp (s)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> explain (costs off) select s from rp order by s
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Index Only Scan using rp1_s_idx on rp1 rp_1
+row   ->  Index Only Scan using rp2_s_idx on rp2 rp_2
+row   ->  Index Only Scan using rp3_s_idx on rp3 rp_3
+row   ->  Index Only Scan using rp4_s_idx on rp4 rp_4
+EXPLAIN
+> explain (costs off) select s from rp order by s desc
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Index Only Scan Backward using rp4_s_idx on rp4 rp_4
+row   ->  Index Only Scan Backward using rp3_s_idx on rp3 rp_3
+row   ->  Index Only Scan Backward using rp2_s_idx on rp2 rp_2
+row   ->  Index Only Scan Backward using rp1_s_idx on rp1 rp_1
+EXPLAIN
+> explain (costs off) select s from rp order by s collate "C"
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: rp.s COLLATE "C"
+row   ->  Append
+row         ->  Index Only Scan using rp1_s_idx on rp1 rp_1
+row         ->  Index Only Scan using rp2_s_idx on rp2 rp_2
+row         ->  Index Only Scan using rp3_s_idx on rp3 rp_3
+row         ->  Index Only Scan using rp4_s_idx on rp4 rp_4
+EXPLAIN
+> reset enable_seqscan
+RESET
+> create table rq (s text collate "C") partition by range (s collate "sv-x-icu")
+CREATE TABLE
+> select partcollation[0]::regcollation from pg_partitioned_table where partrelid = 'rq'::regclass
+fields partcollation:4191:4:-1
+row "sv-x-icu"
+SELECT 1
+> create table rq1 partition of rq for values from ('a') to ('z')
+CREATE TABLE
+> create table rq2 partition of rq for values from ('z') to (maxvalue)
+CREATE TABLE
+> insert into rq values ('ö'), ('b'), ('zz'), ('å')
+INSERT 0 4
+> select tableoid::regclass, s from rq order by s
+fields tableoid:2205:4:-1,s@rq.1:25:-1:-1
+row rq1,b
+row rq2,zz
+row rq2,å
+row rq2,ö
+SELECT 4
+> select pg_get_partition_constraintdef('rq1'::regclass)
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((s IS NOT NULL) AND ((s)::text >= 'a'::text COLLATE "sv-x-icu") AND ((s)::text < 'z'::text COLLATE "sv-x-icu"))
+SELECT 1
+> explain (costs off) select * from rq where s < 'c'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on rq1 rq_1
+row         Filter: (s < 'c'::text)
+row   ->  Seq Scan on rq2 rq_2
+row         Filter: (s < 'c'::text)
+EXPLAIN
+> create table lp (s text collate "en-x-icu") partition by list (s)
+CREATE TABLE
+> create table lp1 partition of lp for values in ('Z', 'zz')
+CREATE TABLE
+> create table lp2 partition of lp for values in ('b', 'ö')
+CREATE TABLE
+> create table lp3 partition of lp for values in ('a', 'B')
+CREATE TABLE
+> create table lpx partition of lp for values in ('b')
+ERROR 42P17 partition "lpx" would overlap partition "lp2" at 49
+> insert into lp values ('Z'), ('b'), ('a'), ('B'), ('ö')
+INSERT 0 5
+> insert into lp values ('A')
+ERROR 23514 no partition of relation "lp" found for row
+DETAIL Partition key of the failing row contains (s) = (A).
+> explain (costs off) select * from lp
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on lp3 lp_1
+row   ->  Seq Scan on lp2 lp_2
+row   ->  Seq Scan on lp1 lp_3
+EXPLAIN
+> explain (costs off) select * from lp where s < 'c'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on lp3 lp_1
+row         Filter: (s < 'c'::text)
+row   ->  Seq Scan on lp2 lp_2
+row         Filter: (s < 'c'::text)
+EXPLAIN
+> select tableoid::regclass, s from lp order by s
+fields tableoid:2205:4:-1,s@lp.1:25:-1:-1
+row lp3,a
+row lp2,b
+row lp3,B
+row lp2,ö
+row lp1,Z
+SELECT 5
+> create table hp (s text collate "sv-x-icu") partition by hash (s)
+CREATE TABLE
+> create table hp0 partition of hp for values with (modulus 2, remainder 0)
+CREATE TABLE
+> create table hp1 partition of hp for values with (modulus 2, remainder 1)
+CREATE TABLE
+> insert into hp values ('ö'), ('a'), ('z'), ('å')
+INSERT 0 4
+> select tableoid::regclass, s from hp order by s
+fields tableoid:2205:4:-1,s@hp.1:25:-1:-1
+row hp0,a
+row hp0,z
+row hp0,å
+row hp1,ö
+SELECT 4
+> explain (costs off) select * from hp where s = 'ö'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on hp1 hp
+row   Filter: (s = 'ö'::text)
+EXPLAIN
+> create table pk (s text collate "en-x-icu" primary key) partition by range (s)
+CREATE TABLE
+> create table pk1 partition of pk for values from ('a') to ('p')
+CREATE TABLE
+> create table pk2 partition of pk for values from ('p') to (maxvalue)
+CREATE TABLE
+> insert into pk values ('ö'), ('Ö')
+INSERT 0 2
+> insert into pk values ('ö')
+ERROR 23505 duplicate key value violates unique constraint "pk1_pkey"
+DETAIL Key (s)=(ö) already exists.
+> create table att (id int, s text collate "en-x-icu")
+CREATE TABLE
+> insert into att values (1, 'é')
+INSERT 0 1
+> alter table rp detach partition rp4
+ALTER TABLE
+> alter table rp attach partition att for values from ('zz') to (maxvalue)
+ERROR 23514 partition constraint of relation "att" is violated by some row
+> delete from att
+DELETE 1
+> insert into att values (1, 'Zz')
+INSERT 0 1
+> alter table rp attach partition att for values from ('zz') to (maxvalue)
+ALTER TABLE
+> select tableoid::regclass, id, s from rp where s > 'z' order by s
+fields tableoid:2205:4:-1,id@rp.1:23:4:-1,s@rp.2:25:-1:-1
+row att,1,Zz
+SELECT 1
+> create table un (s text collate "sv-x-icu")
+CREATE TABLE
+> insert into un values ('ö'), ('z'), ('a'), ('å'), ('ä'), ('o')
+INSERT 0 6
+> set enable_hashagg = off
+SET
+> explain (costs off) select s from un union select s from un order by 1
+fields QUERY PLAN:25:-1:-1
+row Unique
+row   ->  Merge Append
+row         Sort Key: un.s COLLATE "sv-x-icu"
+row         ->  Sort
+row               Sort Key: un.s COLLATE "sv-x-icu"
+row               ->  Seq Scan on un
+row         ->  Sort
+row               Sort Key: un_1.s COLLATE "sv-x-icu"
+row               ->  Seq Scan on un un_1
+EXPLAIN
+> select s from un union select s from un order by 1
+fields s:25:-1:-1
+row a
+row o
+row z
+row å
+row ä
+row ö
+SELECT 6
+> select s from un intersect select s from un order by 1
+fields s:25:-1:-1
+row a
+row o
+row z
+row å
+row ä
+row ö
+SELECT 6
+> select s from un except select s from un where s = 'a' order by 1
+fields s:25:-1:-1
+row o
+row z
+row å
+row ä
+row ö
+SELECT 5
+> reset enable_hashagg
+RESET

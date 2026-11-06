@@ -361,6 +361,21 @@ pub trait Env {
         let _ = (ty, a, b);
         Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "a comparison is not supported here"))
     }
+    /// [`Env::compare`] in the collation `collation`: the order of the collator for a collation of ICU, and the order of the bytes for another collation.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Env::compare`].
+    fn compare_in(
+        &self,
+        ty: u32,
+        a: &Value,
+        b: &Value,
+        collation: u32,
+    ) -> Result<std::cmp::Ordering> {
+        let _ = collation;
+        self.compare(ty, a, b)
+    }
 }
 
 /// `myTempNamespace`: the OID of the temporary schema of the session in the catalog, or 0 when the session has none yet.
