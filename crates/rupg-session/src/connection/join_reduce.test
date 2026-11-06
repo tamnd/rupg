@@ -1,0 +1,72 @@
+> CREATE TABLE jf (k int, a int, b bigint, d date, v numeric(15,2), s char(1))
+CREATE TABLE
+> INSERT INTO jf SELECT i, i % 90000, CASE WHEN i % 97 = 0 THEN NULL ELSE i % 1000 END, date '1995-01-01' + (i % 700), (i % 113) + 0.25, CASE WHEN i % 3 = 0 THEN 'A' WHEN i % 3 = 1 THEN 'B' ELSE 'C' END FROM generate_series(1, 200000) i
+INSERT 0 200000
+> CREATE TABLE jd (a int, g text, n int)
+CREATE TABLE
+> INSERT INTO jd SELECT i, CASE WHEN i % 5 = 0 THEN 'red' ELSE 'blue' END, i % 100 FROM generate_series(1, 80000) i
+INSERT 0 80000
+> CREATE TABLE js (n bigint, name text)
+CREATE TABLE
+> INSERT INTO js SELECT i, 'n' || i FROM generate_series(0, 99) i
+INSERT 0 100
+> SELECT count(*), sum(jf.v) FROM jf, jd WHERE jf.a = jd.a AND jd.g = 'red' AND jf.d < date '1995-03-01'
+fields count:20:8:-1,sum:1700:-1:-1
+row 3083,173171.75
+SELECT 1
+> SELECT js.name, count(*), sum(jf.v), min(jf.k), max(jf.d) FROM jf, jd, js WHERE jf.a = jd.a AND jd.n = js.n AND js.name LIKE 'n1%' AND jf.s = 'B' AND jf.d >= date '1995-06-01' GROUP BY js.name ORDER BY js.name
+fields name@js.2:25:-1:-1,count:20:8:-1,sum:1700:-1:-1,min:23:4:-1,max:1082:4:-1
+row n1,428,24057.00,301,1996-08-24
+row n10,428,24067.00,310,1996-09-02
+row n11,428,24209.00,211,1996-09-03
+row n12,429,24320.25,412,1996-09-04
+row n13,428,23995.00,313,1996-09-05
+row n14,428,24137.00,214,1996-09-06
+row n15,429,24364.25,415,1996-09-07
+row n16,428,24149.00,316,1996-09-08
+row n17,428,24065.00,217,1996-09-09
+row n18,429,24182.25,418,1996-09-10
+row n19,428,24077.00,319,1996-09-11
+SELECT 11
+> SELECT jf.k, jf.b, jd.g, js.name FROM jf, jd, js WHERE jf.a = jd.a AND jf.b = js.n AND jd.g = 'red' AND jf.v > 110 AND jf.k < 20000 ORDER BY jf.k LIMIT 12
+fields k@jf.1:23:4:-1,b@jf.3:20:8:-1,g@jd.2:25:-1:-1,name@js.2:25:-1:-1
+row 1015,15,red,n15
+row 3050,50,red,n50
+row 4065,65,red,n65
+row 7005,5,red,n5
+row 8020,20,red,n20
+row 10055,55,red,n55
+row 12090,90,red,n90
+row 14010,10,red,n10
+row 16045,45,red,n45
+row 17060,60,red,n60
+row 19095,95,red,n95
+SELECT 11
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jf.k < jd.n * 3
+fields count:20:8:-1
+row 148
+SELECT 1
+> SELECT count(*), sum(jd.n) FROM jd, jf WHERE jd.a = jf.a AND jf.d BETWEEN date '1995-02-01' AND date '1995-02-03' AND (jd.g = 'red' OR jf.s = 'A')
+fields count:20:8:-1,sum:20:8:-1
+row 257,8226
+SELECT 1
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jd.n <> 0 AND 100 / jd.n > 50
+fields count:20:8:-1
+row 1800
+SELECT 1
+> SELECT jf.k, jd.a FROM jf, jd WHERE jf.a = jd.a AND jf.k IN (5, 90005, 180005) ORDER BY jf.k
+fields k@jf.1:23:4:-1,a@jd.1:23:4:-1
+row 5,5
+row 90005,5
+row 180005,5
+SELECT 3
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jf.b IS NULL AND jd.g = 'blue'
+fields count:20:8:-1
+row 1485
+SELECT 1
+> UPDATE jd SET g = 'red' WHERE a = 1
+UPDATE 1
+> SELECT count(*), sum(jf.v) FROM jf, jd WHERE jf.a = jd.a AND jd.g = 'red' AND jf.d < date '1995-03-01'
+fields count:20:8:-1,sum:1700:-1:-1
+row 3084,173173.00
+SELECT 1

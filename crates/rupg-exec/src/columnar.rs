@@ -259,7 +259,7 @@ fn plain(collation: u32) -> bool {
 }
 
 /// The integer of a value of an integer type, a date or a time.
-fn int_of(value: &Value) -> Option<i64> {
+pub(crate) fn int_of(value: &Value) -> Option<i64> {
     Some(match value {
         Value::Bool(v) => i64::from(*v),
         Value::Int2(v) => i64::from(*v),
@@ -1918,6 +1918,113 @@ pub(crate) fn run(
             })
             .collect(),
     ))
+}
+
+/// The rows of one table of a join that pass the conditions `conds` of the table, which [`crate::reduce`] gives.
+pub(crate) struct Selected {
+    /// The number of rows of the table.
+    pub(crate) rows: usize,
+    /// The places of the rows that pass, in the order of [`Session::table_rows`].
+    pub(crate) places: Vec<usize>,
+    /// For each column of the keys, the integer of each row that passes, or `None` for a null.
+    pub(crate) keys: Vec<Vec<Option<i64>>>,
+}
+
+/// The rows of the table of `relation` that pass the conditions `conds`, which read only the columns of the table, with the integers of the columns `keys` of these rows. The vectors test the conditions, so that a join of a long table makes the values of only the rows that pass. `None` is a table that the scan reads by rows, a condition that the vectors do not run, or a key column that does not have integers.
+///
+/// # Errors
+///
+/// The error of a condition.
+pub(crate) fn selected(
+    relation: &rupg_analyze::Relation,
+    conds: &[&Expr],
+    keys: &[usize],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<Selected>> {
+    let types: Vec<u32> = relation.columns.iter().map(|c| c.ty).collect();
+    let mut used = vec![false; types.len()];
+    for &key in keys {
+        match used.get_mut(key) {
+            Some(slot) => *slot = true,
+            None => return Ok(None),
+        }
+    }
+    for cond in conds {
+        if unsupported(cond) {
+            return Ok(None);
+        }
+        cond.find(0, &mut |e, _| {
+            if let ExprKind::Var(var) = e.kind
+                && let Some(slot) =
+                    usize::try_from(var.attnum - 1).ok().and_then(|i| used.get_mut(i))
+            {
+                *slot = true;
+            }
+            None::<()>
+        });
+    }
+    let Some(catalog) = session.catalog() else { return Ok(None) };
+    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    let mut wanted = Vec::new();
+    let mut places = vec![usize::MAX; types.len()];
+    for (column, _) in used.iter().enumerate().filter(|(_, u)| **u) {
+        let Some(kind) = kind_of(types[column])
+            .or_else(|| numeric_kind(types[column], relation.columns[column].typmod))
+        else {
+            return Ok(None);
+        };
+        if kind == Kind::Text && !table.columns.get(column).is_some_and(|c| plain(c.collation)) {
+            return Ok(None);
+        }
+        places[column] = wanted.len();
+        wanted.push((column, kind));
+    }
+    let Some((rows, stored)) = session.table_columns(relation.oid, &wanted)? else {
+        return Ok(None);
+    };
+    let mut dicts = Vec::new();
+    let mut dict_of = vec![usize::MAX; stored.len()];
+    for (place, column) in stored.iter().enumerate() {
+        if column.kind.store() == Store::Code {
+            dict_of[place] = dicts.len();
+            dicts.push(Dict::Stored(Arc::clone(column)));
+        }
+    }
+    let mut exec = Exec {
+        params: &[],
+        session,
+        cache,
+        stored,
+        places,
+        types,
+        dict_of,
+        dicts,
+        generic: FxMap::default(),
+        likes: FxMap::default(),
+        lengths: FxMap::default(),
+        slots: Vec::new(),
+        empty: scan::Tables::default(),
+    };
+    let segments = rows.div_ceil(ROWS);
+    let mut scan =
+        Scan { exec: &mut exec, conds, segments, rows, open: true, answered: Vec::new() };
+    let mut out = Selected { rows, places: Vec::new(), keys: vec![Vec::new(); keys.len()] };
+    let mut integers = true;
+    scan.each(&mut |exec, batch, sel| {
+        let base = batch.segment * ROWS + batch.vector * VECTOR;
+        out.places.extend(sel.iter().map(|&i| base + i as usize));
+        for (values, &key) in out.keys.iter_mut().zip(keys) {
+            let col = exec.var(batch, key, exec.types[key], sel)?;
+            let Data::Int(ints) = &col.data else {
+                integers = false;
+                return Ok(false);
+            };
+            values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
+        }
+        Ok(true)
+    })?;
+    Ok(integers.then_some(out))
 }
 
 /// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.
