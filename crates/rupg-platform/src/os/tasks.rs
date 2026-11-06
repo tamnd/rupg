@@ -3,7 +3,7 @@
 //! A thread that ends a task waits for [`KEEP_IDLE`] for the next task with the same name, and runs it. A new thread and its end cost more than the startup of a session: the system makes the stack and the signal stack, and at the end it gives back the pages of the stack, so the next thread gets each page again with a fault. A connection that only logs in and ends spent most of its time there (spec/06 section 6.18).
 
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -168,8 +168,10 @@ impl Tasks for OsTasks {
         true
     }
 
+    /// The cores of the process, which the first call reads and the later calls keep. On Linux, `available_parallelism` reads the CPU affinity and the quota of the cgroup from files at each call, and a query calls it for each scan: on ClickBench Q2 with 2M rows it took 4 percent of the CPU time of the session.
     fn parallelism(&self) -> usize {
-        thread::available_parallelism().map_or(1, std::num::NonZero::get)
+        static CORES: OnceLock<usize> = OnceLock::new();
+        *CORES.get_or_init(|| thread::available_parallelism().map_or(1, std::num::NonZero::get))
     }
 
     /// Runs the first job on the calling thread and each other job on a thread that waits for a task, or on a new thread. A job whose thread does not start runs on the calling thread. A job that panicked panics the caller after all the jobs ended.
