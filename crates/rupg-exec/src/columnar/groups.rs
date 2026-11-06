@@ -1,5 +1,6 @@
 //! The groups of a vector scan on the tasks of the server (spec/14 section 14.5), as a hash aggregate with parts of the hashes. Each task reads a run of the vectors and keeps the rows that pass the conditions. It folds the rows into a small table that stays in the cache, and when the table is full, it moves the groups of the table into [`PARTS`] buffers, one for each part of the hashes of the keys. When the table folds few rows into each group, the task puts each row into the buffers with no table. Then each task merges the buffers of some parts, from the buffers of the first run to the last, so the first row of each group is its first row in the scan. The groups then go in the order of their first rows, which is the order of the scan on one task.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use rupg_column::segment::ROWS;
@@ -738,6 +739,68 @@ pub(super) fn distinct_groups(
 
 /// The values of each part of the hashes for one run of vectors, and the first row of the run with a value.
 type Values = (Vec<Vec<u64>>, Option<u64>);
+
+/// The most groups of a `LIMIT` with no sort for which [`lead_cut`] finds a test of the first key.
+pub(super) const FIRST_GROUPS: usize = 256;
+
+/// For a `LIMIT` with no sort of `n` groups that go in the order of a sort of their keys, with the column of integers at `place` as the first key in ascending order and nulls last: the `n`th least value of the column that is not null in the rows that pass the filters of `plan`, or `None` when the column has fewer than `n` such values. Each value of the column has at least one group, so the first `n` groups have a value that is not more than this value, and each row of a group has the value of the group. The scan reads the vectors in order, and does not read a vector whose zone shows that no value of the column is less than the `n`th least value so far.
+pub(super) fn lead_cut(
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    place: usize,
+    rows: usize,
+    segments: usize,
+    n: usize,
+) -> Result<Option<i64>> {
+    if n == 0 {
+        return Ok(None);
+    }
+    let mut least: BTreeSet<i64> = BTreeSet::new();
+    let mut decoded: Vec<Option<Decoded>> = (0..stored.len()).map(|_| None).collect();
+    let mut sel = Vec::with_capacity(VECTOR);
+    let mut tests = Vec::with_capacity(plan.filters.len());
+    for (segment, vector) in units_of(rows, segments) {
+        let cut = least.last().copied().filter(|_| least.len() == n);
+        if let Some(cut) = cut {
+            let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
+            let zones = &stored[place].segments[segment].summary.vectors;
+            if zones.len() == stored::vectors(segment_rows)
+                && matches!(
+                    zones[vector].test(&Test::Lt(rupg_summary::key::int(cut))),
+                    Verdict::None
+                )
+            {
+                continue;
+            }
+        }
+        if !select(stored, plan, rows, (segment, vector), &mut tests, &mut sel, &mut decoded)? {
+            continue;
+        }
+        // The filters decoded the column when they tested it. Else the column can keep a vector of an earlier unit, so the scan decodes it again.
+        let tested = tests.iter().any(|t| t.0 == place);
+        let d = match decoded[place].take().filter(|_| tested) {
+            Some(d) => d,
+            None => decode(&stored[place], segment, vector)?,
+        };
+        let mut cut = cut.unwrap_or(i64::MAX);
+        for &i in &sel {
+            if null(&d, i) {
+                continue;
+            }
+            let v = int(&d, i);
+            if v >= cut || !least.insert(v) {
+                continue;
+            }
+            if least.len() > n {
+                least.pop_last();
+            }
+            if least.len() == n {
+                cut = least.last().copied().unwrap_or(i64::MAX);
+            }
+        }
+    }
+    Ok(least.last().copied().filter(|_| least.len() == n))
+}
 
 /// The vectors of the scan of `rows` rows in `segments` segments, as their segment and their place in it.
 pub(super) fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {

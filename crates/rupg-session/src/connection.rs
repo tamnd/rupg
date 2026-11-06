@@ -4342,6 +4342,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/top_tasks.test")));
     }
 
+    /// The tasks of the server find the first groups of a vector scan with `LIMIT` and no sort, whose groups go in the order of a sort of their keys, from the rows whose first key is not more than the first key of the last group of the limit: with `OFFSET`, a filter, a key of an expression, nulls of the first key, fewer values of the first key than the limit, and groups of a hash table or a first key of floats, which read each row.
+    #[test]
+    fn limit_groups_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/limit_groups_tasks.test")));
+    }
+
     /// A grouped vector scan with a sort of few groups of a key of text places the codes of the groups in the order of their bytes, with the order of Postgres for nulls, `DESC` and more keys.
     #[test]
     fn group_code_places() {

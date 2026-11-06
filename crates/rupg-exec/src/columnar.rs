@@ -3016,9 +3016,14 @@ fn grouped(
         // The summary answers some segments of a scan with no keys, which the tasks then do not read again.
         Some(tasks) if scan.open && !scan.answered.contains(&true) => {
             let estimate = session_groups(session, query);
-            (estimate.saturating_mul(groups::GROUP_ROWS) <= rows
-                && estimate.saturating_mul(groups::GROUP_INPUT) <= session_input(session, query))
-            .then(|| {
+            let many = estimate.saturating_mul(groups::GROUP_ROWS) <= rows
+                && estimate.saturating_mul(groups::GROUP_INPUT) <= session_input(session, query);
+            // With `LIMIT` and no sort of few groups that go in the order of a sort of their keys, the tasks find only the groups whose first key is not more than the first key of the last group of the limit.
+            let lead = match first_groups.filter(|&n| n <= groups::FIRST_GROUPS) {
+                Some(n) => sorted_lead(scan.exec, query, &keys)?.map(|place| (place, n)),
+                None => None,
+            };
+            let plan = if many || lead.is_some() {
                 parallel_plan(
                     scan.exec,
                     &keys,
@@ -3028,9 +3033,23 @@ fn grouped(
                     rows,
                     tasks.parallelism(),
                 )
-            })
-            .flatten()
-            .map(|plan| (tasks, plan))
+            } else {
+                None
+            };
+            match (plan, lead) {
+                (Some((mut plan, derived)), Some((place, n))) => {
+                    session.interrupted()?;
+                    match groups::lead_cut(&scan.exec.stored, &plan, place, rows, scan.segments, n)?
+                    {
+                        Some(cut) => {
+                            plan.filters.push((place, Test::Le(rupg_summary::key::int(cut))));
+                            Some((tasks, (plan, derived)))
+                        }
+                        None => many.then_some((tasks, (plan, derived))),
+                    }
+                }
+                (plan, _) => plan.filter(|_| many).map(|plan| (tasks, plan)),
+            }
         }
         _ => None,
     };
@@ -4600,6 +4619,30 @@ fn code_places(
         .iter()
         .map(|&c| if c == 0 { 0 } else { distinct.binary_search(&c).map_or(0, |at| ranks[at]) })
         .collect()
+}
+
+/// The place of the first key of `GROUP BY` when the groups go in the order of a sort of their keys, as [`group_order`] gives it with no hash table, and the first key is a column of integers in ascending order with nulls last. `None` for other groups.
+fn sorted_lead(exec: &Exec<'_>, query: &Query, keys: &[&Expr]) -> Result<Option<usize>> {
+    let session = exec.session;
+    if query.group.is_empty()
+        || session.hash_tables(query).and_then(|t| t.group.clone()).is_some()
+        || query.group.iter().any(|g| g.sort == 0)
+    {
+        return Ok(None);
+    }
+    let Some(place) = keys.first().and_then(|key| place_of(exec, key)) else { return Ok(None) };
+    if !int_column(&exec.stored[place]) {
+        return Ok(None);
+    }
+    let types: Vec<u32> = query.group.iter().map(|g| query.targets[g.target].expr.ty).collect();
+    let list: Vec<rupg_analyze::SortGroup> = query
+        .group
+        .iter()
+        .enumerate()
+        .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
+        .collect();
+    Ok((sort::Keys::new(&list, &types, session)?.lead() == Some((0, false, false)))
+        .then_some(place))
 }
 
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.
