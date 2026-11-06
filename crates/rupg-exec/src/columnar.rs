@@ -21,6 +21,7 @@ use crate::agg;
 use crate::{Cache, Eval, Group, hashed, scan, sort};
 
 mod groups;
+mod top;
 
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
@@ -1953,6 +1954,9 @@ fn top(
 ) -> Result<Vec<Vec<Value>>> {
     let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
     let keys = sort::Keys::new(&query.sort, &types, session)?;
+    if let Some(rows) = tasks_top(scan, session, &keys, &types, columns, bound)? {
+        return Ok(rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX)).collect());
+    }
     let mut cmp = |a: &Vec<Value>, b: &Vec<Value>| keys.compare(a, b);
     let sorted: Vec<bool> =
         (0..columns.len()).map(|t| query.sort.iter().any(|s| s.target == t)).collect();
@@ -2054,6 +2058,90 @@ fn top(
         first
     };
     Ok(rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX)).collect())
+}
+
+/// The rows of [`top`] from the tasks of the server, or `None` when the tasks cannot find them: each target must be a key of the order, so that rows equal on all the keys are the same row, and each key must be a stored column of integers, dates or times, or of text codes, whose order is the order of its integers or of the bytes of its texts. Each condition must be a test that the zones read, and the table must have rows for two tasks.
+fn tasks_top(
+    scan: &mut Scan<'_, '_>,
+    session: &dyn Session,
+    keys: &sort::Keys<'_>,
+    types: &[u32],
+    columns: &[usize],
+    bound: usize,
+) -> Result<Option<Vec<Vec<Value>>>> {
+    let Some(tasks) = session.tasks() else { return Ok(None) };
+    if !scan.open
+        || scan.answered.contains(&true)
+        || tasks.parallelism() < 2
+        || scan.rows < 2 * groups::TASK_ROWS
+    {
+        return Ok(None);
+    }
+    let Some(natives) = keys.natives().filter(|n| (1..=top::KEYS).contains(&n.len())) else {
+        return Ok(None);
+    };
+    let exec = &*scan.exec;
+    // The key of each target, which each target must have.
+    let Some(key_of) = (0..columns.len())
+        .map(|t| natives.iter().position(|n| n.0 == t))
+        .collect::<Option<Vec<usize>>>()
+    else {
+        return Ok(None);
+    };
+    let mut top_keys = Vec::with_capacity(natives.len());
+    for &(target, descending, nulls_first) in &natives {
+        let Some(&place) = exec.places.get(columns[target]) else { return Ok(None) };
+        let Some(stored) = exec.stored.get(place) else { return Ok(None) };
+        let order = match (types[target], stored.kind.store()) {
+            (
+                oid::INT2
+                | oid::INT4
+                | oid::INT8
+                | oid::DATE
+                | oid::TIME
+                | oid::TIMESTAMP
+                | oid::TIMESTAMPTZ,
+                Store::Int,
+            ) => None,
+            (oid::TEXT | oid::VARCHAR, Store::Code) if stored.kind == Kind::Text => {
+                let Some(dict) = stored.dict.as_ref() else { return Ok(None) };
+                Some(dict.order())
+            }
+            _ => return Ok(None),
+        };
+        top_keys.push(top::Key { place, order, descending, nulls_first });
+    }
+    // With a first key of integers whose nulls come last, the scan of `top` cuts the rows and the vectors by its zones with the one last row of its heap, and the tasks each with their own: on 2M rows of ClickBench, `ORDER BY EventTime, SearchPhrase LIMIT 10` took 30M instructions on the scan and 65M to 77M on the tasks.
+    if top_keys[0].order.is_none() && !top_keys[0].nulls_first {
+        return Ok(None);
+    }
+    let Some(filters) =
+        scan.conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    session.interrupted()?;
+    let entries =
+        top::top(tasks, &exec.stored, &filters, &top_keys, scan.rows, scan.segments, bound)?;
+    session.interrupted()?;
+    let rows = entries
+        .iter()
+        .map(|entry| {
+            key_of
+                .iter()
+                .enumerate()
+                .map(|(t, &k)| match entry.values[k] {
+                    None => Value::Null,
+                    Some(v) if top_keys[k].order.is_some() => {
+                        let place = top_keys[k].place;
+                        exec.dicts[exec.dict_of[place]].value(v as u32)
+                    }
+                    Some(v) => int_value(types[t], v as i64),
+                })
+                .collect()
+        })
+        .collect();
+    Ok(Some(rows))
 }
 
 /// The rows of the targets for each row of `tables`, or for each group with the results of its aggregates, which pass `having`: the `HAVING` of the query, or `None` when the groups passed it before. It gives true when the rows are in the order of `ORDER BY` with `OFFSET` and `LIMIT` done: with a `LIMIT` and many groups, the targets of `ORDER BY` run for each group, and the other targets only for the groups that `LIMIT` keeps, when they cannot fail.

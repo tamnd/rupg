@@ -304,11 +304,11 @@ struct Run {
     last: Option<u64>,
 }
 
-fn null(decoded: &Decoded, i: usize) -> bool {
+pub(super) fn null(decoded: &Decoded, i: usize) -> bool {
     decoded.nulls.as_ref().is_some_and(|n| n[i])
 }
 
-fn int(decoded: &Decoded, i: usize) -> i64 {
+pub(super) fn int(decoded: &Decoded, i: usize) -> i64 {
     match &decoded.data {
         DecodedData::Int(v) => v[i],
         DecodedData::Code(v) => i64::from(v[i]),
@@ -350,7 +350,7 @@ fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut 
 }
 
 /// Puts into `sel` the rows of the vector `vector` of the segment `segment` that pass the filters of `plan`, and the columns that the filters test into `decoded`. False when no row passes.
-fn select<'p>(
+pub(super) fn select<'p>(
     stored: &[Arc<Stored>],
     plan: &'p Plan,
     rows: usize,
@@ -722,7 +722,7 @@ pub(super) fn distinct_groups(
 type Values = (Vec<Vec<u64>>, Option<u64>);
 
 /// The vectors of the scan of `rows` rows in `segments` segments, as their segment and their place in it.
-fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
+pub(super) fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
     let mut units = Vec::new();
     for segment in 0..segments {
         let segment_rows = rows.saturating_sub(segment * ROWS).min(ROWS);
