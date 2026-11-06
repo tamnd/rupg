@@ -7910,6 +7910,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/icu_column.test")));
     }
 
+    /// An index in a collation of ICU orders its keys as the collator does: a scan of the index gives the rows of `ORDER BY` in the collation, a comparison in the collation is an index condition, a `LIKE` prefix is not one, and `UNIQUE`, `PRIMARY KEY`, `ON CONFLICT` and `CLUSTER` work. `connection/icu_index.test` is the output of PostgreSQL 19 (ICU 74) for the same script.
+    #[test]
+    fn icu_index() {
+        big_stack(|| script(include_str!("connection/icu_index.test")));
+    }
+
     /// A sort in a collation of ICU orders strings as ICU does: the root locale, the tailorings of Swedish, Danish, Czech and Canadian French. `connection/icu_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn icu_order() {

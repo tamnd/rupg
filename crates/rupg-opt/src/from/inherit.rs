@@ -618,7 +618,7 @@ fn sort_keys(
 /// True when the two orders have the same keys.
 fn same_order(a: &[OrderKey], b: &[OrderKey]) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b).all(|(x, y)| y.exprs.iter().any(|e| x.sorts(e, y.desc, y.nulls_first)))
+        && a.iter().zip(b).all(|(x, y)| y.exprs.iter().any(|e| x.sorts(e, y.desc, y.nulls_first, y.collation)))
 }
 
 /// `pathkeys_contained_in`: true when the order starts with the keys.

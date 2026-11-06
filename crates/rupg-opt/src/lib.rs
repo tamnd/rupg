@@ -486,7 +486,7 @@ fn index_keys(
             equal: 0,
             nulls_first,
             hashable: false,
-            collation: 0,
+            collation: index.collations.get(i).copied().unwrap_or(0),
         });
     }
     Some(out)
@@ -674,7 +674,7 @@ struct Builder<'q> {
 }
 
 /// An order of the rows of a query as the places of its columns, each with the direction and the place of the nulls.
-type ColumnOrder = Vec<(usize, bool, bool)>;
+type ColumnOrder = Vec<(usize, bool, bool, u32)>;
 
 /// The plans of a subquery of `FROM` with the order of their rows, as `set_subquery_pathlist` reads the `pathlist` of the final relation of the subquery. Each key of an order is the place of a column of the subquery with the direction and the place of the nulls.
 #[derive(Debug, Default)]
@@ -774,8 +774,8 @@ fn columns(level: &Level<'_>, order: &[from::OrderKey]) -> ColumnOrder {
             .enumerate()
             .find(|(_, t)| !t.junk && key.exprs.iter().any(|e| e.same(&t.expr)));
         let Some((at, _)) = found else { break };
-        if !out.iter().any(|&(c, _, _)| c == at) {
-            out.push((at, key.desc, key.nulls_first));
+        if !out.iter().any(|&(c, ..)| c == at) {
+            out.push((at, key.desc, key.nulls_first, key.collation));
         }
     }
     out

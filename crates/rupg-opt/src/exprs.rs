@@ -194,10 +194,18 @@ pub(crate) fn is_false(expr: &Expr) -> bool {
     matches!(expr.as_const(), Some(Value::Bool(false) | Value::Null))
 }
 
-/// The OID of the operator of a call of an operator with two arguments, with the arguments. A call in a collation of ICU is not one: an index, a join or a class of equal values orders the strings as their bytes.
+/// The OID of the operator of a call of an operator with two arguments, with the arguments. A call in a collation of ICU is not one: a join or a class of equal values orders the strings as their bytes.
 pub(crate) fn binary(expr: &Expr) -> Option<(u32, &Expr, &Expr)> {
     match &expr.kind {
-        ExprKind::Func(f) if f.collation == 0 => match (f.form, f.args.as_slice()) {
+        ExprKind::Func(f) if f.collation == 0 => binary_in(expr),
+        _ => None,
+    }
+}
+
+/// [`binary`] in any collation, for an index whose collation is the collation of the call.
+pub(crate) fn binary_in(expr: &Expr) -> Option<(u32, &Expr, &Expr)> {
+    match &expr.kind {
+        ExprKind::Func(f) => match (f.form, f.args.as_slice()) {
             (FuncForm::Operator(op), [left, right]) => Some((op, left, right)),
             _ => None,
         },
@@ -214,7 +222,7 @@ pub(crate) fn can_commute(expr: &Expr) -> bool {
 
 /// The call of the commutator of an operator, with the arguments in the other order, as `commute_op_clause`.
 pub(crate) fn commute(expr: &Expr) -> Option<Expr> {
-    let (op, left, right) = binary(expr)?;
+    let (op, left, right) = binary_in(expr)?;
     let row = builtin::operator_by_oid(builtin::operator_by_oid(op)?.commutator)?;
     let ExprKind::Func(f) = &expr.kind else { return None };
     let mut func = f.clone();

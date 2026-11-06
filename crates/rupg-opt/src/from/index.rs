@@ -1021,7 +1021,14 @@ fn match_one<'q>(
     let expr = &*source.expr;
     let (orig, at, class) = (&source.expr, source.at, source.class);
     let family = *index.families.get(column)?;
-    let is_column = key_test(r, index, column)?;
+    // `IndexCollMatchesExprColl`: a comparison in a collation of ICU needs an index in the collation.
+    let collation = match &expr.kind {
+        ExprKind::Func(f) => f.collation,
+        ExprKind::ScalarArrayOp { collation, .. } => *collation,
+        _ => 0,
+    };
+    let is_column = key_test_in(r, index, column, collation)?;
+    let index_collation = index.collations.get(column).copied().unwrap_or(0);
     let other_ok = |e: &Expr| !exprs::relations(e).contains(&r) && !exprs::volatile(e);
     let clause = |expr: Cow<'q, Expr>, kind| {
         vec![Clause { expr, column, orig: orig.clone(), at, class, kind, lossy: false }]
@@ -1032,8 +1039,7 @@ fn match_one<'q>(
     }
     match &expr.kind {
         ExprKind::RowCompare(rc) => row_compare(r, index, column, rc, source).map(|c| vec![c]),
-        // An index orders the bytes, so a comparison in a collation of ICU is not an index clause.
-        ExprKind::ScalarArrayOp { func, any: true, args, collation: 0 } => {
+        ExprKind::ScalarArrayOp { func, any: true, args, .. } => {
             let [left, array] = args.as_slice() else { return None };
             let element = builtin::type_by_oid(array.ty).map_or(0, |t| t.elem);
             let op = cost::array_operator(*func, left.ty, element)?;
@@ -1104,7 +1110,7 @@ fn match_one<'q>(
             let mut func = f.clone();
             func.form = FuncForm::Operator(prefix);
             let as_op = Expr::new(ExprKind::Func(func), oid::BOOL);
-            let derived = prefix_clauses(&as_op, family)?;
+            let derived = prefix_clauses(&as_op, family, index_collation)?;
             let lossy = |(expr, s)| Clause {
                 expr: Cow::Owned(expr),
                 column,
@@ -1117,7 +1123,7 @@ fn match_one<'q>(
             Some(derived.into_iter().map(lossy).collect())
         }
         _ => {
-            let (op, left, right) = exprs::binary(expr)?;
+            let (op, left, right) = exprs::binary_in(expr)?;
             let lossy = |(expr, s)| Clause {
                 expr: Cow::Owned(expr),
                 column,
@@ -1129,7 +1135,7 @@ fn match_one<'q>(
             };
             if is_column(left) && other_ok(right) {
                 let Some(s) = strategy(op, family) else {
-                    let derived = prefix_clauses(expr, family)
+                    let derived = prefix_clauses(expr, family, index_collation)
                         .or_else(|| network_clauses(expr, true, family))?;
                     return Some(derived.into_iter().map(lossy).collect());
                 };
@@ -1197,18 +1203,45 @@ fn boolean_equal(key: &Expr, value: bool) -> Expr {
 
 /// `match_index_to_operand` for the key column `column` of the index: the test of an expression that is the column, or `None` when no condition can use the column. A key column that is an expression matches the same expression. The collation `C` of a column of `name` is the collation of each condition of the column. As `IndexCollMatchesExprColl`, the collation of the index must be the collation of the condition, which is the collation of the column of the table, or the default collation for an expression.
 fn key_test(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> bool> {
+    let collation = index.collations.get(column).copied().unwrap_or(0);
+    let expected = index.column_collations.get(column).copied().filter(|&c| c != 0);
+    let matches = match expected {
+        Some(expected) => collation == 0 || collation == expected,
+        None => collation == C_COLLATION || matches!(collation, 0 | 100),
+    };
+    if !matches {
+        return None;
+    }
+    key_operand(r, index, column)
+}
+
+/// [`key_test`] for a condition whose collation is the collation of ICU `collation`, or 0 for a collation that orders the strings as their bytes: the collation of the index must be the collation of ICU of the condition.
+fn key_test_in(
+    r: usize,
+    index: &Index,
+    column: usize,
+    collation: u32,
+) -> Option<impl Fn(&Expr) -> bool> {
+    if collation == 0 {
+        // A condition in a collation that orders the bytes cannot use an index in a collation of ICU.
+        let own = index.collations.get(column).copied().unwrap_or(0);
+        if !super::bytewise(own) && (index.column_collations.get(column) != Some(&own)) {
+            return None;
+        }
+        return key_test(r, index, column).map(|f| Box::new(f) as Box<dyn Fn(&Expr) -> bool>);
+    }
+    if index.collations.get(column) != Some(&collation) {
+        return None;
+    }
+    key_operand(r, index, column).map(|f| Box::new(f) as Box<dyn Fn(&Expr) -> bool>)
+}
+
+/// The test of [`key_test`] of an expression that is the key column `column`, with no test of the collation.
+fn key_operand(r: usize, index: &Index, column: usize) -> Option<impl Fn(&Expr) -> bool> {
     let attnum = *index.keys.get(column)?;
     let family = *index.families.get(column)?;
-    let collation = index.collations.get(column).copied().unwrap_or(0);
-    let name_collation = collation == C_COLLATION;
-    let expected = index.column_collations.get(column).copied().filter(|&c| c != 0);
-    if attnum < 0
-        || family == 0
-        || !match expected {
-            Some(expected) => collation == 0 || collation == expected,
-            None => name_collation || matches!(collation, 0 | 100),
-        }
-    {
+    let name_collation = index.collations.get(column) == Some(&C_COLLATION);
+    if attnum < 0 || family == 0 {
         return None;
     }
     let indexed = if attnum == 0 { Some(key_expr(index, r, column)?) } else { None };
@@ -1357,8 +1390,8 @@ fn array_of_values(element: u32, values: Vec<&Expr>) -> Expr {
     Expr::new(kind, array)
 }
 
-/// `match_pattern_prefix`: the clauses that the fixed prefix of a positive `LIKE`, `ILIKE`, regular expression or `^@` gives, with their strategies, when the column is on the left and the pattern is a constant. A pattern that is all prefix gives `=` of the prefix. Another prefix gives `>=` of the prefix and `<` of the next string after the prefix, when one exists. The default collation is C, so the bounds hold for each operator family. Each operator must be in the family of the column.
-fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
+/// `match_pattern_prefix`: the clauses that the fixed prefix of a positive `LIKE`, `ILIKE`, regular expression or `^@` gives, with their strategies, when the column is on the left and the pattern is a constant. A pattern that is all prefix gives `=` of the prefix. Another prefix gives `>=` of the prefix and `<` of the next string after the prefix, when one exists, when the index of the collation `collation` orders the strings as their bytes. Each operator must be in the family of the column.
+fn prefix_clauses(expr: &Expr, family: u32, collation: u32) -> Option<Vec<(Expr, i16)>> {
     let (op, left, right) = exprs::binary(expr)?;
     let (prefix, exact) = cost::operator_prefix(op, right)?;
     let pattern = family == TEXT_PATTERN_FAMILY
@@ -1394,6 +1427,10 @@ fn prefix_clauses(expr: &Expr, family: u32) -> Option<Vec<(Expr, i16)>> {
     // The spgist family of `text` tests a prefix with `^@`.
     if family == TEXT_SPGIST_FAMILY && left_ty == oid::TEXT {
         return Some(vec![make("^@", &prefix)?]);
+    }
+    // A range of a prefix holds only for an index that orders the strings as their bytes, `collate_is_c`, or for an operator class of patterns, which orders the bytes in any collation.
+    if !pattern && matches!(left_ty, oid::TEXT | oid::BPCHAR) && !super::bytewise(collation) {
+        return None;
     }
     let mut out = vec![make(greater_equal, &prefix)?];
     if let Some(greater) = cost::greater_bytes(&prefix, right_ty == oid::BYTEA)
@@ -1494,7 +1531,8 @@ fn order(
         let option = index.options.get(i).copied().unwrap_or(0);
         let desc = (option & DESC != 0) != backward;
         let nulls_first = (option & NULLS_FIRST != 0) != backward;
-        out.push(stats.order_key(&expr, desc, nulls_first));
+        let collation = index.collations.get(i).copied().unwrap_or(0);
+        out.push(stats.order_key(&expr, desc, nulls_first, collation));
     }
     out
 }
@@ -1506,11 +1544,11 @@ fn order_by(r: usize, index: &Index, stats: &Stats) -> (Vec<Expr>, Vec<OrderKey>
     if !matches!(index.method, GIST_AM | SPGIST_AM) {
         return (exprs, keys);
     }
-    for (expr, desc, nulls_first) in &stats.query {
+    for (expr, desc, nulls_first, collation) in &stats.query {
         if *desc || *nulls_first {
             break;
         }
-        let key = stats.order_key(expr, false, false);
+        let key = stats.order_key(expr, false, false, *collation);
         let found =
             key.exprs.iter().filter(|m| exprs::relations(m) == BTreeSet::from([r])).find_map(|m| {
                 (0..index.keys.len()).find_map(|column| ordering_op(r, index, column, m))

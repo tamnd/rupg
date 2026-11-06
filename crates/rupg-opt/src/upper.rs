@@ -250,6 +250,7 @@ fn sorted_order(keys: &[SortKey<'_>]) -> Vec<OrderKey> {
             exprs: vec![k.item.expr.as_ref().clone()],
             desc: k.desc,
             nulls_first: k.nulls_first,
+            collation: k.collation,
         })
         .collect()
 }
@@ -264,7 +265,7 @@ fn presorted(order: &[OrderKey], keys: &[SortKey<'_>]) -> (bool, usize) {
         if order[..at].iter().any(|o| o.exprs.iter().any(|e| e.same(&k.item.expr))) {
             continue;
         }
-        if !order.get(at).is_some_and(|o| o.sorts(&k.item.expr, k.desc, k.nulls_first)) {
+        if !order.get(at).is_some_and(|o| o.sorts(&k.item.expr, k.desc, k.nulls_first, k.collation)) {
             return (false, i);
         }
         at += 1;
@@ -2062,7 +2063,7 @@ fn reorder<'q>(
     let mut taken: Vec<usize> = Vec::new();
     for o in order.iter().take(group.len()) {
         let Some(at) = group.iter().enumerate().position(|(i, k)| {
-            !taken.contains(&i) && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first)
+            !taken.contains(&i) && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first, k.collation)
         }) else {
             break;
         };
@@ -3119,7 +3120,7 @@ fn useful_distinct_keys<'q>(
     for o in order {
         let Some(i) = (0..keys.len()).find(|&i| {
             let k = &keys[i];
-            !used[i] && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first)
+            !used[i] && k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first, k.collation)
         }) else {
             break;
         };

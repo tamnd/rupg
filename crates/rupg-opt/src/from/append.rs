@@ -6,11 +6,11 @@ use rupg_analyze::{Expr, ExprKind, FromItem, Query, Var};
 use rupg_plan::{Cost, Item, Kind, Node, SortKey};
 
 use super::paths::costs;
-use super::{OrderKey, Paths, Plans, Rel, Stats, simple_union_all};
+use super::{OrderKey, Paths, Plans, QueryKey, Rel, Stats, order_class, simple_union_all};
 use crate::{Builder, Level, cost, pullup, upper};
 
-/// A key of an order by the place of a column of the append relation, with its directions.
-type Key = (usize, bool, bool);
+/// A key of an order by the place of a column of the append relation, with its directions and its collation.
+type Key = (usize, bool, bool, u32);
 
 /// The keys of the order of the rows that the query above an append relation can use, by the places of the columns of the relation, as `add_child_rel_equivalences` makes the equivalence classes of the query hold the columns of each member.
 #[derive(Clone, Debug)]
@@ -66,7 +66,7 @@ fn places(order: &[OrderKey], leaf: &Query) -> Vec<Key> {
         .iter()
         .map_while(|k| {
             let p = leaf.targets.iter().position(|t| k.exprs.iter().any(|e| e.same(&t.expr)))?;
-            Some((p, k.desc, k.nulls_first))
+            Some((p, k.desc, k.nulls_first, order_class(k.collation)))
         })
         .collect()
 }
@@ -107,8 +107,8 @@ impl ChildKeys {
         let used = (1..=sub.targets.len())
             .map(|at| columns.iter().any(|&c| c == 0 || usize::try_from(c).ok() == Some(at)))
             .collect();
-        let key = |(e, desc, nulls_first): &(Expr, bool, bool)| {
-            place(e, r, stats).map(|p| (p, *desc, *nulls_first))
+        let key = |(e, desc, nulls_first, collation): &QueryKey| {
+            place(e, r, stats).map(|p| (p, *desc, *nulls_first, order_class(*collation)))
         };
         let sort = stats.sort.iter().map_while(key).collect();
         let groups = stats.groups.iter().map(|g| g.iter().filter_map(key).collect()).collect();
@@ -131,9 +131,9 @@ impl ChildKeys {
     /// Gives the estimates of a member the keys of the query above, with the targets of the member in place of the columns of the relation, so that `truncate_useless_pathkeys` keeps the plans of the member in those orders.
     pub(crate) fn apply(&self, level: &Level<'_>, stats: &mut Stats) {
         let targets = &level.query.targets;
-        let exprs = |keys: &[Key]| -> Vec<(Expr, bool, bool)> {
+        let exprs = |keys: &[Key]| -> Vec<QueryKey> {
             keys.iter()
-                .filter_map(|&(p, desc, nf)| Some((targets.get(p)?.expr.clone(), desc, nf)))
+                .filter_map(|&(p, desc, nf, c)| Some((targets.get(p)?.expr.clone(), desc, nf, c)))
                 .collect()
         };
         stats.sort = stats.canonical(exprs(&self.sort), |k| &k.0);
@@ -244,12 +244,12 @@ impl<'q> AppendRel<'q> {
     ) -> Rel<'q> {
         let sort_keys = |leaf: &'q Query| -> Vec<SortKey<'q>> {
             keys.iter()
-                .map(|&(p, desc, nulls_first)| SortKey {
+                .map(|&(p, desc, nulls_first, collation)| SortKey {
                     item: Item::below(&leaf.targets[p].expr),
                     desc,
                     using: None,
                     nulls_first,
-                    collation: 0,
+                    collation,
                 })
                 .collect()
         };
@@ -289,7 +289,7 @@ impl<'q> AppendRel<'q> {
         let columns = &level.query.relations[r].columns;
         let order = keys
             .iter()
-            .map(|&(p, desc, nulls_first)| {
+            .map(|&(p, desc, nulls_first, collation)| {
                 let attnum = i16::try_from(p + 1).unwrap_or(i16::MAX);
                 let mut expr =
                     Expr::new(ExprKind::Var(Var { relation: r, attnum, levels_up: 0 }), 0);
@@ -297,7 +297,7 @@ impl<'q> AppendRel<'q> {
                     expr.ty = c.ty;
                     expr.typmod = c.typmod;
                 }
-                stats.order_key(&expr, desc, nulls_first)
+                stats.order_key(&expr, desc, nulls_first, collation)
             })
             .collect();
         Rel { node, rels: seq.rels.clone(), order }
