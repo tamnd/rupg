@@ -667,7 +667,7 @@ impl Definer<'_, '_> {
             && ty != 0
         {
             let at = place(coll.location);
-            self.an.collation_oid(&coll.collname, at)?;
+            self.an.column_collation_oid(&coll.collname, at)?;
             if !types::collatable(ty) {
                 return Err(Error::new(
                     SqlState::DATATYPE_MISMATCH,
@@ -1080,7 +1080,7 @@ impl Definer<'_, '_> {
             ));
         }
         let collation = match &column.collate {
-            Some(coll) => self.an.collation_oid(&coll.collname, None)?,
+            Some(coll) => self.an.column_collation_oid(&coll.collname, None)?,
             None if column.collation != 0 => column.collation,
             None => types::row(ty).map_or(0, |t| t.collation),
         };
