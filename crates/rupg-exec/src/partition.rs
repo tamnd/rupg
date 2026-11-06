@@ -335,7 +335,9 @@ impl Dispatch {
                         let hit = match (datum, value) {
                             (None, Value::Null) => true,
                             (None, _) | (Some(_), Value::Null) => false,
-                            (Some(datum), value) => self.compare(0, datum, value)? == Ordering::Equal,
+                            (Some(datum), value) => {
+                                self.compare(0, datum, value)? == Ordering::Equal
+                            }
                         };
                         if hit {
                             found = Some(part);

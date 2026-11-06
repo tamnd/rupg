@@ -837,7 +837,9 @@ impl Definer<'_, '_> {
                             PartitionBound::Hash { modulus: mb, remainder: rb },
                         ) => (ma, ra).cmp(&(mb, rb)),
                         _ => match (&prev.least, &item.least, &prev.lower, &item.lower) {
-                            (Some(a), Some(b), _, _) => self.an.env.compare_in(ty, a, b, collation)?,
+                            (Some(a), Some(b), _, _) => {
+                                self.an.env.compare_in(ty, a, b, collation)?
+                            }
                             (_, _, Some(a), Some(b)) => self.rbound_cmp(&types, a, b)?.cmp(&0),
                             _ => Ordering::Equal,
                         },

@@ -73,7 +73,10 @@ pub(crate) fn simple(query: &Query) -> bool {
 pub(crate) fn ordered(order: &[OrderKey], keys: &[QueryKey]) -> bool {
     !keys.is_empty()
         && order.len() >= keys.len()
-        && order.iter().zip(keys).all(|(k, (e, desc, nulls_first, c))| k.sorts(e, *desc, *nulls_first, *c))
+        && order
+            .iter()
+            .zip(keys)
+            .all(|(k, (e, desc, nulls_first, c))| k.sorts(e, *desc, *nulls_first, *c))
 }
 
 /// The number of groups of the rows of a `SELECT` of a side, as `build_setop_child_paths` gives it: the rows of a `SELECT` with groups, and else `estimate_num_groups` of its columns.

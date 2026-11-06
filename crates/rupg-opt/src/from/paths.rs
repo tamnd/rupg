@@ -258,8 +258,7 @@ fn compare_costs(a: (f64, f64), b: (f64, f64), fuzz: f64, startup: (bool, bool))
 
 /// `compare_pathkeys`: the order of a plan is better when the order of the other plan is the first keys of it.
 fn compare_keys(a: &[OrderKey], b: &[OrderKey]) -> Compare {
-    let same =
-        |x: &OrderKey, y: &OrderKey| {
+    let same = |x: &OrderKey, y: &OrderKey| {
         x.exprs.iter().any(|e| y.sorts(e, x.desc, x.nulls_first, x.collation))
     };
     if a.iter().zip(b).any(|(x, y)| !same(x, y)) {

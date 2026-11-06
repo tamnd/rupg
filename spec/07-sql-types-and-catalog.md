@@ -90,7 +90,7 @@ PostgreSQL has three collation providers: `libc`, which uses the operating syste
 
 **builtin.** rupg implements the builtin provider exactly. `C` and `POSIX` compare bytes. `C.UTF-8` compares code points and uses simple case mapping. `PG_UNICODE_FAST` compares code points and uses full case mapping, so `upper('ß')` is `SS`. The data comes from the Unicode 17.0 files that the pin vendors, and the build generates the tables with the scripts of the pin.
 
-**icu.** rupg implements the ICU provider with ICU4X, the Rust implementation of the Unicode collation algorithm with CLDR data. The oracle uses ICU4C. Both use the root collation of CLDR and the same tailorings for the same CLDR version, so the order of strings should be the same. That is a prediction. `rupg-compat` tests it with the collation tests of the regression suite and with a corpus of sorted strings in every locale that `initdb` imports on the oracle host. A locale where the order differs is listed and published. The CLDR version of rupg must equal the CLDR version of the ICU that the oracle links, and `rupg-compat` records both.
+**icu.** rupg implements the ICU provider with ICU4X, the Rust implementation of the Unicode collation algorithm with CLDR data. The oracle uses ICU4C. Both use the root collation of CLDR and the same tailorings for the same CLDR version, so rupg reads the collation data of the ICU that the oracle links, ICU 74 with CLDR 44.1, and not the later CLDR that ICU4X compiles in. The corpus test of `rupg-func` sorts a corpus of strings in every locale that `initdb` imports on the oracle host and compares with the oracle. Document 24 Q18 lists the two known differences: strings that are not in FCD, and four Indic contractions that ICU4X does not match.
 
 **libc.** rupg cannot reproduce the collation of every C library. A database or column with provider `libc` and a locale other than `C` or `POSIX` uses the ICU collation of the same language and region, and `pg_collation` shows the provider and the locale that the user gave. This is a known difference for strings where glibc and CLDR disagree. Document 24 holds it as open question 7.B.
 
@@ -343,7 +343,7 @@ A function is tested in four ways. The regression suite calls it as part of L3. 
 
 ## 7.20 Open questions from this document
 
-7.A. Is ICU4X's collation order equal to the ICU4C order of the oracle for every locale that `initdb` imports? Section 7.7 predicts yes for the same CLDR version. The corpus test decides.
+7.A. Is ICU4X's collation order equal to the ICU4C order of the oracle for every locale that `initdb` imports? Closed at M3 by document 24 Q18: yes with the collation data of ICU 74, except for strings that are not in FCD and four Indic contractions.
 
 7.B. How should rupg handle `libc` collations other than `C` and `POSIX`? Section 7.7 maps them to ICU. The alternative is to read the collation data of the C library on the host, which is not possible on every platform and not in WebAssembly.
 

@@ -71,8 +71,13 @@ libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["v
 # sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
 hmac = "0.13"
 icu_casemap = "2.3"
-icu_collator = "2.3"
+icu_collator = { version = "2.3", features = ["serde"] }
 icu_locale_core = "2.3"
+icu_locale_fallback = { version = "2.3", features = ["serde"] }
+icu_normalizer = "2.3"
+icu_provider = { version = "2.3", features = ["serde", "sync"] }
+icu_provider_adapters = "2.3"
+icu_provider_blob = "2.3"
 icu_properties = "2.3"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 md-5 = "0.11"

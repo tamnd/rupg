@@ -5,3 +5,4 @@
 *.rupg
 *.rupg-journal
 .DS_Store
+/crates/rupg-func/icu74/target
