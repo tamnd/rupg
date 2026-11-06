@@ -574,3 +574,35 @@ row 23,1200,23
 SELECT 250
 > RESET max_parallel_workers_per_gather
 RESET
+> CREATE TABLE gk (a smallint, b int, d date, c int)
+CREATE TABLE
+> INSERT INTO gk SELECT CASE WHEN i % 17 = 0 THEN NULL ELSE i % 301 - 150 END, i % 997 - 498, CASE WHEN i % 19 = 0 THEN NULL ELSE date '1990-01-01' + (i % 503 - 250) END, i FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gk
+ANALYZE
+> SELECT a, d, count(*), min(c) FROM gk GROUP BY a, d ORDER BY a, d LIMIT 4
+fields a@gk.1:21:2:-1,d@gk.3:1082:4:-1,count:20:8:-1,min:23:4:-1
+row -150,1989-04-26,1,151403
+row -150,1989-04-27,2,113176
+row -150,1989-04-28,2,74949
+row -150,1989-04-29,2,36722
+SELECT 4
+> SELECT a, d, count(*), max(c) FROM gk GROUP BY a, d ORDER BY a DESC, d DESC LIMIT 4
+fields a@gk.1:21:2:-1,d@gk.3:1082:4:-1,count:20:8:-1,max:23:4:-1
+row NULL,NULL,928,299744
+row NULL,1990-09-10,33,296769
+row NULL,1990-09-09,33,285702
+row NULL,1990-09-08,33,291737
+SELECT 4
+> SELECT b, count(*), min(c) FROM gk GROUP BY b ORDER BY b LIMIT 3
+fields b@gk.2:23:4:-1,count:20:8:-1,min:23:4:-1
+row -498,300,997
+row -497,301,1
+row -496,301,2
+SELECT 3
+> SELECT b, a, count(*) FROM gk WHERE c > 1000 GROUP BY b, a ORDER BY b DESC, a NULLS FIRST LIMIT 3
+fields b@gk.2:23:4:-1,a@gk.1:21:2:-1,count:20:8:-1
+row 498,NULL,17
+row 498,-150,1
+row 498,-148,1
+SELECT 3
