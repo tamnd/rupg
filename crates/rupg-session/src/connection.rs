@@ -4354,6 +4354,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/text_filter_tasks.test")));
     }
 
+    /// The tasks of the server test `LIKE`, `NOT LIKE`, `ILIKE` and `NOT ILIKE` of a text column of codes against a constant pattern on a set of the codes that pass, with the result of Postgres for a null, an empty text, a null pattern, a text of a later insert, a parameter, more conditions, groups, a top and a pattern with an error.
+    #[test]
+    fn code_likes_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/code_likes_tasks.test")));
+    }
+
     /// The tasks of the server find the top of a vector scan with `ORDER BY` and `LIMIT` when each target is a key, with the order of Postgres for nulls first and last, `DESC`, empty texts, timestamps, more keys, a filter, `OFFSET` and a top that the tasks do not find.
     #[test]
     fn top_tasks() {

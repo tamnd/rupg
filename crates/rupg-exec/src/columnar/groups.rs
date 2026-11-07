@@ -9,7 +9,7 @@ use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::Result;
 use rupg_kernels::hash::prefetch;
 use rupg_platform::{Job, Tasks};
-use rupg_summary::zone::{Test, Verdict};
+use rupg_summary::zone::{Test, Verdict, has_code};
 
 use super::{Decoded, DecodedData, FxMap, WordTable, decode, passes};
 
@@ -738,6 +738,9 @@ pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
                 let values: Vec<i64> = keys.iter().map(c).collect();
                 compare(v, n, sel, |x| values.contains(&x));
             }
+            Test::Codes(bits) => {
+                compare(v, n, sel, |x| u64::try_from(x).is_ok_and(|x| has_code(bits, x)));
+            }
             Test::IsNull | Test::IsNotNull => {}
         },
         // The test of a text is on its code, which the zones test gives as an integer. A code that does not fit is the code of no row.
@@ -750,6 +753,7 @@ pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
                 Ok(k) => compare(v, n, sel, |x| x != k),
                 Err(_) => compare(v, n, sel, |_| true),
             },
+            Test::Codes(bits) => compare(v, n, sel, |x| has_code(bits, u64::from(x))),
             _ => retain(sel, |i| passes(test, null(d, i), int(d, i))),
         },
         DecodedData::Float(_) => retain(sel, |i| passes(test, null(d, i), int(d, i))),

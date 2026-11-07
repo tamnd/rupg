@@ -15,7 +15,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
-use rupg_summary::zone::{Test, Verdict, Zone};
+use rupg_summary::zone::{Test, Verdict, Zone, has_code};
 use rupg_types::{Numeric, Value, oid};
 
 use crate::agg;
@@ -2356,7 +2356,7 @@ fn tasks_top(
         return Ok(None);
     }
     let Some(filters) =
-        scan.conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()
+        scan.conds.iter().map(|cond| task_test(exec, tasks, cond)).collect::<Option<Vec<_>>>()
     else {
         return Ok(None);
     };
@@ -2790,6 +2790,7 @@ fn passes(test: &Test, null: bool, value: i64) -> bool {
         Test::Gt(c) => key > *c,
         Test::Ge(c) => key >= *c,
         Test::In(cs) => cs.contains(&key),
+        Test::Codes(bits) => u64::try_from(value).is_ok_and(|c| has_code(bits, c)),
     }
 }
 
@@ -2813,8 +2814,20 @@ impl Scan<'_, '_> {
         }
         let mut sel: Vec<u32> = Vec::with_capacity(VECTOR);
         let mut next: Vec<u32> = Vec::with_capacity(VECTOR);
-        let tests: Vec<Option<(usize, Test)>> =
-            self.conds.iter().map(|cond| self.exec.zone_test(cond)).collect();
+        // On a large table the tasks find the codes that pass a `LIKE`, and the scan then tests a bit for each row.
+        let tasks = self
+            .exec
+            .session
+            .tasks()
+            .filter(|t| t.parallelism() >= 2 && self.rows >= 2 * groups::TASK_ROWS);
+        let tests: Vec<Option<(usize, Test)>> = self
+            .conds
+            .iter()
+            .map(|cond| match tasks {
+                Some(tasks) => task_test(self.exec, tasks, cond),
+                None => self.exec.zone_test(cond),
+            })
+            .collect();
         let mut verdicts = vec![Verdict::Some; tests.len()];
         let mut whole = vec![Verdict::Some; tests.len()];
         for segment in 0..self.segments {
@@ -3169,15 +3182,7 @@ fn grouped(
                 None => None,
             };
             let plan = if many || lead.is_some() {
-                parallel_plan(
-                    scan.exec,
-                    &keys,
-                    &aggs,
-                    &bases,
-                    scan.conds,
-                    rows,
-                    tasks.parallelism(),
-                )
+                parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks)
             } else {
                 None
             };
@@ -3250,7 +3255,7 @@ fn grouped(
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
         && let Some((plan, derived)) =
-            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks.parallelism())
+            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks)
         && derived.iter().all(Option::is_none)
     {
         session.interrupted()?;
@@ -3275,7 +3280,7 @@ fn grouped(
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
         && let Some((plan, derived)) =
-            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks.parallelism())
+            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks)
         && derived.iter().all(Option::is_none)
     {
         session.interrupted()?;
@@ -3978,9 +3983,9 @@ fn parallel_plan(
     bases: &[Base<'_>],
     conds: &[&Expr],
     rows: usize,
-    parallelism: usize,
+    tasks: &dyn Tasks,
 ) -> Option<(groups::Plan, Vec<Option<Derived>>)> {
-    if parallelism < 2 || rows < 2 * groups::TASK_ROWS {
+    if tasks.parallelism() < 2 || rows < 2 * groups::TASK_ROWS {
         return None;
     }
     let place = |expr: &Expr| place_of(exec, expr);
@@ -4067,8 +4072,95 @@ fn parallel_plan(
     for base in bases {
         folds.push(groups::Fold::Sum(int_place(base.var)?));
     }
-    let filters = conds.iter().map(|cond| exec.zone_test(cond)).collect::<Option<Vec<_>>>()?;
+    let filters =
+        conds.iter().map(|cond| task_test(exec, tasks, cond)).collect::<Option<Vec<_>>>()?;
     Some((groups::Plan { keys, folds, bases: bases.len(), filters }, derived))
+}
+
+/// The test of the tasks for the condition `cond`: the test of the zones of [`Exec::zone_test`], or else the set of codes of [`code_test`].
+fn task_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, Test)> {
+    exec.zone_test(cond).or_else(|| code_test(exec, tasks, cond))
+}
+
+/// The number of the words of the set of codes that one task of [`code_test`] fills, which is 16384 codes.
+const CODE_WORDS: usize = 256;
+
+/// `x LIKE p`, `x NOT LIKE p`, `x ILIKE p` and `x NOT ILIKE p` for a stored text column `x` of codes and a constant text `p`, as a [`Test::Codes`] of the codes whose text passes. The tasks test each text of the dictionary once, which is the work of a scan of [`Exec::like`] with each code in its rows, and the scan then tests only a bit for each row. A pattern that gives an error for a text gives `None`, so that the scan of the rows gives the error as the row engine does.
+fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, Test)> {
+    let ExprKind::Func(func) = &cond.kind else { return None };
+    let source = src(func.oid);
+    if func.retset || !matches!(source, "textlike" | "textnlike" | "texticlike" | "texticnlike") {
+        return None;
+    }
+    let [a, b] = func.args.as_slice() else { return None };
+    let place = match &a.kind {
+        ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
+            place_of(exec, a).filter(|&p| p < exec.stored.len())?
+        }
+        _ => return None,
+    };
+    let stored = &exec.stored[place];
+    if stored.kind != Kind::Text || stored.kind.store() != Store::Code {
+        return None;
+    }
+    let pattern = match &b.kind {
+        ExprKind::Const(value) => value,
+        ExprKind::Param(n) => exec.params.get(n.wrapping_sub(1))?,
+        _ => return None,
+    };
+    let pattern = match pattern {
+        Value::Text(p) => p.as_bytes(),
+        // A null pattern gives null for each row, which no row passes.
+        Value::Null => return Some((place, Test::Codes(Arc::from([])))),
+        _ => return None,
+    };
+    let fold = matches!(source, "texticlike" | "texticnlike");
+    let negate = matches!(source, "textnlike" | "texticnlike");
+    let pattern = if fold { pattern.to_ascii_lowercase() } else { pattern.to_vec() };
+    let dict = stored.dict.as_ref()?;
+    // The bit of the code `c` is the bit `c % 64` of the word `c / 64`, and the code 0 is the code of no text.
+    let codes = dict.len();
+    let mut bits = vec![0u64; codes / 64 + 1];
+    let mut failed = vec![false; bits.len().div_ceil(CODE_WORDS)];
+    let pattern = &pattern[..];
+    let jobs: Vec<Job<'_>> = bits
+        .chunks_mut(CODE_WORDS)
+        .zip(failed.iter_mut())
+        .enumerate()
+        .map(|(n, (words, failed))| {
+            Box::new(move || {
+                let first = n * CODE_WORDS * 64;
+                let mut folded = Vec::new();
+                for (w, word) in words.iter_mut().enumerate() {
+                    for bit in 0..64 {
+                        let code = first + w * 64 + bit;
+                        if code == 0 || code > codes {
+                            continue;
+                        }
+                        let Ok(code) = u32::try_from(code) else { continue };
+                        let text = dict.get(code);
+                        let text = if fold {
+                            folded.clear();
+                            folded.extend(text.iter().map(u8::to_ascii_lowercase));
+                            &folded[..]
+                        } else {
+                            text
+                        };
+                        let Ok(found) = rupg_func::like_text(text, pattern) else {
+                            *failed = true;
+                            return;
+                        };
+                        *word |= u64::from(found != negate) << bit;
+                    }
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(jobs);
+    if failed.contains(&true) {
+        return None;
+    }
+    Some((place, Test::Codes(Arc::from(bits))))
 }
 
 /// The key of [`groups::run`] for `CASE WHEN tests THEN column ELSE constant END`, where each test is a test that the zones read, the column has integers or codes, and the constant is null, an integer, or a text in the dictionary of the column.
