@@ -4330,6 +4330,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/group_tasks.test")));
     }
 
+    /// `ORDER BY` of a count with `LIMIT` and `OFFSET` over fewer than four times the groups of the limit gives the groups of the sort of Postgres for equal counts, with no parallel plan, whose order of the groups depends on the workers: the radix sort of the counts for less than two times the groups, a bounded heap above, no row after the last group, a text key, and a plan that sorts the groups.
+    #[test]
+    fn count_top_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/count_top.test")));
+    }
+
     /// The tasks of the server fold the rows of an aggregate with no `GROUP BY` at the same time, and give one row also when no row passes the conditions.
     #[test]
     fn group_none_tasks() {

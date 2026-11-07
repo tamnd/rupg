@@ -251,7 +251,10 @@ pub(crate) fn compute(
             wanted.len() <= current.len() && wanted.iter().zip(&current).all(|(a, b)| same(a, b));
         if !sorted {
             let keys = sort::Keys::new(&wanted, &types, session)?;
-            sort::qsort(&mut order, &mut |a, b| keys.compare(&rows[*a], &rows[*b]))?;
+            let mut tagged: Vec<(usize, &[Value])> =
+                order.iter().map(|&a| (a, rows[a].as_slice())).collect();
+            keys.sort(&mut tagged, |t| t.1)?;
+            order = tagged.into_iter().map(|t| t.0).collect();
             current = wanted;
         }
         let partition = sort::Keys::new(&window.partition, &types, session)?;
