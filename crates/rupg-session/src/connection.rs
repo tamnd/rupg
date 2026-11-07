@@ -4390,6 +4390,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/top_groups_tasks.test")));
     }
 
+    /// The tasks of the server give only the groups that can change the bounded heap of `ORDER BY` of one count with `LIMIT`, when the hash table of the plan spills and its groups go in the order of their first rows, and the counts at the end of the heap are equal: in both orders, with `OFFSET`, a filter, other aggregates and `count` of a column. The rows are the rows of the scan with no tasks, which reads all the groups.
+    #[test]
+    fn heap_groups_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/heap_groups_tasks.test")));
+    }
+
     /// The tasks of the server find the first groups of a vector scan with `LIMIT` and no sort, whose groups go in the order of a sort of their keys, from the rows whose first key is not more than the first key of the last group of the limit: with `OFFSET`, a filter, a key of an expression, nulls of the first key, fewer values of the first key than the limit, and groups of a hash table or a first key of floats, which read each row.
     #[test]
     fn limit_groups_tasks() {

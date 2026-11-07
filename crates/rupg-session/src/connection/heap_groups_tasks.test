@@ -1,0 +1,90 @@
+> CREATE TABLE th (a int, b int)
+CREATE TABLE
+> INSERT INTO th SELECT i, i % 3 FROM generate_series(1, 200000) i
+INSERT 0 200000
+> INSERT INTO th SELECT (j * 7919) % 200000 + 1, ((j * 7919) % 200000 + 1) % 3 FROM generate_series(1, 3000) j
+INSERT 0 3000
+> INSERT INTO th SELECT (j * 104729) % 200000 + 1, ((j * 104729) % 200000 + 1) % 3 FROM generate_series(1, 30) j
+INSERT 0 30
+> ANALYZE th
+ANALYZE
+> SELECT a, b, count(*) FROM th GROUP BY a, b ORDER BY count(*) DESC LIMIT 10
+fields a@th.1:23:4:-1,b@th.2:23:4:-1,count:20:8:-1
+row 431,2,2
+row 646,1,2
+row 216,0,2
+row 397,1,2
+row 578,2,2
+row 612,0,2
+row 35,2,2
+row 69,0,2
+row 250,1,2
+row 759,0,2
+SELECT 10
+> SELECT a, b, count(*) FROM th GROUP BY a, b ORDER BY count(*) DESC LIMIT 40
+fields a@th.1:23:4:-1,b@th.2:23:4:-1,count:20:8:-1
+row 1551,0,2
+row 2671,1,2
+row 1008,0,2
+row 1517,2,2
+row 2060,2,2
+row 2637,0,2
+row 578,2,2
+row 974,2,2
+row 1302,0,2
+row 1483,1,2
+row 1732,1,2
+row 1913,2,2
+row 2275,1,2
+row 2603,2,2
+row 250,1,2
+row 431,2,2
+row 759,0,2
+row 940,1,2
+row 1155,0,2
+row 1189,1,2
+row 1336,1,2
+row 1370,2,2
+row 1664,2,2
+row 1698,0,2
+row 1845,0,2
+row 1879,1,2
+row 2094,0,2
+row 2241,0,2
+row 2422,1,2
+row 2456,2,2
+row 69,0,2
+row 216,0,2
+row 397,1,2
+row 35,2,2
+row 612,0,2
+row 646,1,2
+row 793,1,2
+row 827,2,2
+row 1121,2,2
+row 2784,0,2
+SELECT 40
+> SELECT a, count(*), sum(b) FROM th GROUP BY a ORDER BY count(*) LIMIT 5
+fields a@th.1:23:4:-1,count:20:8:-1,sum:20:8:-1
+row 2,1,2
+row 3,1,0
+row 4,1,1
+row 5,1,2
+row 1,1,1
+SELECT 5
+> SELECT a, count(*) FROM th GROUP BY a ORDER BY count(*) DESC LIMIT 4 OFFSET 30
+fields a@th.1:23:4:-1,count:20:8:-1
+row 35,2
+row 69,2
+row 250,2
+row 2275,2
+SELECT 4
+> SELECT a, b, count(b) FROM th WHERE a > 1000 GROUP BY a, b ORDER BY 3 DESC LIMIT 6
+fields a@th.1:23:4:-1,b@th.2:23:4:-1,count:20:8:-1
+row 1155,0,2
+row 1302,0,2
+row 1008,0,2
+row 1121,2,2
+row 1189,1,2
+row 1336,1,2
+SELECT 6

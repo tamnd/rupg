@@ -236,6 +236,8 @@ pub(super) struct Found {
     pub(super) extremes: Vec<Option<(i64, i64)>>,
     /// True when the last row of the scan is not the first row of its group.
     pub(super) trailing: bool,
+    /// True when the groups are only the groups that can change the bounded heap of the sort of [`Top`], in the order of their first rows, which [`heap_groups`] gives.
+    pub(super) heap: bool,
 }
 
 impl Found {
@@ -1057,6 +1059,7 @@ pub(super) fn distinct_groups(
         states: (0..calls).map(|_| Folded::Count(found_counts.clone())).collect(),
         extremes: Vec::new(),
         trailing,
+        heap: false,
     }))
 }
 
@@ -1388,6 +1391,37 @@ pub(super) struct Top {
     pub(super) descending: bool,
     pub(super) bound: usize,
     pub(super) ranges: Vec<(usize, i128, i128)>,
+    /// The order of the groups is the order of their first rows for more groups than this, as for a hash table that spills, which [`heap_groups`] reads.
+    pub(super) spill: Option<usize>,
+}
+
+/// True when the value of each key of `part` that a derived key reads is in its range of `top.ranges`.
+fn fits(part: &Buf, pack: &Pack, top: &Top) -> bool {
+    top.ranges.iter().all(|&(k, lo, hi)| {
+        part.keys.chunks_exact(pack.width).all(|packed| {
+            pack.value(packed, k).is_none_or(|v| (lo..=hi).contains(&i128::from(v as i64)))
+        })
+    })
+}
+
+/// The groups `chosen` of the parts `parts`, each a part and a place in the part, in the order of `chosen`.
+fn gather(
+    parts: &[Buf],
+    plan: &Plan,
+    pack: &Pack,
+    chosen: impl Iterator<Item = (u32, u32)>,
+) -> Buf {
+    let mut words = [0_u64; 8];
+    let mut out = Buf::new(&plan.folds, plan.keys.len() + 1);
+    for (p, g) in chosen {
+        let (part, g) = (&parts[p as usize], g as usize);
+        pack.unpack(&part.keys[g * pack.width..(g + 1) * pack.width], &mut words);
+        out.push(&words, part.firsts[g]);
+        for (to, from) in out.states.iter_mut().zip(&part.states) {
+            to.take(from, g);
+        }
+    }
+    out
 }
 
 /// The groups of the first `top.bound` counts of the parts `parts`, in the order of their first rows, when the first `top.bound` counts in the order of the sort and the count after them are all different. The bounded heap of the sort then keeps these groups for each order of the groups, as `distinct_top` of the scan finds them. The parts have different keys, so the count of each group is in one part. `None` when two of these counts are equal, for few groups, or when the value of a key of a group is out of `top.ranges`, so that the order of all the groups gives the error of the derived key.
@@ -1406,8 +1440,6 @@ fn top_groups(
     if groups <= top.bound.saturating_mul(4) {
         return None;
     }
-    let width = plan.keys.len() + 1;
-    let mut words = [0_u64; 8];
     // A larger rank is first in the sort. The heap has the first `bound + 1` ranks, with the last of them at its top.
     let rank = |c: i64| if top.descending { i128::from(c) } else { -i128::from(c) };
     let mut best: BinaryHeap<Reverse<(i128, u32, u32)>> = BinaryHeap::with_capacity(top.bound + 2);
@@ -1423,14 +1455,8 @@ fn top_groups(
                 best.push(Reverse((r, p as u32, g as u32)));
             }
         }
-        for &(k, lo, hi) in &top.ranges {
-            for packed in part.keys.chunks_exact(pack.width) {
-                if let Some(v) = pack.value(packed, k)
-                    && (i128::from(v as i64) < lo || i128::from(v as i64) > hi)
-                {
-                    return None;
-                }
-            }
+        if !fits(part, pack, top) {
+            return None;
         }
         most = most.max(part.firsts.iter().max().copied());
     }
@@ -1441,15 +1467,7 @@ fn top_groups(
     }
     best.truncate(top.bound);
     best.sort_unstable_by_key(|&(_, p, g)| parts[p as usize].firsts[g as usize]);
-    let mut out = Buf::new(&plan.folds, width);
-    for &(_, p, g) in &best {
-        let (part, g) = (&parts[p as usize], g as usize);
-        pack.unpack(&part.keys[g * pack.width..(g + 1) * pack.width], &mut words);
-        out.push(&words, part.firsts[g]);
-        for (to, from) in out.states.iter_mut().zip(&part.states) {
-            to.take(from, g);
-        }
-    }
+    let out = gather(parts, plan, pack, best.iter().map(|&(_, p, g)| (p, g)));
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && most != last;
     Some(Found {
@@ -1458,6 +1476,68 @@ fn top_groups(
         states: out.states,
         extremes: extremes.to_vec(),
         trailing,
+        heap: false,
+    })
+}
+
+/// The groups of the parts `parts` that can change the bounded heap of the sort of `top`, in the order of their first rows, when the order of all the groups is the order of their first rows: for more than `top.spill` groups. The heap takes the first `top.bound` groups of the order, and then keeps a group only when its count comes before the count at its top. That count only moves forward from the last count of the first `top.bound` groups, so a later group whose count does not come before that count changes nothing. `None` for few groups, for another order of the groups, or when the value of a key of a group is out of `top.ranges`, as for [`top_groups`].
+fn heap_groups(
+    parts: &[Buf],
+    plan: &Plan,
+    pack: &Pack,
+    top: &Top,
+    last: Option<u64>,
+    extremes: &[Option<(i64, i64)>],
+) -> Option<Found> {
+    if !matches!(plan.folds.get(top.fold), Some(Fold::Count | Fold::CountArg(_))) {
+        return None;
+    }
+    let groups: usize = parts.iter().map(Buf::len).sum();
+    if top.bound == 0 || groups <= top.spill? || groups <= top.bound.saturating_mul(4) {
+        return None;
+    }
+    // A larger rank is first in the sort.
+    let rank = |c: i64| if top.descending { i128::from(c) } else { -i128::from(c) };
+    // The first `bound` groups by their first rows, with the last of them at the top of the heap.
+    let mut first: BinaryHeap<(u64, i128)> = BinaryHeap::with_capacity(top.bound + 1);
+    for part in parts {
+        let Folded::Count(counts) = &part.states[top.fold] else { return None };
+        if !fits(part, pack, top) {
+            return None;
+        }
+        for (&f, &c) in part.firsts.iter().zip(counts) {
+            if first.len() < top.bound {
+                first.push((f, rank(c)));
+            } else if first.peek().is_some_and(|t| f < t.0) {
+                first.pop();
+                first.push((f, rank(c)));
+            }
+        }
+    }
+    let edge = first.peek()?.0;
+    let least = first.iter().map(|t| t.1).min()?;
+    let mut chosen: Vec<(u64, u32, u32)> = Vec::new();
+    let mut most = None;
+    for (p, part) in parts.iter().enumerate() {
+        let Folded::Count(counts) = &part.states[top.fold] else { return None };
+        for (g, (&f, &c)) in part.firsts.iter().zip(counts).enumerate() {
+            if f <= edge || rank(c) > least {
+                chosen.push((f, p as u32, g as u32));
+            }
+        }
+        most = most.max(part.firsts.iter().max().copied());
+    }
+    chosen.sort_unstable_by_key(|c| c.0);
+    let out = gather(parts, plan, pack, chosen.into_iter().map(|(_, p, g)| (p, g)));
+    // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
+    let trailing = last.is_some() && most != last;
+    Some(Found {
+        words: out.keys,
+        firsts: out.firsts,
+        states: out.states,
+        extremes: extremes.to_vec(),
+        trailing,
+        heap: true,
     })
 }
 
@@ -1495,6 +1575,7 @@ pub(super) fn run(
             states: plan.folds.iter().map(|&f| Folded::of(f)).collect(),
             extremes: vec![None; plan.bases],
             trailing: false,
+            heap: false,
         });
     }
     let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
@@ -1561,6 +1642,12 @@ pub(super) fn run(
     tasks.run_all(work);
     let parts: Vec<Buf> = parts.into_iter().flatten().collect();
     if let Some(found) = top.and_then(|top| top_groups(&parts, plan, &pack, top, last, &extremes)) {
+        return Ok(found);
+    }
+    if ordered
+        && let Some(found) =
+            top.and_then(|top| heap_groups(&parts, plan, &pack, top, last, &extremes))
+    {
         return Ok(found);
     }
     let groups: usize = parts.iter().map(Buf::len).sum();
@@ -1657,7 +1744,7 @@ pub(super) fn run(
     tasks.run_all(work);
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && firsts.iter().max() != last.as_ref();
-    Ok(Found { words, firsts, states, extremes, trailing })
+    Ok(Found { words, firsts, states, extremes, trailing, heap: false })
 }
 
 /// The part and the place in the part of each group of `parts`, in the order of their first rows of the `rows` rows of the scan. The place of each group is the number of first rows before its first row, which a map of the first rows gives.
