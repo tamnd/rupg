@@ -195,7 +195,7 @@ pub(super) struct Plan {
     pub(super) filters: Vec<(usize, Test)>,
 }
 
-/// The groups of a scan, in the order of their first rows.
+/// The groups of a scan, in the order of their first rows, or in any order when the scan does not need it.
 pub(super) struct Found {
     /// The words of the keys and the mask of nulls of each group.
     pub(super) words: Vec<u64>,
@@ -1420,7 +1420,7 @@ fn top_groups(
     })
 }
 
-/// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`. With `top`, the groups can be only the groups of the result of the sort, as [`top_groups`] gives them.
+/// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`. With `top`, the groups can be only the groups of the result of the sort, as [`top_groups`] gives them. With `ordered` false, the groups come in the order of the parts, for a query that sorts the groups by their keys: the order of their first rows then costs a map of the rows and a read of each group from one of many parts, and does not change the result.
 ///
 /// # Errors
 ///
@@ -1432,6 +1432,7 @@ pub(super) fn run(
     rows: usize,
     segments: usize,
     top: Option<&Top>,
+    ordered: bool,
 ) -> Result<Found> {
     let mut places: Vec<usize> = plan
         .keys
@@ -1521,7 +1522,13 @@ pub(super) fn run(
         return Ok(found);
     }
     let groups: usize = parts.iter().map(Buf::len).sum();
-    let order = if groups.saturating_mul(SORT_GROUPS) < rows {
+    let order = if !ordered {
+        parts
+            .iter()
+            .enumerate()
+            .flat_map(|(p, part)| (0..part.len() as u32).map(move |g| (p as u32, g)))
+            .collect()
+    } else if groups.saturating_mul(SORT_GROUPS) < rows {
         // For few groups, a sort of their first rows costs less than a map of all the rows.
         let mut order: Vec<(u64, u32, u32)> = parts
             .iter()
@@ -1607,7 +1614,7 @@ pub(super) fn run(
         .collect();
     tasks.run_all(work);
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
-    let trailing = last.is_some() && firsts.last() != last.as_ref();
+    let trailing = last.is_some() && firsts.iter().max() != last.as_ref();
     Ok(Found { words, firsts, states, extremes, trailing })
 }
 
