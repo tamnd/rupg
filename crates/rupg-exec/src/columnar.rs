@@ -3198,7 +3198,7 @@ fn grouped(
                 None => None,
             };
             let plan = if many || lead.is_some() {
-                parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks, true)
+                parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks, true, false)
             } else {
                 None
             };
@@ -3285,7 +3285,7 @@ fn grouped(
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
         && let Some((plan, derived, _)) =
-            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks, false)
+            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks, false, false)
         && derived.iter().all(Option::is_none)
     {
         session.interrupted()?;
@@ -3311,7 +3311,7 @@ fn grouped(
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
         && let Some((plan, derived, _)) =
-            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks, false)
+            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks, false, false)
         && derived.iter().all(Option::is_none)
     {
         session.interrupted()?;
@@ -3323,6 +3323,37 @@ fn grouped(
             scan.segments,
             aggs.len(),
         )?;
+    }
+    // Calls of `count(DISTINCT)` of one column with one key, and other calls that the tasks fold: the tasks fold the other calls as for a query with no `count(DISTINCT)`, and count the pairs of a group and a value as above. Both give the same groups in the order of their first rows.
+    if found.is_none()
+        && let [key] = keys[..]
+        && !scan.answered.contains(&true)
+        && aggs.iter().any(|call| matches!(call.method, Method::Distinct))
+        && let Some(tasks) = session.tasks().filter(|_| scan.open)
+        && let Some(arg) = distinct_arg(&aggs)
+        && let Some((plan, derived, _)) =
+            parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks, false, true)
+        && derived.iter().all(Option::is_none)
+        && let Some((pairs, derived, _)) =
+            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks, false, false)
+        && derived.iter().all(Option::is_none)
+    {
+        session.interrupted()?;
+        let stored = &scan.exec.stored;
+        let mut run = groups::run(tasks, stored, &plan, rows, scan.segments, None, true)?;
+        session.interrupted()?;
+        if let Some(counts) =
+            groups::distinct_groups(tasks, stored, &pairs, rows, scan.segments, 1)?
+            && counts.firsts == run.firsts
+            && let Some(groups::Folded::Count(count)) = counts.states.into_iter().next()
+        {
+            for (call, state) in aggs.iter().zip(&mut run.states) {
+                if matches!(call.method, Method::Distinct) {
+                    *state = groups::Folded::Count(count.clone());
+                }
+            }
+            found = Some(run);
+        }
     }
     if let Some(found) = found {
         groups = found.firsts.len();
@@ -4027,7 +4058,7 @@ fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) ->
     answered
 }
 
-/// The plan of [`groups::run`] for the keys `keys`, the calls `aggs` and the bases `bases` of a scan of `rows` rows with the conditions `conds`, or `None` when a key, a call, a condition or the table does not let the tasks find the groups. Each key is a column of integers or codes, or a constant integer or null, and each call is a count or an aggregate of a column of integers. Each condition is a test that the zones read (see [`Exec::zone_test`]). With `mapping` false, the plan has no maps of [`groups::Map`], so a caller that cannot read them does not make them.
+/// The plan of [`groups::run`] for the keys `keys`, the calls `aggs` and the bases `bases` of a scan of `rows` rows with the conditions `conds`, or `None` when a key, a call, a condition or the table does not let the tasks find the groups. Each key is a column of integers or codes, or a constant integer or null, and each call is a count or an aggregate of a column of integers. Each condition is a test that the zones read (see [`Exec::zone_test`]). With `mapping` false, the plan has no maps of [`groups::Map`], so a caller that cannot read them does not make them. With `distinct` true, a call of `count(DISTINCT)` has no fold, and the caller counts its values.
 #[allow(clippy::too_many_arguments)]
 fn parallel_plan(
     exec: &Exec<'_>,
@@ -4038,6 +4069,7 @@ fn parallel_plan(
     rows: usize,
     tasks: &dyn Tasks,
     mapping: bool,
+    distinct: bool,
 ) -> Option<Planned> {
     if tasks.parallelism() < 2 || rows < 2 * groups::TASK_ROWS {
         return None;
@@ -4192,6 +4224,7 @@ fn parallel_plan(
                     let order = mapped(text_place(arg?)?, Mapped::Order)?;
                     if max { groups::Fold::Max(order) } else { groups::Fold::Min(order) }
                 }
+                Method::Distinct if distinct => groups::Fold::None,
                 Method::Distinct | Method::Dec { .. } => return None,
             })
         })
