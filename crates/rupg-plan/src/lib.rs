@@ -415,6 +415,8 @@ pub struct Scanned {
     pub keys: Vec<SortGroup>,
     /// True when the index scan goes backward, so that the rows with equal keys come in the reverse order of the heap. The heap TID is the last key of a `btree` index.
     pub backward: bool,
+    /// True for an index only scan with an ordering operator whose distance function is lossy, the `<->` of the `gist` operator classes `circle_ops` and `poly_ops`, which sets `xs_recheckorderby`: `IndexOnlyNext` refuses its first row.
+    pub lossy: bool,
 }
 
 /// The hash tables of the plan of a query, for the executor. A set operation is at a path from the top operation of the query: false for the left side and true for the right side.
