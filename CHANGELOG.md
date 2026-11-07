@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE MATERIALIZED VIEW` in a trigger function that reads a transition table fails with `transition table "..." cannot be referenced in a persistent object`, as `find_expr_references_walker` refuses an `RTE_NAMEDTUPLESTORE`, and `CREATE TABLE AS` and `SELECT INTO` in a trigger function read the transition tables of the trigger, while `CREATE VIEW` does not see them (#1410).
 - The parallel group scan of the server compares the groups that the plan expects with the rows that the partial part of a split aggregate reads in all the processes. Before, under a `Gather` it compared them with the partial groups, so the tasks did not find the groups of a table on which the plan gave few workers.
 - A lifted `EXISTS` with one integer key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it, such as `l2.l_suppkey <> l1.l_suppkey` in TPC-H Q21, keeps only the least and the greatest value of the column for each key. A row tests the comparison on these two values, and not on each row of its key. TPC-H Q21 at scale 0.1 goes from 9.8 s to 5.8 s (#1408).
 - A SQL function whose argument is a SQL/JSON constructor with `RETURNING`, such as `f(JSON_OBJECT('a': 'b' RETURNING text))`, inlines: the `CaseTest` of the coercion of the constructor is the value of the constructor and not of a `CASE` around it, as `contain_context_dependent_node` lets it read (#1407).

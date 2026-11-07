@@ -9,6 +9,7 @@ use super::{Definer, not_yet, relname};
 use crate::collate::target_collation;
 use crate::typename::names;
 use crate::types;
+use crate::{ExprKind, Query};
 
 impl Definer<'_, '_> {
     /// `ExecCreateTableAs` up to `create_ctas_internal`: a table with a column for each column of the query. The result is the OID of the new table, or `None` when the table exists and the statement has `IF NOT EXISTS` or the statement has `WITH NO DATA`. `text` is the text of the statement, which the catalog keeps for a materialized view.
@@ -85,6 +86,15 @@ impl Definer<'_, '_> {
                 )
                 .with_detail(format!("This view depends on temporary {}.", self.describe(temp))));
             }
+            // `find_expr_references_walker` of `StoreViewQuery`: a cataloged object cannot depend on a tuplestore, which has no OID.
+            if let Some(name) = transition_name(&query) {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!(
+                        "transition table \"{name}\" cannot be referenced in a persistent object"
+                    ),
+                ));
+            }
         }
         let rv = into.rel.as_deref().cloned().unwrap_or_default();
         // `CreateTableAsRelExists` looks up the schema with no parse state, so its errors have no position.
@@ -151,4 +161,29 @@ impl Definer<'_, '_> {
         }
         Ok((!into.skipData).then_some(table))
     }
+}
+
+/// The name of the first transition table of a trigger that `query` reads, `eref->aliasname` of the `RTE_NAMEDTUPLESTORE`, also in its subqueries, its sublinks and its queries of `WITH`.
+fn transition_name(query: &Query) -> Option<&str> {
+    for relation in &query.relations {
+        if relation.cte.as_ref().is_some_and(|c| c.transition) {
+            return Some(&relation.name);
+        }
+        if let Some(sub) = &relation.subquery
+            && relation.cte.is_none()
+            && let Some(name) = transition_name(sub)
+        {
+            return Some(name);
+        }
+    }
+    for expr in query.exprs() {
+        let found = expr.find(0, &mut |e, _| match &e.kind {
+            ExprKind::SubLink(link) => transition_name(&link.query),
+            _ => None,
+        });
+        if found.is_some() {
+            return found;
+        }
+    }
+    query.ctes.iter().find_map(|cte| transition_name(&cte.query))
 }

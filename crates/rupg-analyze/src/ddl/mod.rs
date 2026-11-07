@@ -419,7 +419,12 @@ fn is_drop_kind(kind: ObjectType) -> bool {
 
 /// Runs a statement that defines an object, for the role `user`, and adds the object to the catalog. The statement is the `stmt` of a `RawStmt`, and `text` is its text, which the catalog keeps for a view and for a function.
 pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, user: u32) -> Defined {
-    let schemas = SchemaEnv::new(env, catalog);
+    let transitions = match stmt {
+        Node::CreateTableAsStmt(_) => true,
+        Node::SelectStmt(select) => crate::select_into(select).is_some(),
+        _ => false,
+    };
+    let schemas = SchemaEnv::new(env, catalog, transitions);
     let mut definer = Definer {
         an: Analyzer::new(&schemas, &Params::default()),
         catalog,
@@ -614,16 +619,19 @@ struct SchemaEnv<'e> {
     relations: RefCell<Vec<(u32, String, u32)>>,
     /// The relations of the session whose columns the statement changed before the last [`Env::command_counter_increment`], with their new columns.
     columns: RefCell<Vec<(u32, Vec<rupg_catalog::Column>)>>,
+    /// True when the statement sees the transition tables of the trigger that runs: `CREATE TABLE AS`, `SELECT INTO` and `CREATE MATERIALIZED VIEW`, whose query `transformCreateTableAsStmt` analyzes with the `QueryEnvironment` of the statement. The other statements, such as `CREATE VIEW`, analyze their queries with none.
+    transitions: bool,
 }
 
 impl<'e> SchemaEnv<'e> {
-    fn new(env: &'e dyn Env, catalog: &Catalog) -> SchemaEnv<'e> {
+    fn new(env: &'e dyn Env, catalog: &Catalog, transitions: bool) -> SchemaEnv<'e> {
         let schemas = catalog.schemas().map(|s| (s.name.clone(), s.oid)).collect();
         SchemaEnv {
             env,
             schemas,
             relations: RefCell::new(Vec::new()),
             columns: RefCell::new(Vec::new()),
+            transitions,
         }
     }
 
@@ -657,6 +665,10 @@ impl Env for SchemaEnv<'_> {
 
     fn namespace_usage(&self, namespace: u32) -> bool {
         self.env.namespace_usage(namespace)
+    }
+
+    fn transition_table(&self, name: &str) -> Option<u32> {
+        if self.transitions { self.env.transition_table(name) } else { None }
     }
 
     fn database(&self) -> String {
