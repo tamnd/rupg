@@ -542,6 +542,8 @@ struct Exec<'q> {
     likes: FxMap<*const Expr, Vec<u8>>,
     /// For each dictionary, the number of characters of each code plus one, or 0 for a code that `length` has not seen.
     lengths: FxMap<usize, Vec<u32>>,
+    /// The dictionary of each key of `GROUP BY` whose codes come from a map of [`key_map`] on the tasks.
+    key_dicts: FxMap<*const Expr, usize>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
     slots: Vec<Value>,
     empty: scan::Tables,
@@ -1871,6 +1873,7 @@ pub(crate) fn run(
         generic: FxMap::default(),
         likes: FxMap::default(),
         lengths: FxMap::default(),
+        key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
         links,
@@ -2066,6 +2069,7 @@ pub(crate) fn selected(
         generic: FxMap::default(),
         likes: FxMap::default(),
         lengths: FxMap::default(),
+        key_dicts: FxMap::default(),
         slots: Vec::new(),
         empty: scan::Tables::default(),
         links: Vec::new(),
@@ -3182,20 +3186,20 @@ fn grouped(
                 None => None,
             };
             let plan = if many || lead.is_some() {
-                parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks)
+                parallel_plan(scan.exec, &keys, &aggs, &bases, scan.conds, rows, tasks, true)
             } else {
                 None
             };
             match (plan, lead) {
-                (Some((mut plan, derived)), Some((place, n))) if plan.maps.is_empty() => {
+                (Some((mut plan, derived, dicts)), Some((place, n))) if plan.maps.is_empty() => {
                     session.interrupted()?;
                     match groups::lead_cut(&scan.exec.stored, &plan, place, rows, scan.segments, n)?
                     {
                         Some(cut) => {
                             plan.filters.push((place, Test::Le(rupg_summary::key::int(cut))));
-                            Some((tasks, (plan, derived)))
+                            Some((tasks, (plan, derived, dicts)))
                         }
-                        None => many.then_some((tasks, (plan, derived))),
+                        None => many.then_some((tasks, (plan, derived, dicts))),
                     }
                 }
                 (plan, _) => plan.filter(|_| many).map(|plan| (tasks, plan)),
@@ -3204,8 +3208,13 @@ fn grouped(
         _ => None,
     };
     let mut found = None;
-    if let Some((tasks, (plan, derived))) = parallel {
+    if let Some((tasks, (plan, derived, dicts))) = parallel {
         session.interrupted()?;
+        // The words of a key from a map are codes of its own dictionary.
+        for (k, dict) in dicts {
+            scan.exec.dicts.push(Dict::Own(dict));
+            scan.exec.key_dicts.insert(std::ptr::from_ref(keys[k]), scan.exec.dicts.len() - 1);
+        }
         // For `ORDER BY` of a count, the tasks can give only the groups of the result. A hash of the keys that can fail needs all the groups, as below.
         let shapes: Vec<Shape> = keys.iter().map(|key| key_shape(scan.exec, key)).collect();
         let wanted = top
@@ -3244,6 +3253,9 @@ fn grouped(
             run.words = words;
             found = Some(run);
         }
+        if found.is_none() {
+            scan.exec.key_dicts.clear();
+        }
     }
     // Calls of `count(DISTINCT)` of one column with no keys: the tasks count the values of the column.
     if found.is_none()
@@ -3254,10 +3266,9 @@ fn grouped(
         && aggs.iter().all(|call| matches!(call.method, Method::Distinct))
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
-        && let Some((plan, derived)) =
-            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks)
+        && let Some((plan, derived, _)) =
+            parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks, false)
         && derived.iter().all(Option::is_none)
-        && plan.maps.is_empty()
     {
         session.interrupted()?;
         if let Some((count, Some(first))) =
@@ -3280,10 +3291,9 @@ fn grouped(
         && aggs.iter().all(|call| matches!(call.method, Method::Distinct))
         && let Some(tasks) = session.tasks().filter(|_| scan.open)
         && let Some(arg) = distinct_arg(&aggs)
-        && let Some((plan, derived)) =
-            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks)
+        && let Some((plan, derived, _)) =
+            parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks, false)
         && derived.iter().all(Option::is_none)
-        && plan.maps.is_empty()
     {
         session.interrupted()?;
         found = groups::distinct_groups(
@@ -3994,7 +4004,8 @@ fn answer(scan: &Scan<'_, '_>, aggs: &mut [Call<'_>], bases: &mut [Base<'_>]) ->
     answered
 }
 
-/// The plan of [`groups::run`] for the keys `keys`, the calls `aggs` and the bases `bases` of a scan of `rows` rows with the conditions `conds`, or `None` when a key, a call, a condition or the table does not let the tasks find the groups. Each key is a column of integers or codes, or a constant integer or null, and each call is a count or an aggregate of a column of integers. Each condition is a test that the zones read (see [`Exec::zone_test`]).
+/// The plan of [`groups::run`] for the keys `keys`, the calls `aggs` and the bases `bases` of a scan of `rows` rows with the conditions `conds`, or `None` when a key, a call, a condition or the table does not let the tasks find the groups. Each key is a column of integers or codes, or a constant integer or null, and each call is a count or an aggregate of a column of integers. Each condition is a test that the zones read (see [`Exec::zone_test`]). With `mapping` false, the plan has no maps of [`groups::Map`], so a caller that cannot read them does not make them.
+#[allow(clippy::too_many_arguments)]
 fn parallel_plan(
     exec: &Exec<'_>,
     keys: &[&Expr],
@@ -4003,7 +4014,8 @@ fn parallel_plan(
     conds: &[&Expr],
     rows: usize,
     tasks: &dyn Tasks,
-) -> Option<(groups::Plan, Vec<Option<Derived>>)> {
+    mapping: bool,
+) -> Option<Planned> {
     if tasks.parallelism() < 2 || rows < 2 * groups::TASK_ROWS {
         return None;
     }
@@ -4033,11 +4045,33 @@ fn parallel_plan(
     if at > 7 {
         return None;
     }
+    // The columns of integers that the scan computes from a text column of codes, as places after the stored columns.
+    let pending: RefCell<Vec<(usize, Mapped)>> = RefCell::new(Vec::new());
+    let mapped = |from: usize, kind: Mapped| {
+        if !mapping {
+            return None;
+        }
+        let mut pending = pending.borrow_mut();
+        let at = pending.iter().position(|&p| p == (from, kind)).unwrap_or_else(|| {
+            pending.push((from, kind));
+            pending.len() - 1
+        });
+        Some(exec.stored.len() + at)
+    };
+    // The calls of `regexp_replace` of the keys that a map gives, with the place of each key in `keys`.
+    let keyed: RefCell<Vec<(usize, rupg_func::Replace)>> = RefCell::new(Vec::new());
+    let text_place = |expr: &Expr| {
+        place(expr).filter(|&p| {
+            let stored = &exec.stored[p];
+            stored.kind == Kind::Text && stored.kind.store() == Store::Code && stored.dict.is_some()
+        })
+    };
     let keys = keys
         .iter()
+        .enumerate()
         .zip(&derived)
         .filter(|(_, d)| d.is_none())
-        .map(|(key, _)| match &key.kind {
+        .map(|((k, key), _)| match &key.kind {
             ExprKind::Const(v) if v.is_null() => Some(groups::Input::Const(None)),
             ExprKind::Const(v) => int_of(v).map(|v| groups::Input::Const(Some(v as u64))),
             ExprKind::Func(func) if src(func.oid) == "timestamp_trunc" => {
@@ -4065,6 +4099,41 @@ fn parallel_plan(
                 }
             }
             ExprKind::Case(case) => case_input(exec, case),
+            // `regexp_replace` of a text column of codes with constant arguments: a map gives the code of the result of each code in a dictionary of the results.
+            ExprKind::Func(func)
+                if !func.retset && src(func.oid).starts_with("textregexreplace") =>
+            {
+                let (first, rest) = func.args.split_first()?;
+                let from = text_place(first)?;
+                let mut args = vec![Value::Text(String::new())];
+                for arg in rest {
+                    let value = match &arg.kind {
+                        ExprKind::Const(v) => v,
+                        ExprKind::Param(n) => exec.params.get(n.wrapping_sub(1))?,
+                        _ => return None,
+                    };
+                    if value.is_null() {
+                        return None;
+                    }
+                    args.push(value.clone());
+                }
+                let types: Vec<u32> = func.args.iter().map(|a| a.ty).collect();
+                let call = rupg_func::Call {
+                    session: exec.session,
+                    args: &types,
+                    ret: key.ty,
+                    variadic: func.variadic,
+                    want: None,
+                    collation: func.collation,
+                };
+                let replace = rupg_func::Replace::new(&call, src(func.oid), &args).ok()??;
+                let at = {
+                    let mut keyed = keyed.borrow_mut();
+                    keyed.push((k, replace));
+                    keyed.len() - 1
+                };
+                Some(groups::Input::Column(mapped(from, Mapped::Key(at))?))
+            }
             _ => place(key)
                 .filter(|&p| {
                     !matches!(exec.stored[p].kind.store(), Store::Float)
@@ -4073,27 +4142,11 @@ fn parallel_plan(
                 .map(groups::Input::Column),
         })
         .collect::<Option<Vec<_>>>()?;
-    // The columns of integers that the scan computes from a text column of codes, as places after the stored columns.
-    let pending: RefCell<Vec<(usize, Mapped)>> = RefCell::new(Vec::new());
-    let mapped = |from: usize, kind: Mapped| {
-        let mut pending = pending.borrow_mut();
-        let at = pending.iter().position(|&p| p == (from, kind)).unwrap_or_else(|| {
-            pending.push((from, kind));
-            pending.len() - 1
-        });
-        exec.stored.len() + at
-    };
-    let text_place = |expr: &Expr| {
-        place(expr).filter(|&p| {
-            let stored = &exec.stored[p];
-            stored.kind == Kind::Text && stored.kind.store() == Store::Code && stored.dict.is_some()
-        })
-    };
     // `length` and `octet_length` of a text column of codes.
     let length = |expr: &Expr| match &expr.kind {
         ExprKind::Func(func) if !func.retset => match (src(func.oid), func.args.as_slice()) {
-            ("textlen", [a]) => Some(mapped(text_place(a)?, Mapped::Chars)),
-            ("textoctetlen", [a]) => Some(mapped(text_place(a)?, Mapped::Octets)),
+            ("textlen", [a]) => mapped(text_place(a)?, Mapped::Chars),
+            ("textoctetlen", [a]) => mapped(text_place(a)?, Mapped::Octets),
             _ => None,
         },
         _ => None,
@@ -4113,7 +4166,7 @@ fn parallel_plan(
                 // `min` and `max` of a text column of codes, which compare the bytes: the extreme place of the texts in the order of their bytes.
                 Method::Row(_) => {
                     let max = call.codes.as_ref()?.max?;
-                    let order = mapped(text_place(arg?)?, Mapped::Order);
+                    let order = mapped(text_place(arg?)?, Mapped::Order)?;
                     if max { groups::Fold::Max(order) } else { groups::Fold::Min(order) }
                 }
                 Method::Distinct | Method::Dec { .. } => return None,
@@ -4125,13 +4178,25 @@ fn parallel_plan(
     }
     let filters =
         conds.iter().map(|cond| task_test(exec, tasks, cond)).collect::<Option<Vec<_>>>()?;
-    let maps = pending
-        .into_inner()
-        .into_iter()
-        .map(|(from, kind)| code_map(exec, tasks, from, kind))
-        .collect::<Option<Vec<_>>>()?;
-    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps }, derived))
+    let keyed = keyed.into_inner();
+    let mut dicts = Vec::new();
+    let mut maps = Vec::new();
+    for (from, kind) in pending.into_inner() {
+        maps.push(match kind {
+            Mapped::Key(at) => {
+                let (k, replace) = &keyed[at];
+                let (map, dict) = key_map(exec, tasks, from, replace)?;
+                dicts.push((*k, dict));
+                map
+            }
+            _ => code_map(exec, tasks, from, kind)?,
+        });
+    }
+    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps }, derived, dicts))
 }
+
+/// The plan of [`groups::run`] of [`parallel_plan`], the keys that come from the words of other keys, and the dictionary of each key, by its place in the keys, whose codes a map of [`key_map`] gives.
+type Planned = (groups::Plan, Vec<Option<Derived>>, Vec<(usize, Dictionary)>);
 
 /// What a map of [`groups::Map`] gives for the text of each code.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4142,6 +4207,8 @@ enum Mapped {
     Octets,
     /// The place of the text in the order of the bytes of the texts of the dictionary, above the code in the low 32 bits. The least value is the least text, and the code of the text is in the value.
     Order,
+    /// The code of the result of a `regexp_replace` of the keys, by its place in the calls, in a new dictionary of the results, which [`key_map`] gives.
+    Key(usize),
 }
 
 /// The number of the codes for which one task of [`code_map`] finds the values.
@@ -4173,7 +4240,7 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
                         (Mapped::Order, Some(order)) => {
                             i64::from(order[code as usize]) << 32 | i64::from(code)
                         }
-                        (Mapped::Order, None) => 0,
+                        (Mapped::Order, None) | (Mapped::Key(_), _) => 0,
                     };
                 }
             }) as Job<'_>
@@ -4181,6 +4248,48 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
         .collect();
     tasks.run_all(jobs);
     Some(groups::Map { from, values: Arc::from(values) })
+}
+
+/// The map of the text column of codes at the place `from` to the codes of the results of `replace` in a new dictionary. The tasks find the result of each text at the same time, and the dictionary then takes the results in the order of the codes. `None` when a result gives an error, so that the scan of the rows gives the error as the row engine does.
+fn key_map(
+    exec: &Exec<'_>,
+    tasks: &dyn Tasks,
+    from: usize,
+    replace: &rupg_func::Replace,
+) -> Option<(groups::Map, Dictionary)> {
+    let source = exec.stored[from].dict.as_ref()?;
+    let codes = source.len();
+    let chunks = codes.div_ceil(MAP_CODES);
+    let mut texts: Vec<Option<Vec<String>>> = vec![None; chunks];
+    let jobs: Vec<Job<'_>> = texts
+        .iter_mut()
+        .enumerate()
+        .map(|(n, out)| {
+            Box::new(move || {
+                let first = n * MAP_CODES + 1;
+                let last = (first + MAP_CODES).min(codes + 1);
+                let mut found = Vec::with_capacity(last - first);
+                for code in first..last {
+                    let Ok(code) = u32::try_from(code) else { return };
+                    // The dictionary of a text column holds only the bytes of a `String`.
+                    let Ok(text) = std::str::from_utf8(source.get(code)) else { return };
+                    let Ok(Value::Text(result)) = replace.text(text) else { return };
+                    found.push(result);
+                }
+                *out = Some(found);
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(jobs);
+    let mut dict = Dictionary::new();
+    let mut values = Vec::with_capacity(codes + 1);
+    values.push(0);
+    for chunk in texts {
+        for text in chunk? {
+            values.push(i64::from(dict.intern(text.as_bytes())));
+        }
+    }
+    Some((groups::Map { from, values: Arc::from(values) }, dict))
 }
 
 /// The test of the tasks for the condition `cond`: the test of the zones of [`Exec::zone_test`], or else the set of codes of [`code_test`].
@@ -4302,6 +4411,9 @@ fn case_input(exec: &Exec<'_>, case: &rupg_analyze::Case) -> Option<groups::Inpu
 
 /// The shape of the words of the key `key` of [`groups::run`]: the codes of the dictionary of its column, or integers of its type.
 fn key_shape(exec: &Exec<'_>, key: &Expr) -> Shape {
+    if let Some(&d) = exec.key_dicts.get(&std::ptr::from_ref(key)) {
+        return Shape::Code(d);
+    }
     let column = match &key.kind {
         ExprKind::Case(case) => case.whens.first().and_then(|(_, result)| place_of(exec, result)),
         _ => place_of(exec, key),

@@ -4360,6 +4360,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/code_likes_tasks.test")));
     }
 
+    /// The tasks of the server find the groups of a key of `regexp_replace` of a text column of codes from the result of each code, which they find once: with the result of Postgres for nulls, empty texts, texts that do not match, texts of more bytes than characters, the options `g` and `i`, a start and a match number, parameters, a second key, `HAVING`, a top, and the errors of a pattern and of an option that are not valid.
+    #[test]
+    fn group_regex_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/group_regex_tasks.test")));
+    }
+
     /// The tasks of the server fold `length`, `octet_length`, `min` and `max` of a text column of codes from a value of each code that they find once: with the result of Postgres for nulls, empty texts, texts of more bytes than characters, a group of only nulls, codes of a later insert, a filter, `HAVING` and a top.
     #[test]
     fn group_maps_tasks() {

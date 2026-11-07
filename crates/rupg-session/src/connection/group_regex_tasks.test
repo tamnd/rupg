@@ -1,0 +1,108 @@
+> CREATE TABLE gr (n int, u text)
+CREATE TABLE
+> INSERT INTO gr SELECT i % 3, CASE WHEN i % 17 = 0 THEN NULL WHEN i % 13 = 0 THEN '' WHEN i % 7 = 0 THEN 'ftp://f' || (i % 3) ELSE 'http' || CASE WHEN i % 2 = 0 THEN 's' ELSE '' END || '://' || CASE WHEN i % 3 = 0 THEN 'www.' ELSE '' END || CASE WHEN i % 5 = 0 THEN 'жж' ELSE 'h' END || (i % 40) || '.ex/' || (i % 1000) || CASE WHEN i % 4 = 0 THEN 'é' ELSE '' END END FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gr
+ANALYZE
+> SET max_parallel_workers_per_gather = 0
+SET
+> SELECT regexp_replace(u, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, count(*), avg(length(u)), min(u) FROM gr WHERE u <> '' GROUP BY k HAVING count(*) > 3000 ORDER BY k
+fields k:25:-1:-1,count:20:8:-1,avg:1700:-1:-1,min:25:-1:-1
+row ftp://f0,12411,8.0000000000000000,ftp://f0
+row ftp://f1,12411,8.0000000000000000,ftp://f1
+row ftp://f2,12411,8.0000000000000000,ftp://f2
+row h1.ex,5587,17.1736173259352067,http://h1.ex/1
+row h11.ex,5584,18.2123925501432665,http://h11.ex/11
+row h12.ex,5587,20.2140683730087704,https://h12.ex/12é
+row h13.ex,5586,18.2130325814536341,http://h13.ex/13
+row h14.ex,5585,19.2128916741271262,https://h14.ex/134
+row h16.ex,5585,20.2127126230975828,https://h16.ex/136é
+row h17.ex,5584,18.2132879656160458,http://h17.ex/137
+row h18.ex,5584,19.2140042979942693,https://h18.ex/138
+row h19.ex,5585,18.2130707251566697,http://h19.ex/139
+row h2.ex,5584,18.1720988538681948,https://h2.ex/122
+row h21.ex,5584,18.2521489971346705,http://h21.ex/101
+row h22.ex,5585,19.2524619516562220,https://h22.ex/102
+row h23.ex,5585,18.2526410026857654,http://h23.ex/103
+row h24.ex,5585,20.2544315129811996,https://h24.ex/104é
+row h26.ex,5587,19.2541614462144263,https://h26.ex/106
+row h27.ex,5586,18.2533118510562120,http://h27.ex/107
+row h28.ex,5583,20.2532688518717535,https://h28.ex/108é
+row h29.ex,5585,18.2542524619516562,http://h29.ex/109
+row h3.ex,5585,17.1735004476275739,http://h3.ex/123
+row h31.ex,5585,18.2537153088630260,http://h31.ex/111
+row h32.ex,5584,20.2530444126074499,https://h32.ex/112é
+row h33.ex,5586,18.2534908700322234,http://h33.ex/113
+row h34.ex,5585,19.2535362578334825,https://h34.ex/114
+row h36.ex,5585,20.2540734109221128,https://h36.ex/116é
+row h37.ex,5585,18.2533572068039391,http://h37.ex/117
+row h38.ex,5585,19.2537153088630260,https://h38.ex/118
+row h39.ex,5585,18.2528200537153089,http://h39.ex/119
+row h4.ex,5585,19.1722470904207699,https://h4.ex/124é
+row h6.ex,5585,18.1729632945389436,https://h6.ex/126
+row h7.ex,5584,17.1737106017191977,http://h7.ex/127
+row h8.ex,5586,19.1734693877551020,https://h8.ex/128é
+row h9.ex,5584,17.1729942693409742,http://h9.ex/129
+row жж0.ex,5586,20.1731113498030791,https://www.жж0.ex/0é
+row жж10.ex,5585,20.2132497761862131,https://www.жж10.ex/10
+row жж15.ex,5586,19.2128535624776226,http://www.жж15.ex/135
+row жж20.ex,5585,21.2529991047448523,https://www.жж20.ex/100é
+row жж25.ex,5585,19.2529991047448523,http://www.жж25.ex/105
+row жж30.ex,5585,20.2537153088630260,https://www.жж30.ex/110
+row жж35.ex,5584,19.2541189111747851,http://www.жж35.ex/115
+row жж5.ex,5585,18.1733213965980304,http://www.жж5.ex/125
+SELECT 43
+> SELECT regexp_replace(u, '[0-9]+', '#', 'g') AS k, count(*) FROM gr GROUP BY k ORDER BY count(*) DESC, k LIMIT 6
+fields k:25:-1:-1,count:20:8:-1
+row http://h#.ex/#,59574
+row ftp://f#,37233
+row https://h#.ex/#,29787
+row http://www.h#.ex/#,29786
+row https://h#.ex/#é,29786
+row ,21719
+SELECT 6
+> SELECT regexp_replace(u, 'H', '_', 1, 2, 'i') AS k, count(*) FROM gr GROUP BY k ORDER BY count(*) DESC, k LIMIT 4
+fields k:25:-1:-1,count:20:8:-1
+row ,21719
+row NULL,17647
+row ftp://f0,12411
+row ftp://f1,12411
+SELECT 4
+> SELECT regexp_replace(u, '(', 'x') AS k, count(*) FROM gr GROUP BY k
+fields k:25:-1:-1,count:20:8:-1
+ERROR 2201B invalid regular expression: parentheses () not balanced
+> SELECT regexp_replace(u, 'a', 'x', 'z') AS k, count(*) FROM gr GROUP BY k
+fields k:25:-1:-1,count:20:8:-1
+ERROR 22023 invalid regular expression option: "z"
+> PREPARE p(text, text) AS SELECT regexp_replace(u, $1, $2) AS k, count(*) FROM gr GROUP BY k ORDER BY count(*) DESC, k LIMIT 3
+PREPARE
+> EXECUTE p('^https?://', '')
+fields k:25:-1:-1,count:20:8:-1
+row ,21719
+row NULL,17647
+row ftp://f0,12411
+SELECT 3
+> SELECT n, regexp_replace(u, '^(ftp|https?)://.*$', '\1') AS k, count(*), max(u) FROM gr GROUP BY n, k ORDER BY n, k
+fields n@gr.1:23:4:-1,k:25:-1:-1,count:20:8:-1,max:25:-1:-1
+row 0,,7240,
+row 0,ftp,12411,ftp://f0
+row 0,http,37233,http://www.жж5.ex/965
+row 0,https,37234,https://www.жж30.ex/990
+row 0,NULL,5882,NULL
+row 1,,7240,
+row 1,ftp,12411,ftp://f1
+row 1,http,37234,http://жж5.ex/965
+row 1,https,37233,https://жж30.ex/990
+row 1,NULL,5882,NULL
+row 2,,7239,
+row 2,ftp,12411,ftp://f2
+row 2,http,37233,http://жж5.ex/965
+row 2,https,37234,https://жж30.ex/990
+row 2,NULL,5883,NULL
+SELECT 15
+> SELECT regexp_replace(u, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, count(*) FROM gr GROUP BY k ORDER BY count(*) DESC, k LIMIT 3
+fields k:25:-1:-1,count:20:8:-1
+row ,21719
+row NULL,17647
+row ftp://f0,12411
+SELECT 3

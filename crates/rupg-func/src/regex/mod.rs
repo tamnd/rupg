@@ -638,35 +638,93 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
     Ok(Value::Text(out))
 }
 
-/// `textregexreplace_noopt`: `regexp_replace(string, pattern, replacement)`, which replaces the first match.
-fn textregexreplace_noopt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let re = compile(arg(args, 1)?, flags::ADVANCED | in_collation(call))?;
-    replace(arg(args, 0)?, &re, arg(args, 2)?, 0, 1)
+/// `regexp_replace` with one pattern, one replacement and one set of options for many strings. [`Replace::new`] checks the arguments once, as the kernel checks them for each call. [`Replace::text`] needs no session, so the tasks of the server can run it at the same time. Each thread compiles the pattern once into its own cache.
+#[derive(Clone, Debug)]
+pub struct Replace {
+    pattern: String,
+    cflags: u32,
+    replacement: String,
+    /// The character where the search starts.
+    start: usize,
+    /// The number of the match to replace, or 0 to replace each match.
+    n: i64,
 }
 
-/// `textregexreplace`: `regexp_replace(string, pattern, replacement, flags)`. Options that start with a digit give an error with a hint, as the call may need the form with a start.
-fn textregexreplace(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let options = arg(args, 3)?;
-    if let Some(first) = options.chars().next().filter(char::is_ascii_digit) {
-        return Err(Error::new(
-            SqlState::INVALID_PARAMETER_VALUE,
-            format!("invalid regular expression option: \"{first}\""),
-        )
-        .with_hint("If you meant to use regexp_replace() with a start parameter, cast the fourth argument to integer explicitly."));
+impl Replace {
+    /// The replacement of the kernel `src` with the arguments `args`, of which the first is the string. `None` for a kernel that is not one of `regexp_replace`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the kernel for its options, its start, its `n` and its pattern.
+    pub fn new(call: &Call<'_>, src: &str, args: &[Value]) -> Result<Option<Replace>> {
+        let (cflags, start, n) = match src {
+            // `textregexreplace_noopt`: `regexp_replace(string, pattern, replacement)`, which replaces the first match.
+            "textregexreplace_noopt" => (flags::ADVANCED, 0, 1),
+            // `textregexreplace`: `regexp_replace(string, pattern, replacement, flags)`. Options that start with a digit give an error with a hint, as the call may need the form with a start.
+            "textregexreplace" => {
+                let options = arg(args, 3)?;
+                if let Some(first) = options.chars().next().filter(char::is_ascii_digit) {
+                    return Err(Error::new(
+                        SqlState::INVALID_PARAMETER_VALUE,
+                        format!("invalid regular expression option: \"{first}\""),
+                    )
+                    .with_hint("If you meant to use regexp_replace() with a start parameter, cast the fourth argument to integer explicitly."));
+                }
+                let (cflags, glob) = re_flags(Some(options))?;
+                (cflags, 0, i64::from(!glob))
+            }
+            // `textregexreplace_extended`: `regexp_replace(string, pattern, replacement, start [, n [, flags]])`. Without `n`, the option `g` tells if each match is replaced.
+            "textregexreplace_extended"
+            | "textregexreplace_extended_no_n"
+            | "textregexreplace_extended_no_flags" => {
+                let start = param(args, (3, "start"), 1, |v| v > 0)?;
+                let n = param(args, (4, "n"), 1, |v| v >= 0)?;
+                let (cflags, glob) = flags_at(args, 5)?;
+                let n = if args.len() <= 4 { i64::from(!glob) } else { n };
+                (cflags, start_at(start), n)
+            }
+            _ => return Ok(None),
+        };
+        let replace = Replace {
+            pattern: arg(args, 1)?.to_owned(),
+            cflags: cflags | in_collation(call),
+            replacement: arg(args, 2)?.to_owned(),
+            start,
+            n,
+        };
+        compile(&replace.pattern, replace.cflags)?;
+        Ok(Some(replace))
     }
-    let (cflags, glob) = re_flags(Some(options))?;
-    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    replace(arg(args, 0)?, &re, arg(args, 2)?, 0, i64::from(!glob))
+
+    /// The string `s` with the matches replaced.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the match, as for a pattern that is too complex.
+    pub fn text(&self, s: &str) -> Result<Value> {
+        let re = compile(&self.pattern, self.cflags)?;
+        replace(s, &re, &self.replacement, self.start, self.n)
+    }
 }
 
-/// `textregexreplace_extended`: `regexp_replace(string, pattern, replacement, start [, n [, flags]])`. Without `n`, the option `g` tells if each match is replaced.
+/// The kernels of `regexp_replace`, from [`Replace`].
+fn regexp_replace(call: &Call<'_>, src: &str, args: &[Value]) -> Result<Value> {
+    match Replace::new(call, src, args)? {
+        Some(replace) => replace.text(arg(args, 0)?),
+        None => Err(Error::internal("not a kernel of regexp_replace")),
+    }
+}
+
+fn textregexreplace_noopt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regexp_replace(call, "textregexreplace_noopt", args)
+}
+
+fn textregexreplace(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regexp_replace(call, "textregexreplace", args)
+}
+
 fn textregexreplace_extended(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let start = param(args, (3, "start"), 1, |v| v > 0)?;
-    let n = param(args, (4, "n"), 1, |v| v >= 0)?;
-    let (cflags, glob) = flags_at(args, 5)?;
-    let n = if args.len() <= 4 { i64::from(!glob) } else { n };
-    let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    replace(arg(args, 0)?, &re, arg(args, 2)?, start_at(start), n)
+    regexp_replace(call, "textregexreplace_extended", args)
 }
 
 /// The options at `at` of a function that finds each match, which do not take `g`.
