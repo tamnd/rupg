@@ -29,7 +29,7 @@ pub fn object_address(
     user: u32,
 ) -> Result<ObjRef> {
     let mut copy = catalog.clone();
-    let schemas = SchemaEnv::new(env, &copy);
+    let schemas = SchemaEnv::new(env, &copy, false);
     let mut definer = Definer {
         an: Analyzer::new(&schemas, &Params::default()),
         catalog: &mut copy,

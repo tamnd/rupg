@@ -8139,6 +8139,12 @@ mod tests {
     }
 
     /// The writes of one query with the same event on a table, as the statements of `WITH` and the actions of the foreign keys, fire the triggers `BEFORE ... FOR EACH STATEMENT` once and the triggers `AFTER ... FOR EACH STATEMENT` once with the rows of all the writes, as in PostgreSQL.
+    /// `CREATE MATERIALIZED VIEW` in a trigger function that reads a transition table fails, as `find_expr_references_walker` refuses an `RTE_NAMEDTUPLESTORE`, also in a sublink and by its alias; `CREATE VIEW` does not see the transition tables; `CREATE TABLE AS` reads them. PostgreSQL 18 gives the same errors and rows for the same script.
+    #[test]
+    fn transition_persistent() {
+        big_stack(|| script(include_str!("connection/transition_persistent.test")));
+    }
+
     #[test]
     fn transition_query() {
         big_stack(|| script(include_str!("connection/transition_query.test")));

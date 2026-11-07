@@ -1,0 +1,26 @@
+> CREATE TABLE tp (a int)
+CREATE TABLE
+> CREATE FUNCTION tp_mv() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN CREATE MATERIALIZED VIEW tp_m AS SELECT * FROM new_table; RETURN NULL; END $$
+CREATE FUNCTION
+> CREATE TRIGGER tp_t AFTER INSERT ON tp REFERENCING NEW TABLE AS new_table FOR EACH STATEMENT EXECUTE FUNCTION tp_mv()
+CREATE TRIGGER
+> INSERT INTO tp VALUES (42)
+ERROR 0A000 transition table "new_table" cannot be referenced in a persistent object (SQL statement "CREATE MATERIALIZED VIEW tp_m AS SELECT * FROM new_table"
+PL/pgSQL function tp_mv() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION tp_mv() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN CREATE MATERIALIZED VIEW tp_m AS SELECT * FROM tp WHERE a IN (SELECT a FROM new_table n); RETURN NULL; END $$
+CREATE FUNCTION
+> INSERT INTO tp VALUES (42)
+ERROR 0A000 transition table "n" cannot be referenced in a persistent object (SQL statement "CREATE MATERIALIZED VIEW tp_m AS SELECT * FROM tp WHERE a IN (SELECT a FROM new_table n)"
+PL/pgSQL function tp_mv() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION tp_mv() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN CREATE VIEW tp_v AS SELECT * FROM new_table; RETURN NULL; END $$
+CREATE FUNCTION
+> INSERT INTO tp VALUES (42)
+ERROR 42P01 relation "new_table" does not exist (PL/pgSQL function tp_mv() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION tp_mv() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN CREATE TABLE tp_c AS SELECT * FROM new_table; RETURN NULL; END $$
+CREATE FUNCTION
+> INSERT INTO tp VALUES (42), (43)
+INSERT 0 2
+> SELECT count(*) FROM tp_c
+fields count:20:8:-1
+row 2
+SELECT 1
