@@ -1558,7 +1558,17 @@ fn run_query(
             eval.at(tuple).eval(expr)
         };
         let planned = planned.as_deref().map(|p| (p, session));
-        scan::tuples(query, tables, test, &mut source, planned)?
+        let tuples = scan::tuples(query, tables, test, &mut source, planned)?;
+        // `IndexOnlyNext` refuses the first row of an index only scan whose ordering operator has a lossy distance.
+        if let Some((planned, _)) = planned
+            && planned.iter().any(|s| s.lossy && tuples.iter().any(|t| t[s.relation] != scan::NONE))
+        {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "lossy distance functions are not supported in index-only scans",
+            ));
+        }
+        tuples
     } else {
         Vec::new()
     };

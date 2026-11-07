@@ -437,13 +437,13 @@ pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Opti
     }
     let mut out = Vec::new();
     loop_order(node, false, &mut |relation, reverse, index| {
-        let (keys, backward) = match index {
-            Some((index, backward)) => {
-                (index_keys(query, members, relation, index, backward)?, backward)
+        let (keys, backward, lossy) = match index {
+            Some((index, backward, lossy)) => {
+                (index_keys(query, members, relation, index, backward)?, backward, lossy)
             }
-            None => (Vec::new(), false),
+            None => (Vec::new(), false, false),
         };
-        out.push(Scanned { relation, reverse, keys, backward });
+        out.push(Scanned { relation, reverse, keys, backward, lossy });
         Some(())
     })
     .then_some(out)
@@ -564,7 +564,7 @@ fn op_path(top: &SetOp, op: &SetOp, path: &mut Vec<bool>) -> bool {
 fn loop_order(
     node: &Node<'_>,
     reverse: bool,
-    out: &mut impl FnMut(usize, bool, Option<(u32, bool)>) -> Option<()>,
+    out: &mut impl FnMut(usize, bool, Option<(u32, bool, bool)>) -> Option<()>,
 ) -> bool {
     let inner_or_left = |join: &JoinKind| matches!(join, JoinKind::Inner | JoinKind::Left);
     let base = node.scope == 0 && node.member.is_none();
@@ -581,8 +581,9 @@ fn loop_order(
         (Kind::BitmapHeapScan { relation, .. }, [_]) if base => {
             out(*relation, reverse, None).is_some()
         }
-        (Kind::IndexScan { relation, index, backward, .. }, []) if base => {
-            out(*relation, reverse, Some((*index, *backward))).is_some()
+        (Kind::IndexScan { relation, index, backward, only, order_by, .. }, []) if base => {
+            let lossy = *only && order_by.iter().any(|item| lossy_distance(&item.expr));
+            out(*relation, reverse, Some((*index, *backward, lossy))).is_some()
         }
         (Kind::Materialize | Kind::Memoize(_) | Kind::Gather { .. }, [child]) => {
             loop_order(child, reverse, out)
@@ -600,6 +601,11 @@ fn loop_order(
         }
         _ => false,
     }
+}
+
+/// True for the ordering operator `<->` of a `circle` or a `polygon` and a `point`, whose functions are `dist_cpoint` (3290) and `dist_polyp` (3292): the `gist` distance functions of `circle_ops` and `poly_ops`, `gist_circle_distance` and `gist_poly_distance`, give the distance to the bounding box and set `recheck`.
+fn lossy_distance(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Func(f) if matches!(f.oid, 3290 | 3292))
 }
 
 /// [`plan`] with the settings of `members` in place.

@@ -5351,6 +5351,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/check_order.test")));
     }
 
+    /// An index only scan whose ordering operator has a lossy distance, the `<->` of `circle_ops` of `gist`, fails at its first row, as `IndexOnlyNext` does, and an empty table gives no error.
+    #[test]
+    fn gist_lossy() {
+        big_stack(|| script(include_str!("connection/gist_lossy.test")));
+    }
+
     #[test]
     fn alter_column_type_checks() {
         big_stack(|| script(include_str!("connection/alter_column_type_checks.test")));

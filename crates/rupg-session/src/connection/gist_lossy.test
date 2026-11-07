@@ -1,0 +1,20 @@
+> CREATE TABLE gl (p point)
+CREATE TABLE
+> INSERT INTO gl SELECT point(0.05 * i, 0.05 * i) FROM generate_series(0, 100) AS i
+INSERT 0 101
+> VACUUM ANALYZE gl
+VACUUM
+> SET enable_seqscan = off
+SET
+> SET enable_bitmapscan = off
+SET
+> CREATE INDEX gl_multi ON gl USING gist (circle(p, 1), p)
+CREATE INDEX
+> SELECT p FROM gl ORDER BY circle(p, 1) <-> point(0, 0) LIMIT 1
+fields p@gl.1:600:16:-1
+ERROR 0A000 lossy distance functions are not supported in index-only scans
+> DELETE FROM gl
+DELETE 101
+> SELECT p FROM gl ORDER BY circle(p, 1) <-> point(0, 0) LIMIT 1
+fields p@gl.1:600:16:-1
+SELECT 0
