@@ -1,0 +1,118 @@
+> CREATE TABLE so (k int, d date, p text, c int)
+CREATE TABLE
+> INSERT INTO so SELECT i, date '1995-01-01' + i % 700, chr(65 + i % 5), CASE WHEN i % 11 = 0 THEN NULL ELSE i % 5000 END FROM generate_series(1, 150000) i
+INSERT 0 150000
+> CREATE TABLE sl (o bigint, x date, y date, s int)
+CREATE TABLE
+> INSERT INTO sl SELECT CASE WHEN i % 13 = 0 THEN NULL ELSE (i * 7) % 180000 END, date '1995-01-01' + i % 300, date '1995-01-01' + (i * 3) % 300, i % 1000 FROM generate_series(1, 200000) i
+INSERT 0 200000
+> CREATE TABLE st (n int)
+CREATE TABLE
+> INSERT INTO st SELECT i * 3 FROM generate_series(1, 300) i
+INSERT 0 300
+> SELECT p, count(*) FROM so WHERE d >= date '1995-07-01' AND d < date '1995-10-01' AND EXISTS (SELECT * FROM sl WHERE sl.o = so.k AND sl.x < sl.y) GROUP BY p ORDER BY p
+fields p@so.3:25:-1:-1,count:20:8:-1
+row A,1723
+row B,1861
+row C,1927
+row D,1790
+row E,1729
+SELECT 5
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k)
+fields count:20:8:-1,sum:20:8:-1
+row 9998,757773415
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 127419,9556220653
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 22581,1693854347
+SELECT 1
+> SELECT count(*) FROM so WHERE p = 'A' OR EXISTS (SELECT 1 FROM sl WHERE sl.s = so.k AND sl.s > 100)
+fields count:20:8:-1
+row 30720
+SELECT 1
+> SELECT k, p, d FROM so WHERE k < 300 AND EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s % 7 = 0) ORDER BY k
+fields k@so.1:23:4:-1,p@so.3:25:-1:-1,d@so.2:1082:4:-1
+row 9,E,1995-01-10
+row 18,D,1995-01-19
+row 27,C,1995-01-28
+row 29,E,1995-01-30
+row 38,D,1995-02-08
+row 47,C,1995-02-17
+row 49,E,1995-02-19
+row 58,D,1995-02-28
+row 67,C,1995-03-09
+row 76,B,1995-03-18
+row 78,D,1995-03-20
+row 96,B,1995-04-07
+row 98,D,1995-04-09
+row 107,C,1995-04-18
+row 116,B,1995-04-27
+row 125,A,1995-05-06
+row 127,C,1995-05-08
+row 136,B,1995-05-17
+row 145,A,1995-05-26
+row 147,C,1995-05-28
+row 156,B,1995-06-06
+row 165,A,1995-06-15
+row 185,A,1995-07-05
+row 194,E,1995-07-14
+row 196,B,1995-07-16
+row 205,A,1995-07-25
+row 214,E,1995-08-03
+row 223,D,1995-08-12
+row 225,A,1995-08-14
+row 234,E,1995-08-23
+row 243,D,1995-09-01
+row 245,A,1995-09-03
+row 254,E,1995-09-12
+row 272,C,1995-09-30
+row 274,E,1995-10-02
+row 283,D,1995-10-11
+row 292,C,1995-10-20
+row 294,E,1995-10-22
+SELECT 38
+> SELECT count(*) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c)
+fields count:20:8:-1
+row 127224
+SELECT 1
+> SELECT count(*) FROM so WHERE CASE WHEN EXISTS (SELECT 1 FROM st WHERE st.n = so.k) THEN d > date '1995-06-01' ELSE true END
+fields count:20:8:-1
+row 149900
+SELECT 1
+> SELECT p, count(*), min(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k) AND NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.x > sl.y) GROUP BY p ORDER BY p
+fields p@so.3:25:-1:-1,count:20:8:-1,min:23:4:-1
+row A,14000,15
+row B,13999,1
+row C,14001,2
+row D,14003,8
+row E,14001,4
+SELECT 5
+> SELECT count(*) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND 10 / (sl.s - 5) > 0)
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*) FROM so WHERE NOT (EXISTS (SELECT 1 FROM sl WHERE sl.s = so.k AND sl.x < sl.y) OR d < date '1995-03-01')
+fields count:20:8:-1
+row 136442
+SELECT 1
+> SELECT count(*) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k LIMIT 1)
+fields count:20:8:-1
+row 140002
+SELECT 1
+> UPDATE sl SET o = NULL WHERE s < 100
+UPDATE 20000
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k)
+fields count:20:8:-1,sum:20:8:-1
+row 23985,1803451754
+SELECT 1
+> SELECT p, count(*) FROM so WHERE d >= date '1995-07-01' AND d < date '1995-10-01' AND EXISTS (SELECT * FROM sl WHERE sl.o = so.k AND sl.x < sl.y) GROUP BY p ORDER BY p
+fields p@so.3:25:-1:-1,count:20:8:-1
+row A,1550
+row B,1672
+row C,1731
+row D,1609
+row E,1555
+SELECT 5

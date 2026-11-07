@@ -1,8 +1,9 @@
 //! The run of a correlated subquery once for all the rows of the query outside it, as the dependent join elimination of Neumann and Kemper (BTW 2015) unnests it (spec/15). The subquery must read the query outside it only through conditions of `WHERE` that are an `=` of an integer of the subquery and an integer column of the query just outside it. The run without these conditions gives the rows of the subquery with their keys, and each row of the query outside then reads the rows of its key from a hash table. A subquery with an aggregate and no `GROUP BY` runs with a `GROUP BY` of the keys, and a key with no group gets the row that the subquery gives for no input, so that `count(*)` gives 0 and not null.
 //!
+//! The vector scan of one table also tests an `EXISTS` of its `WHERE` with one key and no other condition on the table as a probe of the set of the keys that have a row ([`key_set`]). The two scans keep the same state of the subquery, so it runs once also when the vector scan cannot run and the row engine scans the table.
+//!
 //! The subquery runs once at its first evaluation. The run for each row also reads all the rows of the tables of the subquery at the first row, into the cache of the tables, so the run once costs approximately the same for a query that reads only one row outside the subquery. The run of the subquery tests its conditions on rows that the old run did not test, so no expression of it can be volatile, and an error of the run makes the subquery run as before for each row, which then gives the same errors as before.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use rupg_analyze::{BoolOp, Expr, ExprKind, Query, SortGroup, SubLinkKind, Target};
@@ -11,7 +12,7 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use crate::scan::{self, Key};
-use crate::{Cache, Rows, agg, correlated, free_work, run_query, volatile, window};
+use crate::{Cache, Rows, agg, columnar, correlated, free_work, run_query, volatile, window};
 
 /// The `=` functions of two integers: `int2eq`, `int4eq`, `int8eq`, `int24eq`, `int42eq`, `int48eq`, `int84eq`, `int28eq` and `int82eq`.
 const EQUALS: [u32; 9] = [63, 65, 467, 158, 159, 852, 474, 1850, 1856];
@@ -29,7 +30,9 @@ pub(crate) enum State {
 pub(crate) struct Lifted {
     /// The value of each key in the query outside the subquery: a column of that query.
     outer: Vec<Expr>,
-    rows: HashMap<Vec<Key>, Rc<Rows>>,
+    rows: Buckets,
+    /// For an `EXISTS` with one integer key and no test, the keys that have a row, and `rows` is empty.
+    set: Option<Rc<KeySet>>,
     /// The rows for a key that has no row.
     empty: Rc<Rows>,
     /// For `EXISTS`, the conditions that read the query outside the subquery and are not keys. They read the columns of the subquery as [`ExprKind::SubColumn`] of the rows of a key.
@@ -44,7 +47,10 @@ pub(crate) struct Lifted {
 pub(crate) type Evaluate<'a> = dyn FnMut(&Expr, Option<&[Value]>) -> Result<Value> + 'a;
 
 /// The rows of a lifted subquery for each key.
-type Buckets = HashMap<Vec<Key>, Rc<Rows>>;
+type Buckets = rupg_kernels::hash::HashMap<Vec<Key>, Rc<Rows>>;
+
+/// The keys of an `EXISTS` that have a row, for [`key_set`].
+pub(crate) type KeySet = rupg_kernels::hash::HashSet<i64>;
 
 /// The two queries of a lifted subquery and the value of each key outside it.
 struct Split {
@@ -65,30 +71,7 @@ pub(crate) fn rows(
     cache: &Cache,
     eval: &mut Evaluate<'_>,
 ) -> Result<Option<Rc<Rows>>> {
-    let key: *const Query = query;
-    let found = cache.lifted.borrow().iter().position(|(q, _)| *q == key);
-    let lifted = match found {
-        Some(at) => match &cache.lifted.borrow()[at].1 {
-            State::Never { .. } => return Ok(None),
-            State::Lifted(lifted) => Rc::clone(lifted),
-        },
-        None => {
-            let state = if correlated(query) {
-                lift(query, kind, params, session, cache)
-            } else {
-                State::Never { _kept: Vec::new() }
-            };
-            let lifted = match &state {
-                State::Lifted(lifted) => Some(Rc::clone(lifted)),
-                State::Never { .. } => None,
-            };
-            cache.lifted.borrow_mut().push((key, state));
-            match lifted {
-                Some(lifted) => lifted,
-                None => return Ok(None),
-            }
-        }
-    };
+    let Some(lifted) = state(query, kind, params, session, cache) else { return Ok(None) };
     let mut keys = Vec::with_capacity(lifted.outer.len());
     for expr in &lifted.outer {
         let value = eval(expr, None)?;
@@ -100,6 +83,10 @@ pub(crate) fn rows(
             None => return Ok(None),
         }
     }
+    if let (Some(set), [Key::Int(key)]) = (&lifted.set, keys.as_slice()) {
+        let found = if set.contains(key) { &lifted.one } else { &lifted.empty };
+        return Ok(Some(Rc::clone(found)));
+    }
     let Some(rows) = lifted.rows.get(&keys) else { return Ok(Some(Rc::clone(&lifted.empty))) };
     let Some(test) = &lifted.test else { return Ok(Some(Rc::clone(rows))) };
     for row in rows.iter() {
@@ -108,6 +95,49 @@ pub(crate) fn rows(
         }
     }
     Ok(Some(Rc::clone(&lifted.empty)))
+}
+
+/// For the vector scan, the keys of a correlated `EXISTS` with one integer key and no other condition on the query outside it: the column of the key in the query outside it, and the keys that have a row. A row whose key is not in the set, or is null, gets false, as [`rows`] gives. `None` for another subquery, or when the run fails, and then the subquery runs for each row.
+pub(crate) fn key_set(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<(Expr, Rc<KeySet>)> {
+    let lifted = state(query, &SubLinkKind::Exists, params, session, cache)?;
+    let ([outer], None, Some(set)) = (lifted.outer.as_slice(), &lifted.test, &lifted.set) else {
+        return None;
+    };
+    Some((outer.clone(), Rc::clone(set)))
+}
+
+/// The lifted state of a subquery, which the first call makes and the cache keeps. `None` when the subquery runs for each row.
+fn state(
+    query: &Query,
+    kind: &SubLinkKind,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<Rc<Lifted>> {
+    let key: *const Query = query;
+    let found = cache.lifted.borrow().iter().position(|(q, _)| *q == key);
+    if let Some(at) = found {
+        return match &cache.lifted.borrow()[at].1 {
+            State::Never { .. } => None,
+            State::Lifted(lifted) => Some(Rc::clone(lifted)),
+        };
+    }
+    let state = if correlated(query) {
+        lift(query, kind, params, session, cache)
+    } else {
+        State::Never { _kept: Vec::new() }
+    };
+    let lifted = match &state {
+        State::Lifted(lifted) => Some(Rc::clone(lifted)),
+        State::Never { .. } => None,
+    };
+    cache.lifted.borrow_mut().push((key, state));
+    lifted
 }
 
 /// The state of a subquery at its first evaluation: its rows for each key, or [`State::Never`] when it cannot run once or when the run fails.
@@ -126,14 +156,44 @@ fn lift(
     // With a test, `EXISTS` keeps the rows of a key, which the test reads.
     let collapse = *kind == SubLinkKind::Exists && test.is_none();
     let one = Rc::new(vec![Vec::new()]);
-    let run = || -> Result<(Buckets, Rc<Rows>)> {
+    // An `EXISTS` with one key and no test needs only the set of the keys that have a row.
+    let single = collapse && width == 1;
+    let run = || -> Result<(Buckets, Option<KeySet>, Rc<Rows>)> {
         let empty_rows = match queries.get(1) {
             Some(q) => Rc::new(run_query(q, params, session, cache, &[], false)?),
             None => Rc::new(Vec::new()),
         };
+        if single && let Some(keys) = columnar::column_keys(&queries[0], session, cache)? {
+            return Ok((
+                Buckets::default(),
+                Some(keys.into_iter().flatten().collect()),
+                empty_rows,
+            ));
+        }
         let found = run_query(&queries[0], params, session, cache, &[], false)?;
-        let mut grouped: HashMap<Vec<Key>, Rows> = HashMap::new();
+        let mut grouped: rupg_kernels::hash::HashMap<Vec<Key>, Rows> = Default::default();
+        let mut ints = KeySet::default();
         'row: for mut row in found {
+            if single {
+                let Some(value) = row.pop() else {
+                    return Err(rupg_common::Error::internal("a lifted row has no key"));
+                };
+                if value.is_null() {
+                    continue;
+                }
+                match scan::key(value) {
+                    Some(Key::Int(key)) => {
+                        ints.insert(key);
+                    }
+                    Some(key) => {
+                        grouped.entry(vec![key]).or_default();
+                    }
+                    None => {
+                        return Err(rupg_common::Error::internal("a lifted key is not an integer"));
+                    }
+                }
+                continue;
+            }
             let Some(columns) = row.len().checked_sub(width) else {
                 return Err(rupg_common::Error::internal("a lifted row has no key"));
             };
@@ -154,16 +214,23 @@ fn lift(
                 rows.push(row);
             }
         }
+        let set = if single && grouped.is_empty() {
+            Some(ints)
+        } else {
+            grouped.extend(ints.into_iter().map(|key| (vec![Key::Int(key)], Vec::new())));
+            None
+        };
         let rows = grouped
             .into_iter()
             .map(|(k, rows)| (k, if collapse { Rc::clone(&one) } else { Rc::new(rows) }))
             .collect();
-        Ok((rows, empty_rows))
+        Ok((rows, set, empty_rows))
     };
     let result = run();
     match result {
-        Ok((rows, empty)) => {
-            State::Lifted(Rc::new(Lifted { outer, rows, empty, test, one, _queries: queries }))
+        Ok((rows, set, empty)) => {
+            let set = set.map(Rc::new);
+            State::Lifted(Rc::new(Lifted { outer, rows, set, empty, test, one, _queries: queries }))
         }
         Err(_) => State::Never { _kept: queries },
     }

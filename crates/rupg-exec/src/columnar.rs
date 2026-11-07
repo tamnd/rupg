@@ -3,9 +3,10 @@
 //! The scan tests the conditions of `WHERE` on each vector of 1024 rows with a selection vector, and it makes the groups and the aggregates with the codes and the integers of the vectors. The targets, `HAVING` and `ORDER BY` then run with [`Eval`] on one row for each group, or on each row that passes, so that they give the values of the row engine. The groups come in the order that the row engine gives them, which is the order of the hash table of `HashAggregate`. A query that the scan cannot run gives `None`, and the row engine runs it.
 
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, Var};
+use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, SubLinkKind, Var};
 use rupg_column::dict::{Dictionary, MISSING};
 use rupg_column::segment::{Kind, Nulls, ROWS, Store};
 use rupg_column::stored::{self, Stored, VECTOR};
@@ -18,7 +19,7 @@ use rupg_summary::zone::{Test, Verdict, Zone};
 use rupg_types::{Numeric, Value, oid};
 
 use crate::agg;
-use crate::{Cache, Eval, Group, hashed, scan, sort};
+use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
 
 mod groups;
 mod top;
@@ -544,6 +545,15 @@ struct Exec<'q> {
     /// The parameters of the query, then the values of the columns of a [`Generic`].
     slots: Vec<Value>,
     empty: scan::Tables,
+    /// The `EXISTS` links of `WHERE` that ran once.
+    links: Vec<Link>,
+}
+
+/// An `EXISTS` of `WHERE` that ran once, which [`lift::key_set`] gives: the link in the query, the column of its key, and the keys that have a row.
+struct Link {
+    at: *const Expr,
+    outer: Expr,
+    keys: Rc<lift::KeySet>,
 }
 
 /// The number of characters of the bytes of a `String`: the bytes less the bytes that continue a character, with the form `10xxxxxx`. Eight bytes are tested at a time.
@@ -780,6 +790,11 @@ impl<'q> Exec<'q> {
                 return Ok(col);
             }
             ExprKind::Bool(op, args) => return self.boolean(*op, args, batch, sel),
+            ExprKind::SubLink(_) => {
+                if let Some(link) = self.links.iter().position(|l| std::ptr::eq(l.at, expr)) {
+                    return self.link(link, batch, sel);
+                }
+            }
             ExprKind::NullTest(arg, is_null) if kind_of(arg.ty).is_some() => {
                 let col = self.eval(arg, batch, sel)?;
                 if !matches!(col.data, Data::Values(_)) {
@@ -801,6 +816,20 @@ impl<'q> Exec<'q> {
             _ => {}
         }
         self.generic(expr, batch, sel)
+    }
+
+    /// The `EXISTS` of `self.links[link]`: true for a row whose key has a row of the subquery, and false for a row whose key has no row or is null.
+    fn link(&mut self, link: usize, batch: &mut Batch, sel: &[u32]) -> Result<Col> {
+        let outer = self.links[link].outer.clone();
+        let col = self.eval(&outer, batch, sel)?;
+        let keys = &self.links[link].keys;
+        let out: Vec<Option<bool>> = (0..sel.len())
+            .map(|i| {
+                let key = col.int(i).or_else(|| int_of(&col.value(i, &self.dicts)));
+                Some(key.is_some_and(|key| keys.contains(&key)))
+            })
+            .collect();
+        Ok(Col::bools(&out))
     }
 
     /// A `CASE` with no argument whose results are integers, or codes of one dictionary and constant texts that the dictionary has, so that equal texts have equal codes. Each condition runs on the rows that no condition before it took, and each result runs only on its rows, as the row engine evaluates the result of the first condition that is true. `None` for other results, for which the row engine evaluates the expression.
@@ -1423,7 +1452,18 @@ fn data_len(data: &DecodedData) -> usize {
 }
 
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
-fn unsupported(expr: &Expr) -> bool {
+///
+/// With `links`, an `EXISTS` of `WHERE` alone or in `AND`, `OR` and `NOT` is supported, and [`run`] tests it with [`lift::key_set`]. In other places a link can go to [`Exec::generic`], which does not evaluate a subquery.
+fn unsupported(expr: &Expr, links: bool) -> bool {
+    if links {
+        match &expr.kind {
+            ExprKind::Bool(_, args) => return args.iter().any(|arg| unsupported(arg, true)),
+            ExprKind::SubLink(sub) => {
+                return sub.kind != SubLinkKind::Exists || crate::volatile(expr);
+            }
+            _ => {}
+        }
+    }
     crate::volatile(expr)
         || expr
             .find(0, &mut |e, _| {
@@ -1750,11 +1790,14 @@ pub(crate) fn run(
         .chain(&query.limit);
     let mut used = vec![false; relation.columns.len()];
     for expr in exprs.clone() {
-        if unsupported(expr) {
+        let links = query.filter.as_ref().is_some_and(|filter| std::ptr::eq(filter, expr));
+        if unsupported(expr, links) {
             return Ok(None);
         }
-        expr.find(0, &mut |e, _| {
+        // A column of the table in an `EXISTS` is a column of the query just outside the subquery.
+        expr.find(0, &mut |e, depth| {
             if let ExprKind::Var(var) = e.kind
+                && var.levels_up == depth
                 && let Some(slot) =
                     usize::try_from(var.attnum - 1).ok().and_then(|i| used.get_mut(i))
             {
@@ -1797,6 +1840,25 @@ pub(crate) fn run(
             dicts.push(Dict::Stored(Arc::clone(column)));
         }
     }
+    // An `EXISTS` of `WHERE` with one integer key runs once, and the scan tests each row with a probe of the keys. Another `EXISTS` makes the row engine scan the table, with the same state of the subquery.
+    let mut links = Vec::new();
+    if let Some(filter) = &query.filter {
+        let mut found = Vec::new();
+        filter.find(0, &mut |e, depth| {
+            if depth == 0
+                && let ExprKind::SubLink(sub) = &e.kind
+            {
+                found.push((e, sub));
+            }
+            None::<()>
+        });
+        for (at, sub) in found {
+            let Some((outer, keys)) = lift::key_set(&sub.query, params, session, cache) else {
+                return Ok(None);
+            };
+            links.push(Link { at, outer, keys });
+        }
+    }
     let mut exec = Exec {
         params,
         session,
@@ -1811,6 +1873,7 @@ pub(crate) fn run(
         lengths: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
+        links,
     };
     let (offset, count) = {
         let mut eval = Eval::new(params, session, &exec.empty, cache, &[]);
@@ -1951,7 +2014,7 @@ pub(crate) fn selected(
         }
     }
     for cond in conds {
-        if unsupported(cond) {
+        if unsupported(cond, false) {
             return Ok(None);
         }
         cond.find(0, &mut |e, _| {
@@ -2005,6 +2068,7 @@ pub(crate) fn selected(
         lengths: FxMap::default(),
         slots: Vec::new(),
         empty: scan::Tables::default(),
+        links: Vec::new(),
     };
     let segments = rows.div_ceil(ROWS);
     let mut scan =
@@ -2025,6 +2089,75 @@ pub(crate) fn selected(
         Ok(true)
     })?;
     Ok(integers.then_some(out))
+}
+
+/// For a query of one table whose one target is an integer column of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: the value of the column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
+///
+/// # Errors
+///
+/// An error of a condition of `WHERE` or of a read of the table.
+pub(crate) fn column_keys(
+    query: &Query,
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<Vec<Option<i64>>>> {
+    let [relation] = query.relations.as_slice() else { return Ok(None) };
+    let [target] = query.targets.as_slice() else { return Ok(None) };
+    if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
+        || relation.subquery.is_some()
+        || relation.function.is_some()
+        || relation.values.is_some()
+        || relation.cte.is_some()
+        || relation.tablesample.is_some()
+        || relation.oid < rupg_catalog::FIRST_NORMAL_OID
+        || target.junk
+        || query.grouped
+        || !query.group.is_empty()
+        || query.having.is_some()
+        || !query.distinct.is_empty()
+        || !query.sort.is_empty()
+        || query.limit.is_some()
+        || query.offset.is_some()
+        || query.set_op.is_some()
+        || !query.windows.is_empty()
+        || !query.ctes.is_empty()
+        || !query.row_marks.is_empty()
+        || query.write.is_some()
+        || !query.grouping_sets.is_empty()
+        || query.has_target_srfs()
+    {
+        return Ok(None);
+    }
+    let ExprKind::Var(var) = &target.expr.kind else { return Ok(None) };
+    let Some(column) = usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0) else {
+        return Ok(None);
+    };
+    let mut conds = Vec::new();
+    if let Some(filter) = &query.filter {
+        scan::conjuncts(filter, &mut conds);
+    }
+    // The scan runs with no parameters and reads only the columns of the table.
+    for cond in &conds {
+        let other = cond.find(0, &mut |e, _| match &e.kind {
+            ExprKind::Param(_) | ExprKind::SubLink(_) => Some(()),
+            ExprKind::Var(var) if var.levels_up != 0 || var.attnum < 1 => Some(()),
+            _ => None,
+        });
+        if other.is_some() {
+            return Ok(None);
+        }
+    }
+    let Some(catalog) = session.catalog() else { return Ok(None) };
+    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    if table.kind != rupg_catalog::RelKind::Table
+        || !catalog.all_inheritors(relation.oid).is_empty()
+    {
+        return Ok(None);
+    }
+    let Some(found) = selected(relation, &conds, &[column], session, cache)? else {
+        return Ok(None);
+    };
+    Ok(found.keys.into_iter().next())
 }
 
 /// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.
