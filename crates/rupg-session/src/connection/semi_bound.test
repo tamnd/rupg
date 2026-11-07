@@ -1,0 +1,70 @@
+> CREATE TABLE so (k int, d date, p text, c int)
+CREATE TABLE
+> INSERT INTO so SELECT i, date '1995-01-01' + i % 700, chr(65 + i % 5), CASE WHEN i % 11 = 0 THEN NULL ELSE i % 5000 END FROM generate_series(1, 150000) i
+INSERT 0 150000
+> CREATE TABLE sl (o bigint, x date, y date, s int)
+CREATE TABLE
+> INSERT INTO sl SELECT CASE WHEN i % 13 = 0 THEN NULL ELSE (i * 7) % 180000 END, date '1995-01-01' + i % 300, date '1995-01-01' + (i * 3) % 300, i % 1000 FROM generate_series(1, 200000) i
+INSERT 0 200000
+> CREATE TABLE st (n int)
+CREATE TABLE
+> INSERT INTO st SELECT i * 3 FROM generate_series(1, 300) i
+INSERT 0 300
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 127224,9534584903
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c AND sl.x > sl.y)
+fields count:20:8:-1,sum:20:8:-1
+row 86404,6483374111
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s < so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 114537,8610678043
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND so.c <= sl.s)
+fields count:20:8:-1,sum:20:8:-1
+row 12738,927774360
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.o > so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 123028,9527843334
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s >= so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 137262,10322300640
+SELECT 1
+> SELECT p, count(*) FROM so JOIN st ON st.n = so.k % 900 WHERE so.d > date '1995-03-01' AND EXISTS (SELECT 1 FROM sl l2 WHERE l2.o = so.k AND l2.s <> so.c) AND NOT EXISTS (SELECT 1 FROM sl l3 WHERE l3.o = so.k AND l3.s <> so.c AND l3.x > l3.y) GROUP BY p ORDER BY p
+fields p@so.3:25:-1:-1,count:20:8:-1
+row A,3992
+row B,4244
+row C,3937
+row D,4061
+row E,3519
+SELECT 5
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c + 1)
+fields count:20:8:-1,sum:20:8:-1
+row 127275,9538452403
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c AND sl.s < so.k)
+fields count:20:8:-1,sum:20:8:-1
+row 126802,9534433248
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s > so.k * 0 + 2147483647)
+fields count:20:8:-1,sum:20:8:-1
+row 0,NULL
+SELECT 1
+> UPDATE sl SET s = NULL WHERE s % 10 = 3
+UPDATE 20000
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s <> so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 114498,8580815617
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s < so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 103128,7752997494
+SELECT 1
+> SELECT count(*), sum(k) FROM so WHERE NOT EXISTS (SELECT 1 FROM sl WHERE sl.o = so.k AND sl.s >= so.c)
+fields count:20:8:-1,sum:20:8:-1
+row 138579,10418389377
+SELECT 1
