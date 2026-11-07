@@ -523,7 +523,8 @@ pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
             }
             _ => continue,
         };
-        let input = node.children.first().map_or(table.groups, |c| c.cost.rows);
+        let input =
+            node.children.first().map_or(table.groups, |c| split_input(c).unwrap_or(c.cost.rows));
         let hash =
             |right| HashTable { groups: table.groups, input, keys: table.keys.clone(), right };
         match table.of {
@@ -541,6 +542,27 @@ pub fn hash_tables(plan: &Plan<'_>, query: &Query) -> HashTables {
         }
     }
     out
+}
+
+/// The rows that the partial part of a split aggregate reads in all the processes, when `child` is the input of the final part: a `Gather` or a `Gather Merge`, with a `Sort` or not above it and under it, of a partial `Aggregate`. The `Gather` gives the rows of the partial part of each process, so the ratio of its rows to the rows of the partial `Aggregate` is the number of the processes of the estimate.
+fn split_input(child: &Node<'_>) -> Option<f64> {
+    fn through_sort<'n, 'q>(node: &'n Node<'q>) -> Option<&'n Node<'q>> {
+        match node.kind {
+            Kind::Sort(_) | Kind::IncrementalSort { .. } => node.children.first(),
+            _ => Some(node),
+        }
+    }
+    let gather = through_sort(child)?;
+    if !matches!(gather.kind, Kind::Gather { .. } | Kind::GatherMerge { .. }) {
+        return None;
+    }
+    let partial = through_sort(gather.children.first()?)?;
+    if !matches!(partial.kind, Kind::Aggregate { split: rupg_plan::Split::Partial, .. })
+        || partial.cost.rows <= 0.0
+    {
+        return None;
+    }
+    Some(partial.children.first()?.cost.rows * gather.cost.rows / partial.cost.rows)
 }
 
 /// True when `op` is `top` or an operation in it, with the sides from `top` down to it in `path`.

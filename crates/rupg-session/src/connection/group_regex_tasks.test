@@ -4,8 +4,6 @@ CREATE TABLE
 INSERT 0 300000
 > ANALYZE gr
 ANALYZE
-> SET max_parallel_workers_per_gather = 0
-SET
 > SELECT regexp_replace(u, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k, count(*), avg(length(u)), min(u) FROM gr WHERE u <> '' GROUP BY k HAVING count(*) > 3000 ORDER BY k
 fields k:25:-1:-1,count:20:8:-1,avg:1700:-1:-1,min:25:-1:-1
 row ftp://f0,12411,8.0000000000000000,ftp://f0

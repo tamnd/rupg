@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The parallel group scan of the server compares the groups that the plan expects with the rows that the partial part of a split aggregate reads in all the processes. Before, under a `Gather` it compared them with the partial groups, so the tasks did not find the groups of a table on which the plan gave few workers.
 - A lifted `EXISTS` with one integer key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it, such as `l2.l_suppkey <> l1.l_suppkey` in TPC-H Q21, keeps only the least and the greatest value of the column for each key. A row tests the comparison on these two values, and not on each row of its key. TPC-H Q21 at scale 0.1 goes from 9.8 s to 5.8 s (#1408).
 - A SQL function whose argument is a SQL/JSON constructor with `RETURNING`, such as `f(JSON_OBJECT('a': 'b' RETURNING text))`, inlines: the `CaseTest` of the coercion of the constructor is the value of the constructor and not of a `CASE` around it, as `contain_context_dependent_node` lets it read (#1407).
 - The tasks of the server find the groups of a vector scan with a key of `regexp_replace` of a text column of codes with constant arguments from a map of each code to the code of its result in a new dictionary. The tasks find the result of each code once and at the same time. On 2M rows of ClickBench the time of the server for q29, `REGEXP_REPLACE(Referer, ...) AS k ... GROUP BY k`, went from 2.1 s to 0.5 s.

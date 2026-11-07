@@ -397,7 +397,7 @@ pub struct Table<'q> {
 pub struct HashTable {
     /// `numGroups`.
     pub groups: f64,
-    /// The rows that the node reads by the estimate of the plan: the `plan_rows` of its first child.
+    /// The rows that the node reads by the estimate of the plan: the `plan_rows` of its first child. For the final part of a split aggregate, the rows that the partial part reads in all the processes.
     pub input: f64,
     /// The targets of the keys in the order of the hash. For a set operation, the columns.
     pub keys: Vec<usize>,
