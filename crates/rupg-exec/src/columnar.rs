@@ -2,7 +2,7 @@
 //!
 //! The scan tests the conditions of `WHERE` on each vector of 1024 rows with a selection vector, and it makes the groups and the aggregates with the codes and the integers of the vectors. The targets, `HAVING` and `ORDER BY` then run with [`Eval`] on one row for each group, or on each row that passes, so that they give the values of the row engine. The groups come in the order that the row engine gives them, which is the order of the hash table of `HashAggregate`. A query that the scan cannot run gives `None`, and the row engine runs it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -3187,7 +3187,7 @@ fn grouped(
                 None
             };
             match (plan, lead) {
-                (Some((mut plan, derived)), Some((place, n))) => {
+                (Some((mut plan, derived)), Some((place, n))) if plan.maps.is_empty() => {
                     session.interrupted()?;
                     match groups::lead_cut(&scan.exec.stored, &plan, place, rows, scan.segments, n)?
                     {
@@ -3257,6 +3257,7 @@ fn grouped(
         && let Some((plan, derived)) =
             parallel_plan(scan.exec, &[arg], &[], &[], scan.conds, rows, tasks)
         && derived.iter().all(Option::is_none)
+        && plan.maps.is_empty()
     {
         session.interrupted()?;
         if let Some((count, Some(first))) =
@@ -3282,6 +3283,7 @@ fn grouped(
         && let Some((plan, derived)) =
             parallel_plan(scan.exec, &[key, arg], &[], &[], scan.conds, rows, tasks)
         && derived.iter().all(Option::is_none)
+        && plan.maps.is_empty()
     {
         session.interrupted()?;
         found = groups::distinct_groups(
@@ -3298,6 +3300,23 @@ fn grouped(
         trailing = found.trailing;
         let mut folded = found.states.into_iter();
         for (call, state) in aggs.iter_mut().zip(&mut folded) {
+            // `min` and `max` of a text column of codes: the tasks fold the place of each text in the order of the bytes, with the code in the low 32 bits, and the extreme code of each group goes into the state of the row engine.
+            if let (Method::Row(_), Some(keep), groups::Folded::Extreme(extremes)) =
+                (&call.method, &mut call.codes, &state)
+            {
+                let place = call.agg.args.first().and_then(|a| place_of(scan.exec, a));
+                let Some(place) = place else {
+                    return Err(Error::internal("a text extreme has no column"));
+                };
+                keep.dict = scan.exec.dict_of[place];
+                keep.best = extremes
+                    .iter()
+                    .map(|e| e.map_or(u32::MAX, |w| (w & 0xffff_ffff) as u32))
+                    .collect();
+                call.states = States::Row(Vec::new());
+                grow(call, groups, 0, params, session, cache, &empty)?;
+                continue;
+            }
             call.states = match state {
                 groups::Folded::Count(v) => States::Count(v),
                 groups::Folded::Sum(v) => States::Sum(v),
@@ -4054,18 +4073,50 @@ fn parallel_plan(
                 .map(groups::Input::Column),
         })
         .collect::<Option<Vec<_>>>()?;
+    // The columns of integers that the scan computes from a text column of codes, as places after the stored columns.
+    let pending: RefCell<Vec<(usize, Mapped)>> = RefCell::new(Vec::new());
+    let mapped = |from: usize, kind: Mapped| {
+        let mut pending = pending.borrow_mut();
+        let at = pending.iter().position(|&p| p == (from, kind)).unwrap_or_else(|| {
+            pending.push((from, kind));
+            pending.len() - 1
+        });
+        exec.stored.len() + at
+    };
+    let text_place = |expr: &Expr| {
+        place(expr).filter(|&p| {
+            let stored = &exec.stored[p];
+            stored.kind == Kind::Text && stored.kind.store() == Store::Code && stored.dict.is_some()
+        })
+    };
+    // `length` and `octet_length` of a text column of codes.
+    let length = |expr: &Expr| match &expr.kind {
+        ExprKind::Func(func) if !func.retset => match (src(func.oid), func.args.as_slice()) {
+            ("textlen", [a]) => Some(mapped(text_place(a)?, Mapped::Chars)),
+            ("textoctetlen", [a]) => Some(mapped(text_place(a)?, Mapped::Octets)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let int_input = |expr: &Expr| int_place(expr).or_else(|| length(expr));
     let mut folds = aggs
         .iter()
         .map(|call| {
             let arg = call.agg.args.first();
             Some(match call.method {
                 Method::Count => groups::Fold::Count,
-                Method::CountArg => groups::Fold::CountArg(place(arg?)?),
-                Method::SumInt | Method::Int128 { .. } => groups::Fold::Sum(int_place(arg?)?),
-                Method::Min => groups::Fold::Min(int_place(arg?)?),
-                Method::Max => groups::Fold::Max(int_place(arg?)?),
+                Method::CountArg => groups::Fold::CountArg(place(arg?).or_else(|| length(arg?))?),
+                Method::SumInt | Method::Int128 { .. } => groups::Fold::Sum(int_input(arg?)?),
+                Method::Min => groups::Fold::Min(int_input(arg?)?),
+                Method::Max => groups::Fold::Max(int_input(arg?)?),
                 Method::Shift { .. } => groups::Fold::None,
-                Method::Distinct | Method::Dec { .. } | Method::Row(_) => return None,
+                // `min` and `max` of a text column of codes, which compare the bytes: the extreme place of the texts in the order of their bytes.
+                Method::Row(_) => {
+                    let max = call.codes.as_ref()?.max?;
+                    let order = mapped(text_place(arg?)?, Mapped::Order);
+                    if max { groups::Fold::Max(order) } else { groups::Fold::Min(order) }
+                }
+                Method::Distinct | Method::Dec { .. } => return None,
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -4074,7 +4125,62 @@ fn parallel_plan(
     }
     let filters =
         conds.iter().map(|cond| task_test(exec, tasks, cond)).collect::<Option<Vec<_>>>()?;
-    Some((groups::Plan { keys, folds, bases: bases.len(), filters }, derived))
+    let maps = pending
+        .into_inner()
+        .into_iter()
+        .map(|(from, kind)| code_map(exec, tasks, from, kind))
+        .collect::<Option<Vec<_>>>()?;
+    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps }, derived))
+}
+
+/// What a map of [`groups::Map`] gives for the text of each code.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mapped {
+    /// The number of characters, as `length` gives it.
+    Chars,
+    /// The number of bytes, as `octet_length` gives it.
+    Octets,
+    /// The place of the text in the order of the bytes of the texts of the dictionary, above the code in the low 32 bits. The least value is the least text, and the code of the text is in the value.
+    Order,
+}
+
+/// The number of the codes for which one task of [`code_map`] finds the values.
+const MAP_CODES: usize = 1 << 14;
+
+/// The map of the text column of codes at the place `from` for `kind`. The tasks find the values of the codes at the same time. `None` for a dictionary with too many codes for [`Mapped::Order`].
+fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Option<groups::Map> {
+    let dict = exec.stored[from].dict.as_ref()?;
+    let codes = dict.len();
+    if kind == Mapped::Order && u32::try_from(codes).ok()? >= 1 << 31 {
+        return None;
+    }
+    let order = (kind == Mapped::Order).then(|| dict.order());
+    let mut values = vec![0_i64; codes + 1];
+    let jobs: Vec<Job<'_>> = values
+        .chunks_mut(MAP_CODES)
+        .enumerate()
+        .map(|(n, chunk)| {
+            Box::new(move || {
+                for (i, value) in chunk.iter_mut().enumerate() {
+                    let code = n * MAP_CODES + i;
+                    let Ok(code) = u32::try_from(code) else { continue };
+                    if code == 0 {
+                        continue;
+                    }
+                    *value = match (kind, order) {
+                        (Mapped::Chars, _) => chars(dict.get(code)) as i64,
+                        (Mapped::Octets, _) => dict.get(code).len() as i64,
+                        (Mapped::Order, Some(order)) => {
+                            i64::from(order[code as usize]) << 32 | i64::from(code)
+                        }
+                        (Mapped::Order, None) => 0,
+                    };
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(jobs);
+    Some(groups::Map { from, values: Arc::from(values) })
 }
 
 /// The test of the tasks for the condition `cond`: the test of the zones of [`Exec::zone_test`], or else the set of codes of [`code_test`].

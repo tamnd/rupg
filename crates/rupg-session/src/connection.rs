@@ -4360,6 +4360,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/code_likes_tasks.test")));
     }
 
+    /// The tasks of the server fold `length`, `octet_length`, `min` and `max` of a text column of codes from a value of each code that they find once: with the result of Postgres for nulls, empty texts, texts of more bytes than characters, a group of only nulls, codes of a later insert, a filter, `HAVING` and a top.
+    #[test]
+    fn group_maps_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/group_maps_tasks.test")));
+    }
+
     /// The tasks of the server find the top of a vector scan with `ORDER BY` and `LIMIT` when each target is a key, with the order of Postgres for nulls first and last, `DESC`, empty texts, timestamps, more keys, a filter, `OFFSET` and a top that the tasks do not find.
     #[test]
     fn top_tasks() {

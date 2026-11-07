@@ -105,7 +105,13 @@ pub(super) fn top(
     bound: usize,
 ) -> Result<Vec<Entry>> {
     assert!(!keys.is_empty() && keys.len() <= KEYS && bound > 0, "a top has 1 to 4 keys");
-    let plan = Plan { keys: Vec::new(), folds: Vec::new(), bases: 0, filters: filters.to_vec() };
+    let plan = Plan {
+        keys: Vec::new(),
+        folds: Vec::new(),
+        bases: 0,
+        filters: filters.to_vec(),
+        maps: Vec::new(),
+    };
     let units = groups::units_of(rows, segments);
     if units.is_empty() {
         return Ok(Vec::new());

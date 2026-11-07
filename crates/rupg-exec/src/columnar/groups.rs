@@ -193,6 +193,35 @@ pub(super) struct Plan {
     pub(super) bases: usize,
     /// The conditions of the scan, each a test of one column by its place. A test other than a null test is on a column of integers, or an equal or not equal test on a column of text codes.
     pub(super) filters: Vec<(usize, Test)>,
+    /// The columns of integers that the scan computes from columns of codes. The place of a map is the number of the stored columns plus its index here, and a key or a fold reads it as a stored column of integers.
+    pub(super) maps: Vec<Map>,
+}
+
+/// A column of integers from a column of codes: the value of a row is the value of its code, and a row with a null code is null. The values are not negative.
+#[derive(Clone)]
+pub(super) struct Map {
+    /// The place of the column of codes.
+    pub(super) from: usize,
+    /// The value of each code, at the index of the code.
+    pub(super) values: Arc<[i64]>,
+}
+
+impl Plan {
+    /// The place of the stored column that the scan decodes for the column at `place`: the column of codes of a map, or else the column.
+    fn source(&self, stored: usize, place: usize) -> usize {
+        place.checked_sub(stored).and_then(|m| self.maps.get(m)).map_or(place, |m| m.from)
+    }
+}
+
+/// The decoded vector of the map `map` from the decoded vector of its column of codes `codes`.
+fn map_vector(map: &Map, codes: &Decoded) -> Decoded {
+    let value = |code: u32| map.values.get(code as usize).copied().unwrap_or(0);
+    let data = match &codes.data {
+        DecodedData::Code(v) => v.iter().map(|&c| value(c)).collect(),
+        DecodedData::Int(v) => v.iter().map(|&c| u32::try_from(c).map_or(0, value)).collect(),
+        DecodedData::Float(v) => vec![0; v.len()],
+    };
+    Decoded { data: DecodedData::Int(data), nulls: codes.nulls.clone() }
 }
 
 /// The groups of a scan, in the order of their first rows, or in any order when the scan does not need it.
@@ -379,6 +408,10 @@ impl Pack {
             .keys
             .iter()
             .map(|input| match *input {
+                // A map has values that are not negative, and nulls where its column of codes has nulls.
+                Input::Column(place) if place >= stored.len() => {
+                    Some((64, false, nulls(plan.source(stored.len(), place))))
+                }
                 Input::Column(place) => {
                     let (bits, signed) = bits_of(stored[place].kind);
                     Some((bits, signed, nulls(place)))
@@ -1118,7 +1151,8 @@ fn scan_run<const W: usize>(
     let mut extremes: Vec<Option<(i64, i64)>> = vec![None; plan.bases];
     let first_base = plan.folds.len() - plan.bases;
     let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
-    let mut decoded: Vec<Option<Decoded>> = (0..stored.len()).map(|_| None).collect();
+    let mut decoded: Vec<Option<Decoded>> =
+        (0..stored.len() + plan.maps.len()).map(|_| None).collect();
     let mut last = None;
     let mut sel: Vec<usize> = Vec::with_capacity(VECTOR);
     let mut keys: Vec<[u64; W]> = Vec::with_capacity(VECTOR);
@@ -1140,6 +1174,9 @@ fn scan_run<const W: usize>(
             if !tests.iter().any(|t| t.0 == place) {
                 decoded[place] = Some(decode(&stored[place], segment, vector)?);
             }
+        }
+        for (m, map) in plan.maps.iter().enumerate() {
+            decoded[stored.len() + m] = decoded[map.from].as_ref().map(|d| map_vector(map, d));
         }
         let base = (segment * ROWS + vector * VECTOR) as u64;
         last = sel.last().map(|&i| base + i as u64);
@@ -1446,6 +1483,7 @@ pub(super) fn run(
             Fold::CountArg(p) | Fold::Sum(p) | Fold::Min(p) | Fold::Max(p) => Some(*p),
             Fold::Count | Fold::None => None,
         }))
+        .map(|place| plan.source(stored.len(), place))
         .collect();
     places.sort_unstable();
     places.dedup();
