@@ -1,5 +1,7 @@
 //! The zone of a vector or a segment, and the test of a filter against it (spec/12 section 12.6.1).
 
+use std::sync::Arc;
+
 use crate::key;
 
 /// The bounds of the non-null values of a vector or a segment, as keys of [`crate::key`], with the counts.
@@ -73,6 +75,18 @@ pub enum Test {
     IsNull,
     /// `x IS NOT NULL`.
     IsNotNull,
+    /// The code of `x` is in the set: [`has_code`] of the bits and the code is true. A test of a text that the zones do not read, for example `LIKE`, gives the set of the codes of the dictionary that pass it.
+    Codes(Arc<[u64]>),
+}
+
+/// True when the code `code` is in the set of codes `bits`: bit `code % 64` of the word `code / 64` is set.
+#[must_use]
+#[inline]
+pub fn has_code(bits: &[u64], code: u64) -> bool {
+    usize::try_from(code / 64)
+        .ok()
+        .and_then(|w| bits.get(w))
+        .is_some_and(|w| w >> (code % 64) & 1 == 1)
 }
 
 impl Zone {
@@ -177,6 +191,8 @@ impl Zone {
                 }
                 verdict
             }
+            // The zones of codes hold ranks, and a set of codes has no bounds to test them with.
+            Test::Codes(_) => Verdict::Some,
             Test::IsNull | Test::IsNotNull => unreachable!("handled by test"),
         }
     }
@@ -222,6 +238,7 @@ mod tests {
             Test::Gt(c) => k > *c,
             Test::Ge(c) => k >= *c,
             Test::In(list) => list.contains(&k),
+            Test::Codes(bits) => has_code(bits, v as u64),
             Test::IsNull => false,
             Test::IsNotNull => true,
         }
@@ -237,8 +254,12 @@ mod tests {
                 (0..6).filter(|i| mask & (1 << i) != 0).map(|i| domain[i % 4]).collect();
             rows_sets.push(rows);
         }
-        let mut tests =
-            vec![Test::IsNull, Test::IsNotNull, Test::In(vec![key::int(0), key::int(2)])];
+        let mut tests = vec![
+            Test::IsNull,
+            Test::IsNotNull,
+            Test::In(vec![key::int(0), key::int(2)]),
+            Test::Codes(Arc::from([0b1010_u64])),
+        ];
         for c in 0..=4 {
             let c = key::int(c);
             tests.extend([

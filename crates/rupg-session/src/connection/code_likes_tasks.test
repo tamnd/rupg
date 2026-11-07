@@ -1,0 +1,91 @@
+> CREATE TABLE lt (u int, s text, k int)
+CREATE TABLE
+> INSERT INTO lt SELECT i, CASE WHEN i % 11 = 0 THEN NULL WHEN i % 7 = 0 THEN 'Google' || (i % 89) WHEN i % 5 = 0 THEN '' ELSE 'p' || (i % 97) || 'é' END, i % 13 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> INSERT INTO lt SELECT 300000 + i, 'new_google' || (i % 3), i % 13 FROM generate_series(1, 5000) i
+INSERT 0 5000
+> ANALYZE lt
+ANALYZE
+> SELECT count(*) FROM lt WHERE s LIKE '%oogle%'
+fields count:20:8:-1
+row 43961
+SELECT 1
+> SELECT count(*) FROM lt WHERE s NOT LIKE '%oogle%'
+fields count:20:8:-1
+row 233767
+SELECT 1
+> SELECT count(*) FROM lt WHERE s ILIKE '%GOOGLE1%'
+fields count:20:8:-1
+row 6482
+SELECT 1
+> SELECT count(*) FROM lt WHERE s NOT ILIKE 'P1%'
+fields count:20:8:-1
+row 256519
+SELECT 1
+> SELECT count(*) FROM lt WHERE s LIKE 'p_é'
+fields count:20:8:-1
+row 19279
+SELECT 1
+> SELECT count(*) FROM lt WHERE s LIKE ''
+fields count:20:8:-1
+row 46754
+SELECT 1
+> SELECT count(*) FROM lt WHERE s LIKE NULL
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*), sum(u) FROM lt WHERE s LIKE 'absent%'
+fields count:20:8:-1,sum:20:8:-1
+row 0,NULL
+SELECT 1
+> SELECT k, count(*) FROM lt WHERE s LIKE 'p1%' GROUP BY k ORDER BY k
+fields k@lt.3:23:4:-1,count:20:8:-1
+row 0,1625
+row 1,1626
+row 2,1635
+row 3,1638
+row 4,1629
+row 5,1624
+row 6,1634
+row 7,1639
+row 8,1632
+row 9,1627
+row 10,1628
+row 11,1637
+row 12,1635
+SELECT 13
+> SELECT s, count(*) FROM lt WHERE s LIKE '%oogle1%' AND k = 3 GROUP BY s ORDER BY 2 DESC, 1 LIMIT 5
+fields s@lt.2:25:-1:-1,count:20:8:-1
+row new_google1,128
+row Google1,34
+row Google14,34
+row Google15,34
+row Google16,34
+SELECT 5
+> SELECT min(u), max(u) FROM lt WHERE s NOT LIKE '%1%' AND u > 1000
+fields min:23:4:-1,max:23:4:-1
+row 1002,305000
+SELECT 1
+> SELECT u FROM lt WHERE s LIKE 'new\_%' ORDER BY u DESC LIMIT 3
+fields u@lt.1:23:4:-1
+row 305000
+row 304999
+row 304998
+SELECT 3
+> SELECT count(*) FROM lt WHERE s LIKE '%\_%' AND s NOT LIKE '%2'
+fields count:20:8:-1
+row 3333
+SELECT 1
+> PREPARE q(text) AS SELECT count(*) FROM lt WHERE s LIKE $1
+PREPARE
+> EXECUTE q('%7')
+fields count:20:8:-1
+row 3940
+SELECT 1
+> EXECUTE q('x_y')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM lt WHERE s LIKE 'p\'
+fields count:20:8:-1
+ERROR 22025 LIKE pattern must not end with escape character
