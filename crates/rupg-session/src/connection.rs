@@ -4330,6 +4330,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/semi_link.test")));
     }
 
+    /// A lifted `EXISTS` with one integer key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it keeps the least and the greatest value of the column for each key, with `<>`, `<`, `<=`, `>` and `>=` on the two sides, nulls, `NOT EXISTS` and a join of two tables, and a test of another form tests the rows of each key.
+    #[test]
+    fn semi_bound() {
+        big_stack(|| script_tasks(include_str!("connection/semi_bound.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {

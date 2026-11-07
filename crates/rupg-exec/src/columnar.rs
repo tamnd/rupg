@@ -2095,7 +2095,7 @@ pub(crate) fn selected(
     Ok(integers.then_some(out))
 }
 
-/// For a query of one table whose one target is an integer column of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: the value of the column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
+/// For a query of one table whose targets are integer columns of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: for each target, the value of its column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
 ///
 /// # Errors
 ///
@@ -2104,9 +2104,8 @@ pub(crate) fn column_keys(
     query: &Query,
     session: &dyn Session,
     cache: &Cache,
-) -> Result<Option<Vec<Option<i64>>>> {
+) -> Result<Option<Vec<Vec<Option<i64>>>>> {
     let [relation] = query.relations.as_slice() else { return Ok(None) };
-    let [target] = query.targets.as_slice() else { return Ok(None) };
     if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
         || relation.subquery.is_some()
         || relation.function.is_some()
@@ -2114,7 +2113,8 @@ pub(crate) fn column_keys(
         || relation.cte.is_some()
         || relation.tablesample.is_some()
         || relation.oid < rupg_catalog::FIRST_NORMAL_OID
-        || target.junk
+        || query.targets.is_empty()
+        || query.targets.iter().any(|t| t.junk)
         || query.grouped
         || !query.group.is_empty()
         || query.having.is_some()
@@ -2132,10 +2132,15 @@ pub(crate) fn column_keys(
     {
         return Ok(None);
     }
-    let ExprKind::Var(var) = &target.expr.kind else { return Ok(None) };
-    let Some(column) = usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0) else {
-        return Ok(None);
-    };
+    let mut columns = Vec::with_capacity(query.targets.len());
+    for target in &query.targets {
+        let ExprKind::Var(var) = &target.expr.kind else { return Ok(None) };
+        let Some(column) = usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0)
+        else {
+            return Ok(None);
+        };
+        columns.push(column);
+    }
     let mut conds = Vec::new();
     if let Some(filter) = &query.filter {
         scan::conjuncts(filter, &mut conds);
@@ -2158,10 +2163,10 @@ pub(crate) fn column_keys(
     {
         return Ok(None);
     }
-    let Some(found) = selected(relation, &conds, &[column], session, cache)? else {
+    let Some(found) = selected(relation, &conds, &columns, session, cache)? else {
         return Ok(None);
     };
-    Ok(found.keys.into_iter().next())
+    Ok(Some(found.keys))
 }
 
 /// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.

@@ -2,6 +2,8 @@
 //!
 //! The vector scan of one table also tests an `EXISTS` of its `WHERE` with one key and no other condition on the table as a probe of the set of the keys that have a row ([`key_set`]). The two scans keep the same state of the subquery, so it runs once also when the vector scan cannot run and the row engine scans the table.
 //!
+//! An `EXISTS` with one key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it, such as `l2.l_suppkey <> l1.l_suppkey` in TPC-H Q21, keeps only the least and the greatest value of the column for each key ([`Bound`]). A row of the query outside it tests the comparison on these two values, and not on each row of its key.
+//!
 //! The subquery runs once at its first evaluation. The run for each row also reads all the rows of the tables of the subquery at the first row, into the cache of the tables, so the run once costs approximately the same for a query that reads only one row outside the subquery. The run of the subquery tests its conditions on rows that the old run did not test, so no expression of it can be volatile, and an error of the run makes the subquery run as before for each row, which then gives the same errors as before.
 
 use std::rc::Rc;
@@ -16,6 +18,62 @@ use crate::{Cache, Rows, agg, columnar, correlated, free_work, run_query, volati
 
 /// The `=` functions of two integers: `int2eq`, `int4eq`, `int8eq`, `int24eq`, `int42eq`, `int48eq`, `int84eq`, `int28eq` and `int82eq`.
 const EQUALS: [u32; 9] = [63, 65, 467, 158, 159, 852, 474, 1850, 1856];
+
+/// The `<>`, `<`, `<=`, `>` and `>=` functions of two integers, in the order of the functions of [`EQUALS`].
+const COMPARES: [(Cmp, [u32; 9]); 5] = [
+    (Cmp::Ne, [145, 144, 468, 164, 165, 853, 475, 1851, 1857]),
+    (Cmp::Lt, [64, 66, 469, 160, 161, 854, 476, 1852, 1858]),
+    (Cmp::Le, [148, 149, 471, 166, 167, 856, 478, 1854, 1860]),
+    (Cmp::Gt, [146, 147, 470, 162, 163, 855, 477, 1853, 1859]),
+    (Cmp::Ge, [151, 150, 472, 168, 169, 857, 479, 1855, 1861]),
+];
+
+/// A comparison of two integers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cmp {
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl Cmp {
+    /// The comparison with the two sides in the other order.
+    fn flip(self) -> Self {
+        match self {
+            Cmp::Ne => Cmp::Ne,
+            Cmp::Lt => Cmp::Gt,
+            Cmp::Le => Cmp::Ge,
+            Cmp::Gt => Cmp::Lt,
+            Cmp::Ge => Cmp::Le,
+        }
+    }
+
+    /// True when the comparison of one value of a set with `value` is true, where `min` is the least value of the set and `max` the greatest. For these comparisons, that is true exactly when the comparison of `min` or of `max` with `value` is true.
+    fn any(self, (min, max): (i64, i64), value: i64) -> bool {
+        match self {
+            Cmp::Ne => min != value || max != value,
+            Cmp::Lt => min < value,
+            Cmp::Le => min <= value,
+            Cmp::Gt => max > value,
+            Cmp::Ge => max >= value,
+        }
+    }
+}
+
+/// The result of the run of a lifted subquery: the rows of each key, or the set of the keys, or the bounds of each key, and the rows for a key that has no row.
+type Ran = (Buckets, Option<KeySet>, Option<Bounds>, Rc<Rows>);
+
+/// The least and the greatest value of the column of the test of [`Bound`] for each key, with no null.
+type Bounds = rupg_kernels::hash::HashMap<i64, (i64, i64)>;
+
+/// For an `EXISTS` with one integer key whose test is `column op outer`, where `column` is an integer column of the subquery and `outer` a column of the query outside it: `op`, `outer`, and the [`Bounds`]. A null `column` or `outer` makes the comparison not true, so the bounds do not keep the nulls, and a row whose `outer` is null gets false.
+pub(crate) struct Bound {
+    cmp: Cmp,
+    outer: Expr,
+    keys: Bounds,
+}
 
 /// The state of a correlated subquery in a run, as [`Cache`] keeps it.
 pub(crate) enum State {
@@ -33,6 +91,8 @@ pub(crate) struct Lifted {
     rows: Buckets,
     /// For an `EXISTS` with one integer key and no test, the keys that have a row, and `rows` is empty.
     set: Option<Rc<KeySet>>,
+    /// For an `EXISTS` with one integer key whose test is one comparison of integers, the bounds of each key, and `rows` is empty.
+    bound: Option<Bound>,
     /// The rows for a key that has no row.
     empty: Rc<Rows>,
     /// For `EXISTS`, the conditions that read the query outside the subquery and are not keys. They read the columns of the subquery as [`ExprKind::SubColumn`] of the rows of a key.
@@ -86,6 +146,16 @@ pub(crate) fn rows(
     if let (Some(set), [Key::Int(key)]) = (&lifted.set, keys.as_slice()) {
         let found = if set.contains(key) { &lifted.one } else { &lifted.empty };
         return Ok(Some(Rc::clone(found)));
+    }
+    if let (Some(bound), [Key::Int(key)]) = (&lifted.bound, keys.as_slice()) {
+        let found = match bound.keys.get(key) {
+            Some(&bounds) => match scan::key(eval(&bound.outer, None)?) {
+                Some(Key::Int(value)) => bound.cmp.any(bounds, value),
+                _ => false,
+            },
+            None => false,
+        };
+        return Ok(Some(Rc::clone(if found { &lifted.one } else { &lifted.empty })));
     }
     let Some(rows) = lifted.rows.get(&keys) else { return Ok(Some(Rc::clone(&lifted.empty))) };
     let Some(test) = &lifted.test else { return Ok(Some(Rc::clone(rows))) };
@@ -158,15 +228,45 @@ fn lift(
     let one = Rc::new(vec![Vec::new()]);
     // An `EXISTS` with one key and no test needs only the set of the keys that have a row.
     let single = collapse && width == 1;
-    let run = || -> Result<(Buckets, Option<KeySet>, Rc<Rows>)> {
+    // An `EXISTS` with one key whose test is one comparison of integers needs only the bounds of the column for each key. The subquery then has the column of the test and the key as its two columns.
+    let compare = test
+        .as_ref()
+        .filter(|_| width == 1 && queries.len() == 1 && queries[0].targets.len() == 2)
+        .and_then(comparison);
+    let run = || -> Result<Ran> {
         let empty_rows = match queries.get(1) {
             Some(q) => Rc::new(run_query(q, params, session, cache, &[], false)?),
             None => Rc::new(Vec::new()),
         };
-        if single && let Some(keys) = columnar::column_keys(&queries[0], session, cache)? {
+        let columns = match single || compare.is_some() {
+            true => columnar::column_keys(&queries[0], session, cache)?,
+            false => None,
+        };
+        if compare.is_some() {
+            let mut bounds = Bounds::default();
+            match columns.as_deref() {
+                Some([values, keys]) => {
+                    for (&key, &value) in keys.iter().zip(values) {
+                        widen(&mut bounds, key, value);
+                    }
+                }
+                Some(_) => return Err(rupg_common::Error::internal("a lifted row has no key")),
+                None => {
+                    for row in run_query(&queries[0], params, session, cache, &[], false)? {
+                        let Ok([value, key]) = <[Value; 2]>::try_from(row) else {
+                            return Err(rupg_common::Error::internal("a lifted row has no key"));
+                        };
+                        widen(&mut bounds, int(key)?, int(value)?);
+                    }
+                }
+            }
+            return Ok((Buckets::default(), None, Some(bounds), empty_rows));
+        }
+        if single && let Some(keys) = columns.and_then(|mut columns| columns.pop()) {
             return Ok((
                 Buckets::default(),
                 Some(keys.into_iter().flatten().collect()),
+                None,
                 empty_rows,
             ));
         }
@@ -224,15 +324,60 @@ fn lift(
             .into_iter()
             .map(|(k, rows)| (k, if collapse { Rc::clone(&one) } else { Rc::new(rows) }))
             .collect();
-        Ok((rows, set, empty_rows))
+        Ok((rows, set, None, empty_rows))
     };
     let result = run();
     match result {
-        Ok((rows, set, empty)) => {
+        Ok((rows, set, bounds, empty)) => {
             let set = set.map(Rc::new);
-            State::Lifted(Rc::new(Lifted { outer, rows, set, empty, test, one, _queries: queries }))
+            let bound = compare.zip(bounds).map(|((cmp, outer), keys)| Bound { cmp, outer, keys });
+            State::Lifted(Rc::new(Lifted {
+                outer,
+                rows,
+                set,
+                bound,
+                empty,
+                test,
+                one,
+                _queries: queries,
+            }))
         }
         Err(_) => State::Never { _kept: queries },
+    }
+}
+
+/// The comparison of the test of a [`Bound`] and the column of the query outside the subquery that it compares, or `None` for another test. One side must be the column of the subquery, `SubColumn(0)`, and the other side a column of the query outside it, which cannot give an error.
+fn comparison(test: &Expr) -> Option<(Cmp, Expr)> {
+    let ExprKind::Func(f) = &test.kind else { return None };
+    let [a, b] = f.args.as_slice() else { return None };
+    let cmp = COMPARES.iter().find(|(_, oids)| oids.contains(&f.oid))?.0;
+    match (&a.kind, &b.kind) {
+        (ExprKind::SubColumn(0), ExprKind::Var(_)) => Some((cmp, b.clone())),
+        (ExprKind::Var(_), ExprKind::SubColumn(0)) => Some((cmp.flip(), a.clone())),
+        _ => None,
+    }
+}
+
+/// Adds a value of the column of the test of a [`Bound`] to the bounds of its key. A null key or value adds nothing.
+fn widen(bounds: &mut Bounds, key: Option<i64>, value: Option<i64>) {
+    let (Some(key), Some(value)) = (key, value) else { return };
+    bounds
+        .entry(key)
+        .and_modify(|(min, max)| {
+            *min = (*min).min(value);
+            *max = (*max).max(value);
+        })
+        .or_insert((value, value));
+}
+
+/// The integer of a value of a lifted row, or `None` for a null.
+fn int(value: Value) -> Result<Option<i64>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    match scan::key(value) {
+        Some(Key::Int(v)) => Ok(Some(v)),
+        _ => Err(rupg_common::Error::internal("a lifted value is not an integer")),
     }
 }
 
