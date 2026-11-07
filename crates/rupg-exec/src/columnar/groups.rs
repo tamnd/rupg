@@ -557,50 +557,63 @@ fn fold_rows(
     }
 }
 
-/// Puts each row `sel` of a vector, with its key of `keys` and its hash of `hashes`, into the buffer of its part as a new group, with no table. The rows of the vector start at the row `base` of the scan. The match on each fold is once for each vector, not once for each row.
+/// Puts each run of rows `sel` of a vector with equal keys of `keys` into the buffer of its part as a new group, with no table. The rows of the vector start at the row `base` of the scan. The rows of a table often come in the order of a key, so a run has many rows, and a count of a run is its number of rows. `runs` is room for the first row, the rows and the part of each run.
 fn push_direct<const W: usize>(
     parts: &mut [Buf],
     folds: &[Fold],
     keys: &[[u64; W]],
-    hashes: &[u64],
     sel: &[usize],
     base: u64,
     decoded: &[Option<Decoded>],
+    runs: &mut Vec<(u32, u32, u8)>,
 ) {
-    let at: Vec<u8> = hashes.iter().map(|&hash| part_of(hash) as u8).collect();
-    for ((key, &p), &i) in keys.iter().zip(&at).zip(sel) {
-        parts[usize::from(p)].push(key, base + i as u64);
+    runs.clear();
+    for (n, key) in keys.iter().enumerate() {
+        if n > 0
+            && keys[n - 1] == *key
+            && let Some(run) = runs.last_mut()
+        {
+            run.1 += 1;
+            continue;
+        }
+        let p = if parts.len() == 1 { 0 } else { part_of(WordTable::<W>::hash(key)) };
+        parts[p].push(key, base + sel[n] as u64);
+        runs.push((n as u32, 1, p as u8));
     }
     for (f, &fold) in folds.iter().enumerate() {
-        let rows = at.iter().map(|&p| usize::from(p)).zip(sel.iter().copied());
         let column = |place: usize| decoded[place].as_ref();
-        match fold {
-            Fold::Count => rows.for_each(|(p, _)| parts[p].states[f].push_cell(Cell::Count(1))),
-            Fold::CountArg(place) => {
-                let d = column(place);
-                rows.for_each(|(p, i)| {
-                    let n = d.is_some_and(|d| !null(d, i));
-                    parts[p].states[f].push_cell(Cell::Count(i64::from(n)));
-                });
+        let min = matches!(fold, Fold::Min(_));
+        for &(start, len, p) in runs.iter() {
+            let rows = &sel[start as usize..(start + len) as usize];
+            let state = &mut parts[usize::from(p)].states[f];
+            let value =
+                |d: Option<&Decoded>, i: usize| d.filter(|d| !null(d, i)).map(|d| int(d, i));
+            match fold {
+                Fold::Count => state.push_cell(Cell::Count(i64::from(len))),
+                Fold::CountArg(place) => {
+                    let d = column(place);
+                    let n = rows.iter().filter(|&&i| d.is_some_and(|d| !null(d, i))).count();
+                    state.push_cell(Cell::Count(n as i64));
+                }
+                Fold::Sum(place) => {
+                    let d = column(place);
+                    let (mut n, mut sum) = (0, 0);
+                    for v in rows.iter().filter_map(|&i| value(d, i)) {
+                        n += 1;
+                        sum += i128::from(v);
+                    }
+                    state.push_cell(Cell::Sum(n, sum));
+                }
+                Fold::Min(place) | Fold::Max(place) => {
+                    let d = column(place);
+                    let mut e: Option<i64> = None;
+                    for v in rows.iter().filter_map(|&i| value(d, i)) {
+                        e = Some(e.map_or(v, |s| if min { s.min(v) } else { s.max(v) }));
+                    }
+                    state.push_cell(Cell::Extreme(e));
+                }
+                Fold::None => {}
             }
-            Fold::Sum(place) => {
-                let d = column(place);
-                rows.for_each(|(p, i)| {
-                    let cell = match d.filter(|d| !null(d, i)) {
-                        Some(d) => Cell::Sum(1, i128::from(int(d, i))),
-                        None => Cell::Sum(0, 0),
-                    };
-                    parts[p].states[f].push_cell(cell);
-                });
-            }
-            Fold::Min(place) | Fold::Max(place) => {
-                let d = column(place);
-                rows.for_each(|(p, i)| {
-                    let v = d.filter(|d| !null(d, i)).map(|d| int(d, i));
-                    parts[p].states[f].push_cell(Cell::Extreme(v));
-                });
-            }
-            Fold::None => {}
         }
     }
 }
@@ -1107,11 +1120,12 @@ fn scan_run<const W: usize>(
     let mut keys: Vec<[u64; W]> = Vec::with_capacity(VECTOR);
     let mut hashes: Vec<u64> = Vec::with_capacity(VECTOR);
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
+    let mut runs: Vec<(u32, u32, u8)> = Vec::with_capacity(VECTOR);
     let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
     let mut local = Buf::new(&plan.folds, pack.width);
     // With no keys the rows fold with no table, so the table has no room.
     let mut table = WordTable::<W>::new(if width == 0 { 0 } else { LOCAL });
-    // The rows that the table folded since it was last empty, and true when the rows go into the buffers with no table.
+    // The runs of equal keys that the table folded since it was last empty, and true when the runs go into the buffers with no table.
     let mut folded = 0;
     let mut direct = false;
     'units: for (n, &(segment, vector)) in units.iter().enumerate() {
@@ -1206,10 +1220,6 @@ fn scan_run<const W: usize>(
                 Input::Const(_) => {}
             }
         }
-        hashes.clear();
-        if width > 0 {
-            hashes.extend(keys.iter().map(WordTable::<W>::hash));
-        }
         for base_fold in first_base..plan.folds.len() {
             if let Fold::Sum(place) = plan.folds[base_fold]
                 && let Some(d) = decoded[place].as_ref()
@@ -1245,11 +1255,11 @@ fn scan_run<const W: usize>(
             continue;
         }
         if direct {
-            push_direct(&mut parts, &plan.folds, &keys, &hashes, &sel, base, &decoded);
+            push_direct(&mut parts, &plan.folds, &keys, &sel, base, &decoded, &mut runs);
             continue;
         }
         if table.room() < sel.len() {
-            // A table that folds fewer than two rows into each group does not pay for its probes.
+            // A table that folds fewer than two runs of equal keys into each group does not pay for its probes, as the runs fold with no table.
             direct = folded < 2 * local.len();
             flush(&mut local, &mut table, &mut parts);
             folded = 0;
@@ -1259,11 +1269,12 @@ fn scan_run<const W: usize>(
                 for part in &mut parts {
                     part.reserve(more + more / 8);
                 }
-                push_direct(&mut parts, &plan.folds, &keys, &hashes, &sel, base, &decoded);
+                push_direct(&mut parts, &plan.folds, &keys, &sel, base, &decoded, &mut runs);
                 continue;
             }
         }
-        folded += sel.len();
+        hashes.clear();
+        hashes.extend(keys.iter().map(WordTable::<W>::hash));
         ids.clear();
         for (n, ((key, &hash), &i)) in keys.iter().zip(&hashes).zip(&sel).enumerate() {
             // The rows of a table often come in the order of a key, so a row often has the key of the row before it, and then its group.
@@ -1271,6 +1282,7 @@ fn scan_run<const W: usize>(
                 ids.push(ids[n - 1]);
                 continue;
             }
+            folded += 1;
             // The table is larger than the cache of the core for many groups, so the read of a slot starts early.
             if let Some(&ahead) = hashes.get(n + PREFETCH) {
                 table.prefetch(ahead);
