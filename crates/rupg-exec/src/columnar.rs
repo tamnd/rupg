@@ -4255,7 +4255,39 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
     Some(groups::Map { from, values: Arc::from(values) })
 }
 
-/// The map of the text column of codes at the place `from` to the codes of the results of `replace` in a new dictionary. The tasks find the result of each text at the same time, and the dictionary then takes the results in the order of the codes. `None` when a result gives an error, so that the scan of the rows gives the error as the row engine does.
+/// The number of the parts by hash of the results of [`key_map`]. A task finds the distinct results of one part.
+const KEY_PARTS: usize = 64;
+
+/// The results of `replace` for the codes of one task of [`key_map`].
+#[derive(Default)]
+struct KeyChunk {
+    /// The bytes of each result, in the order of the codes.
+    text: String,
+    /// The end of each result in `text`.
+    ends: Vec<usize>,
+    /// The hash of each result.
+    hashes: Vec<u64>,
+    /// For each part, the indexes of the results whose hash is in the part.
+    parts: Vec<Vec<u32>>,
+}
+
+impl KeyChunk {
+    fn get(&self, at: usize) -> &[u8] {
+        let start = if at == 0 { 0 } else { self.ends[at - 1] };
+        &self.text.as_bytes()[start..self.ends[at]]
+    }
+}
+
+/// The distinct results of one part of [`key_map`].
+#[derive(Default)]
+struct KeyPart {
+    bytes: Vec<u8>,
+    ends: Vec<usize>,
+    /// For each chunk, the index in the part of each result of [`KeyChunk::parts`] of the part.
+    ids: Vec<Vec<u32>>,
+}
+
+/// The map of the text column of codes at the place `from` to the codes of the results of `replace` in a new dictionary. The tasks find the result of each text at the same time. The tasks then find the distinct results of each part of the hashes at the same time, so that no task adds each result to one table. `None` when a result gives an error, so that the scan of the rows gives the error as the row engine does.
 fn key_map(
     exec: &Exec<'_>,
     tasks: &dyn Tasks,
@@ -4264,36 +4296,96 @@ fn key_map(
 ) -> Option<(groups::Map, Dictionary)> {
     let source = exec.stored[from].dict.as_ref()?;
     let codes = source.len();
-    let chunks = codes.div_ceil(MAP_CODES);
-    let mut texts: Vec<Option<Vec<String>>> = vec![None; chunks];
-    let jobs: Vec<Job<'_>> = texts
+    let mut chunks: Vec<Option<KeyChunk>> = Vec::new();
+    chunks.resize_with(codes.div_ceil(MAP_CODES), || None);
+    let jobs: Vec<Job<'_>> = chunks
         .iter_mut()
         .enumerate()
         .map(|(n, out)| {
             Box::new(move || {
                 let first = n * MAP_CODES + 1;
                 let last = (first + MAP_CODES).min(codes + 1);
-                let mut found = Vec::with_capacity(last - first);
-                for code in first..last {
+                let mut chunk = KeyChunk {
+                    ends: Vec::with_capacity(last - first),
+                    hashes: Vec::with_capacity(last - first),
+                    parts: vec![Vec::new(); KEY_PARTS],
+                    ..KeyChunk::default()
+                };
+                for (at, code) in (first..last).enumerate() {
                     let Ok(code) = u32::try_from(code) else { return };
                     // The dictionary of a text column holds only the bytes of a `String`.
                     let Ok(text) = std::str::from_utf8(source.get(code)) else { return };
-                    let Ok(Value::Text(result)) = replace.text(text) else { return };
-                    found.push(result);
+                    let start = chunk.text.len();
+                    if replace.text_into(text, &mut chunk.text).is_err() {
+                        return;
+                    }
+                    chunk.ends.push(chunk.text.len());
+                    let hash = rupg_kernels::hash::bytes(&chunk.text.as_bytes()[start..]);
+                    chunk.hashes.push(hash);
+                    chunk.parts[(hash >> 58) as usize].push(at as u32);
                 }
-                *out = Some(found);
+                *out = Some(chunk);
             }) as Job<'_>
         })
         .collect();
     tasks.run_all(jobs);
-    let mut dict = Dictionary::new();
-    let mut values = Vec::with_capacity(codes + 1);
-    values.push(0);
-    for chunk in texts {
-        for text in chunk? {
-            values.push(i64::from(dict.intern(text.as_bytes())));
+    let chunks: Vec<KeyChunk> = chunks.into_iter().collect::<Option<_>>()?;
+    let mut parts: Vec<KeyPart> = Vec::new();
+    parts.resize_with(KEY_PARTS, KeyPart::default);
+    let jobs: Vec<Job<'_>> = parts
+        .iter_mut()
+        .enumerate()
+        .map(|(p, out)| {
+            let chunks = &chunks;
+            Box::new(move || {
+                let count: usize = chunks.iter().map(|c| c.parts[p].len()).sum();
+                let mask = (count * 2).next_power_of_two().max(16) - 1;
+                // The index in the part plus 1 of each slot, or 0.
+                let mut slots = vec![0_u32; mask + 1];
+                for chunk in chunks {
+                    let mut ids = Vec::with_capacity(chunk.parts[p].len());
+                    for &at in &chunk.parts[p] {
+                        let value = chunk.get(at as usize);
+                        let mut slot = chunk.hashes[at as usize] as usize & mask;
+                        let id = loop {
+                            let id = slots[slot];
+                            if id == 0 {
+                                out.bytes.extend_from_slice(value);
+                                out.ends.push(out.bytes.len());
+                                slots[slot] = out.ends.len() as u32;
+                                break out.ends.len() as u32 - 1;
+                            }
+                            let i = id as usize - 1;
+                            let start = if i == 0 { 0 } else { out.ends[i - 1] };
+                            if &out.bytes[start..out.ends[i]] == value {
+                                break id - 1;
+                            }
+                            slot = (slot + 1) & mask;
+                        };
+                        ids.push(id);
+                    }
+                    out.ids.push(ids);
+                }
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(jobs);
+    let mut values = vec![0_i64; codes + 1];
+    let mut bytes = Vec::with_capacity(parts.iter().map(|p| p.bytes.len()).sum());
+    let mut ends = Vec::with_capacity(parts.iter().map(|p| p.ends.len()).sum());
+    for (p, part) in parts.iter().enumerate() {
+        // The code of the first result of the part.
+        let base = ends.len() as i64 + 1;
+        for (n, (chunk, ids)) in chunks.iter().zip(&part.ids).enumerate() {
+            for (&at, &id) in chunk.parts[p].iter().zip(ids) {
+                values[n * MAP_CODES + 1 + at as usize] = base + i64::from(id);
+            }
         }
+        let shift = bytes.len() as u64;
+        bytes.extend_from_slice(&part.bytes);
+        ends.extend(part.ends.iter().map(|&end| shift + end as u64));
     }
+    let dict = Dictionary::from_parts(bytes, ends, 0).ok()?;
     Some((groups::Map { from, values: Arc::from(values) }, dict))
 }
 

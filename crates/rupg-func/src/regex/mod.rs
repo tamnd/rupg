@@ -613,8 +613,20 @@ fn substitute(
 
 /// `replace_text_regexp`: `s` with the match number `n` from the character `start` replaced, or each match when `n` is 0.
 fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Result<Value> {
-    let chars: Vec<u32> = points(s);
     let mut out = String::with_capacity(s.len());
+    replace_into(s, re, replacement, (start, n), &mut out)?;
+    Ok(Value::Text(out))
+}
+
+/// [`replace`] that adds the result to the end of `out`, with the start and the number of the match in `at`.
+fn replace_into(
+    s: &str,
+    re: &Regex,
+    replacement: &str,
+    (start, n): (usize, i64),
+    out: &mut String,
+) -> Result<()> {
+    let chars: Vec<u32> = points(s);
     let mut done = 0;
     let mut search = start;
     let mut count = 0;
@@ -626,16 +638,16 @@ fn replace(s: &str, re: &Regex, replacement: &str, start: usize, n: i64) -> Resu
             search = next_search(span);
             continue;
         }
-        push_text(&mut out, s, &chars, (done, span.0));
-        substitute(&mut out, replacement, &groups, (s, &chars));
+        push_text(out, s, &chars, (done, span.0));
+        substitute(out, replacement, &groups, (s, &chars));
         done = span.1;
         if n > 0 {
             break;
         }
         search = next_search(span);
     }
-    push_text(&mut out, s, &chars, (done, chars.len()));
-    Ok(Value::Text(out))
+    push_text(out, s, &chars, (done, chars.len()));
+    Ok(())
 }
 
 /// `regexp_replace` with one pattern, one replacement and one set of options for many strings. [`Replace::new`] checks the arguments once, as the kernel checks them for each call. [`Replace::text`] needs no session, so the tasks of the server can run it at the same time. Each thread compiles the pattern once into its own cache.
@@ -704,6 +716,16 @@ impl Replace {
     pub fn text(&self, s: &str) -> Result<Value> {
         let re = compile(&self.pattern, self.cflags)?;
         replace(s, &re, &self.replacement, self.start, self.n)
+    }
+
+    /// [`Replace::text`] that adds the result to the end of `out`, so that many results can share one buffer.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Replace::text`]. `out` can then have a part of the result.
+    pub fn text_into(&self, s: &str, out: &mut String) -> Result<()> {
+        let re = compile(&self.pattern, self.cflags)?;
+        replace_into(s, &re, &self.replacement, (self.start, self.n), out)
     }
 }
 
