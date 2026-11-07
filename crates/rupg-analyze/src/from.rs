@@ -2074,6 +2074,19 @@ impl Analyzer<'_> {
             let row = ExprKind::Row(fields.collect(), CastForm::Implicit);
             return Ok(Expr::new(row, oid::RECORD).at(at));
         }
+        // `makeWholeRowVar`: the whole row of one function of a scalar type with no `WITH ORDINALITY`, such as a function with one `OUT` parameter, is the output of the function, its first column.
+        if entry.oid == 0
+            && let Some(f) = &rel.function
+            && !f.ordinality
+            && let [(call, _)] = f.calls.as_slice()
+            && call.ty != oid::RECORD
+            && self.row_columns(types::base(call.ty)).is_none()
+            && let Some((_, expr)) = item.columns.first()
+        {
+            let mut expr = expr.clone();
+            expr.raise(level);
+            return Ok(expr.at(at));
+        }
         let ty = match entry.oid {
             0 => self.function_row_type(rel),
             // The table of a generation expression is new, and `check_nested_generated` gives the error for its whole row.
