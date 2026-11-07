@@ -177,6 +177,8 @@ impl Store {
         };
         let mut added = None;
         let mut large = false;
+        // The heap is locked before the log in a commit, so the counter of the xids of a record of the catalog is read before the log is locked.
+        let next_xid = catalog.then(|| self.heap.next_xid());
         let mut add = |logged: Logged<'_>| {
             let heap = match logged {
                 Logged::Changes(bytes) => Some(bytes),
@@ -187,7 +189,7 @@ impl Store {
                 Logged::Nothing => None,
             };
             if heap.is_some() || catalog || !self.changed_sequences().is_empty() {
-                let number = file.log.add(&mut |out| self.log_record(catalog, heap, out));
+                let number = file.log.add(&mut |out| self.log_record(next_xid, heap, out));
                 added = Some((number, heap.is_some() || catalog));
             }
         };
@@ -223,14 +225,13 @@ impl Store {
         }
     }
 
-    /// The bytes of a record of the log: the rows of the sequences that changed, `nextXid` and the catalogs when `catalog` is true, and the changes `heap` of the rows.
-    fn log_record(&self, catalog: bool, heap: Option<&[u8]>, out: &mut Vec<u8>) {
+    /// The bytes of a record of the log: the rows of the sequences that changed, `nextXid` and the catalogs for a record of the catalog with the counter `next_xid` of the xids, and the changes `heap` of the rows. The log is locked, so the record does not lock the heap.
+    fn log_record(&self, next_xid: Option<u32>, heap: Option<&[u8]>, out: &mut Vec<u8>) {
         let sequences: Vec<_> = self.changed_sequences().drain().collect();
         sequences.put(out);
-        catalog.put(out);
-        if catalog {
-            // The log of a catalog is not in a commit of the heap, so the heap is not locked.
-            self.heap.next_xid().put(out);
+        next_xid.is_some().put(out);
+        if let Some(next_xid) = next_xid {
+            next_xid.put(out);
             self.put_state(out);
         }
         heap.is_some().put(out);
@@ -443,5 +444,47 @@ mod tests {
         assert!(release_due(&released, Duration::from_millis(1000)));
         assert!(!release_due(&released, Duration::from_millis(1500)));
         assert!(release_due(&released, Duration::from_secs(5)));
+    }
+
+    /// A record of the catalog does not lock the heap while the log is locked. A commit of rows locks the heap and then the log, so while a commit holds the heap a log of the catalog leaves the log free; before, it locked the log and waited for the heap, and the commit waited for the log.
+    #[test]
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn a_log_of_the_catalog_leaves_the_log_free_while_a_commit_holds_the_heap() {
+        use std::sync::mpsc::channel;
+        let io: Arc<dyn Io> = Arc::new(rupg_platform::sim::SimIo::new(1));
+        let store =
+            Arc::new(Store::new().with_image(io, PathBuf::from("/data/data.rupg")).unwrap());
+        let (held, holding) = channel();
+        let (release, released) = channel::<()>();
+        let commit = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                store.heap.commit_logged(store.heap.next_xid(), &mut |_| {
+                    held.send(()).unwrap();
+                    released.recv().unwrap();
+                });
+            })
+        };
+        holding.recv().unwrap();
+        let catalog = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || store.log_catalog(false))
+        };
+        // The log of the catalog waits for the heap; give it the time to lock the log first if it does.
+        std::thread::sleep(Duration::from_millis(200));
+        let (added, free) = channel();
+        let probe = {
+            let store = Arc::clone(&store);
+            std::thread::spawn(move || {
+                let file = store.image.as_ref().unwrap();
+                added.send(file.log.added()).unwrap();
+            })
+        };
+        let free = free.recv_timeout(Duration::from_secs(5));
+        release.send(()).unwrap();
+        for thread in [commit, catalog, probe] {
+            thread.join().unwrap();
+        }
+        assert!(free.is_ok(), "the log of the catalog held the log while it waited for the heap");
     }
 }
