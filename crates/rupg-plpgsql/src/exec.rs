@@ -791,7 +791,7 @@ impl Exec<'_> {
                 self.for_int(label.as_deref(), *var, *reverse, lower, upper, step.as_ref(), body)
             }
             StmtKind::ForQuery { label, target, source, body } => {
-                let ((rows, columns), read_only) = self.source_rows(source)?;
+                let ((rows, columns), read_only) = self.source_rows(source, true)?;
                 self.spi.new_portal_name();
                 let found = !rows.is_empty();
                 if !found {
@@ -825,7 +825,7 @@ impl Exec<'_> {
                 Ok(Flow::Normal)
             }
             StmtKind::ReturnQuery(source) => {
-                let ((rows, columns), _) = self.source_rows(source)?;
+                let ((rows, columns), _) = self.source_rows(source, false)?;
                 let n = rows.len();
                 for row in rows {
                     let value = self.query_row(&columns, row)?;
@@ -1206,8 +1206,8 @@ impl Exec<'_> {
         Ok(out)
     }
 
-    /// The rows of the query of a `FOR` loop or of `RETURN QUERY`, with the columns.
-    fn source_rows(&mut self, source: &Source) -> Result<(Rows, bool)> {
+    /// The rows of the query of a `FOR` loop or of `RETURN QUERY`, with the columns. `cursor` is true for a `FOR` loop, which runs the query in a portal.
+    fn source_rows(&mut self, source: &Source, cursor: bool) -> Result<(Rows, bool)> {
         match source {
             // `exec_for_query` opens a portal for `EXPLAIN` too, which gives the lines of the plan as rows.
             Source::Query(e)
@@ -1218,7 +1218,7 @@ impl Exec<'_> {
             {
                 let node = parse_statement(&e.shown).map_err(|error| spi_error(e, error))?;
                 let line = spi_line(e.mode, &e.shown);
-                match self.utility_rows(&node, &e.shown, line.clone())? {
+                match self.utility_rows(&node, &e.shown, line.clone(), cursor)? {
                     Some(fetched) => Ok(((fetched.rows, fetched.columns), true)),
                     None => Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
@@ -1232,7 +1232,7 @@ impl Exec<'_> {
                 Ok(((rows, columns(&p.plan)), p.plan.write().is_none()))
             }
             Source::Dynamic { query, params } => {
-                let (rows, _, columns, read_only) = self.run_dynamic(query, params)?;
+                let (rows, _, columns, read_only) = self.run_dynamic(query, params, cursor)?;
                 Ok(((rows, columns), read_only))
             }
         }
@@ -1602,7 +1602,7 @@ impl Exec<'_> {
             Planned::Query(plan) => *plan,
             Planned::Utility(node) => {
                 check_utility(&node, "EXECUTE of transaction commands is not implemented")?;
-                if let Some(fetched) = self.utility_rows(&node, &text, line.clone())? {
+                if let Some(fetched) = self.utility_rows(&node, &text, line.clone(), false)? {
                     if let Some(target) = into {
                         if fetched.rows.is_empty() && strict {
                             return Err(Error::new(
@@ -1647,12 +1647,12 @@ impl Exec<'_> {
     }
 
     /// The rows of the query of `EXECUTE`, with the values of `USING` as its parameters, the columns, and true for a query that does not write. A statement that is not a query must give rows, as `EXPLAIN` and `SHOW` do.
-    fn run_dynamic(&mut self, query: &Expr, params: &[Expr]) -> Result<DynamicRows> {
+    fn run_dynamic(&mut self, query: &Expr, params: &[Expr], cursor: bool) -> Result<DynamicRows> {
         let (planned, values, text, line) = self.dynamic_planned(query, params)?;
         let plan = match planned {
             Planned::Query(plan) => *plan,
             Planned::Utility(node) => {
-                return match self.utility_rows(&node, &text, line.clone())? {
+                return match self.utility_rows(&node, &text, line.clone(), cursor)? {
                     Some(fetched) => Ok((fetched.rows, fetched.count, fetched.columns, true)),
                     None => Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
@@ -1669,8 +1669,14 @@ impl Exec<'_> {
         Ok((rows, n, columns(&plan), plan.write().is_none()))
     }
 
-    /// The rows of the statement `node` that is not a query, or `None` when it gives no rows. Its notices get the context line `line` and the lines of the calls. An error with a place in the text `text` points into the text as the internal query.
-    fn utility_rows(&mut self, node: &Node, text: &str, line: String) -> Result<Option<Fetched>> {
+    /// The rows of the statement `node` that is not a query, or `None` when it gives no rows. Its notices get the context line `line` and the lines of the calls. An error with a place in the text `text` points into the text as the internal query. Another error gets `line` as its context, except in a portal (`cursor`): the statement runs at the first fetch, after `_SPI_error_callback` is gone.
+    fn utility_rows(
+        &mut self,
+        node: &Node,
+        text: &str,
+        line: String,
+        cursor: bool,
+    ) -> Result<Option<Fetched>> {
         self.set_spi(Some(line.clone()));
         let mut notices = Vec::new();
         let result = self.spi.utility_rows(node, &mut notices);
@@ -1681,6 +1687,7 @@ impl Exec<'_> {
         self.set_spi(None);
         result.map_err(|error| match error.position() {
             Some(at) => error.with_position(None).with_internal(text.to_string(), Some(at)),
+            None if cursor => error,
             None => error.with_context(line),
         })
     }

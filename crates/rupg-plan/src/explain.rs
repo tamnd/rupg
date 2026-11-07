@@ -125,12 +125,16 @@ pub struct Actual {
     pub sorted: Option<u64>,
     /// True when a `Sort` under a `Limit` kept only the first rows in a heap, as a bounded sort does.
     pub heapsort: bool,
+    /// True when the rows of a `Sort` did not fit in `work_mem`, so the sort was an external merge on disk and `sorted` is the space on disk.
+    pub sort_disk: bool,
     /// The buckets, the batches and the memory in kB of a `Hash` that built its table.
     pub hash: Option<(u64, u64, u64)>,
     /// The memory in kB of the hash table of an `Aggregate`.
     pub hashagg: Option<u64>,
     /// The memory in kB of the tuplestore of a `CTE Scan`, a `Materialize` or a `WindowAgg`.
     pub storage: Option<u64>,
+    /// True when the tuplestore of `storage` did not fit in `work_mem` and went to disk.
+    pub storage_disk: bool,
     /// The hits, the misses, the evictions, the overflows and the memory in kB of a `Memoize`.
     pub memo: Option<[u64; 5]>,
     /// The inserts, the updates and the deletes of a `MERGE`, as `mt_merge_inserted`, `mt_merge_updated` and `mt_merge_deleted` count them. `filtered[0]` of the node has the rows of the plan below it.
@@ -1111,12 +1115,14 @@ impl Explainer<'_, '_> {
 
     /// `show_storage_info`: the tuplestore of a `CTE Scan`, a `Materialize` or a `WindowAgg` that ran.
     fn storage(&mut self, node: &Node<'_>) {
-        let Some(kb) = self.actual(node).and_then(|a| a.storage) else { return };
+        let Some(actual) = self.actual(node) else { return };
+        let Some(kb) = actual.storage else { return };
+        let kind = if actual.storage_disk { "Disk" } else { "Memory" };
         if self.w.format == Format::Text {
             self.w.indent_text();
-            self.w.buf.push_str(&format!("Storage: Memory  Maximum Storage: {kb}kB\n"));
+            self.w.buf.push_str(&format!("Storage: {kind}  Maximum Storage: {kb}kB\n"));
         } else {
-            self.w.text("Storage", "Memory");
+            self.w.text("Storage", kind);
             self.w.integer("Maximum Storage", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
         }
     }
@@ -1162,14 +1168,18 @@ impl Explainer<'_, '_> {
     fn sort_info(&mut self, node: &Node<'_>) {
         let Some(actual) = self.actual(node) else { return };
         let Some(kb) = actual.sorted else { return };
-        let method = if actual.heapsort { "top-N heapsort" } else { "quicksort" };
+        let (method, space) = match (actual.sort_disk, actual.heapsort) {
+            (true, _) => ("external merge", "Disk"),
+            (false, true) => ("top-N heapsort", "Memory"),
+            (false, false) => ("quicksort", "Memory"),
+        };
         if self.w.format == Format::Text {
             self.w.indent_text();
-            self.w.buf.push_str(&format!("Sort Method: {method}  Memory: {kb}kB\n"));
+            self.w.buf.push_str(&format!("Sort Method: {method}  {space}: {kb}kB\n"));
         } else {
             self.w.text("Sort Method", method);
             self.w.integer("Sort Space Used", Some("kB"), i64::try_from(kb).unwrap_or(i64::MAX));
-            self.w.text("Sort Space Type", "Memory");
+            self.w.text("Sort Space Type", space);
         }
     }
 
