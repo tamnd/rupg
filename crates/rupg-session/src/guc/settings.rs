@@ -1094,7 +1094,7 @@ impl Settings {
         }
     }
 
-    /// [`Settings::get`] of a parameter that [`super::known`] found.
+    /// [`Settings::get`] of a parameter that `super::known` found.
     #[must_use]
     pub fn get_of(&self, parameter: Option<&'static Parameter>) -> Option<String> {
         parameter.map(|parameter| self.shown(parameter))

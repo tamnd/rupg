@@ -1297,7 +1297,7 @@ fn point_key(query: &Query, params: &[Value], session: &dyn Session) -> Option<K
     (lookup.keys.len() == 1 && lookup.columns.len() == columns.len()).then_some(lookup)
 }
 
-/// The rows of a point read of a `SELECT` as [`point_rows`] gives them, with the values of the versions as the store keeps them and no copy of them.
+/// The rows of a point read of a `SELECT` as `point_rows` gives them, with the values of the versions as the store keeps them and no copy of them.
 #[derive(Debug)]
 pub struct PointRows<'q> {
     rows: Vec<(Arc<[Value]>, Value)>,
