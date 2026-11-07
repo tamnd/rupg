@@ -606,3 +606,26 @@ row 498,NULL,17
 row 498,-150,1
 row 498,-148,1
 SELECT 3
+> CREATE TABLE gr (r int, b int, c int)
+CREATE TABLE
+> INSERT INTO gr SELECT i / 10, CASE WHEN i % 7 = 0 THEN NULL ELSE i % 1000 - 500 END, CASE WHEN (i / 10) % 5 = 0 THEN NULL ELSE i % 13 END FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gr
+ANALYZE
+> SELECT count(*), sum(c), sum(s), sum(n), min(lo), max(hi), sum(lo), sum(hi), count(sc), sum(sc), count(mc) FROM (SELECT r, count(*) c, sum(b) s, count(b) n, min(b) lo, max(b) hi, sum(c) sc, max(c) mc FROM gr GROUP BY r) x
+fields count:20:8:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,min:23:4:-1,max:23:4:-1,sum:20:8:-1,sum:20:8:-1,count:20:8:-1,sum:1700:-1:-1,count:20:8:-1
+row 30001,300000,-129071,257143,-500,499,-146214,115214,24000,1439999,24000
+SELECT 1
+> SELECT r, count(*), count(b), sum(b), avg(b), min(b), max(b) FROM gr GROUP BY r ORDER BY r LIMIT 4
+fields r@gr.1:23:4:-1,count:20:8:-1,count:20:8:-1,sum:20:8:-1,avg:1700:-1:-1,min:23:4:-1,max:23:4:-1
+row 0,9,8,-3962,-495.2500000000000000,-499,-491
+row 1,10,9,-4369,-485.4444444444444444,-490,-481
+row 2,10,8,-3804,-475.5000000000000000,-480,-471
+row 3,10,9,-4190,-465.5555555555555556,-470,-461
+SELECT 4
+> SELECT r, count(*), sum(b), min(b), max(b) FROM gr WHERE r > 340 GROUP BY r ORDER BY r LIMIT 3
+fields r@gr.1:23:4:-1,count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1
+row 341,10,-771,-90,-81
+row 342,10,-678,-80,-71
+row 343,10,-522,-69,-61
+SELECT 3
