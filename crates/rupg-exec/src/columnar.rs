@@ -3072,8 +3072,17 @@ fn grouped(
                     .collect();
                 Some(groups::Top { fold, descending, bound, ranges })
             });
-        let mut run =
-            groups::run(tasks, &scan.exec.stored, &plan, rows, scan.segments, wanted.as_ref())?;
+        // A sort of the groups by their keys does not read the order of their first rows.
+        let ordered = !sorted_groups(query, session);
+        let mut run = groups::run(
+            tasks,
+            &scan.exec.stored,
+            &plan,
+            rows,
+            scan.segments,
+            wanted.as_ref(),
+            ordered,
+        )?;
         session.interrupted()?;
         if keys.is_empty() {
             run.or_one();
@@ -4660,6 +4669,13 @@ fn sorted_lead(exec: &Exec<'_>, query: &Query, keys: &[&Expr]) -> Result<Option<
         .collect();
     Ok((sort::Keys::new(&list, &types, session)?.lead() == Some((0, false, false)))
         .then_some(place))
+}
+
+/// True when [`group_order`] gives the groups of `query` in the order of a sort of their keys: the plan has no hash table for the groups, and each key has a sort. Two groups have different keys, so the sort gives one order for each order in which the groups come.
+fn sorted_groups(query: &Query, session: &dyn Session) -> bool {
+    !query.group.is_empty()
+        && session.hash_tables(query).and_then(|t| t.group.clone()).is_none()
+        && query.group.iter().all(|g| g.sort != 0)
 }
 
 /// The order of the groups, as the row engine gives them: the order of the hash table of the `HashAggregate` of the plan, the order of the keys for a sort, or the order of the first rows. `hashes` has the hash of each group when the scan found them.
