@@ -10372,6 +10372,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/aggalter.test")));
     }
 
+    /// `inline_function` for a SQL function whose argument is a SQL/JSON constructor with `RETURNING`: the `CaseTest` of the coercion of the constructor is its own value, which `contain_context_dependent_node` lets it read, so the call inlines.
+    #[test]
+    fn inline_json_ctor() {
+        big_stack(|| script(include_str!("connection/inline_json_ctor.test")));
+    }
+
     /// `inline_function` for `textanycat`, `anytextcat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)`: the plan casts the argument of any type to `text` and calls the function of the body, which `EXPLAIN` shows, and the cast and the call fold with constant arguments. A view keeps the call. `connection/inlinecat.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inlinecat() {
