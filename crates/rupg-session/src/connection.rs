@@ -4390,6 +4390,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/top_groups_tasks.test")));
     }
 
+    /// The tasks of the server find the groups of a vector scan with one key, `count(DISTINCT)` of one column and other aggregates: they fold the other aggregates and count the pairs of a group and a value, with a null key, null values, a filter, `avg`, `min`, `max`, `count` of a column and `ORDER BY` of a count with equal counts. `connection/distinct_mixed_tasks.test` has the rows of PostgreSQL 19 for the same queries.
+    #[test]
+    fn distinct_mixed_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/distinct_mixed_tasks.test")));
+    }
+
     /// The tasks of the server give only the groups that can change the bounded heap of `ORDER BY` of one count with `LIMIT`, when the hash table of the plan spills and its groups go in the order of their first rows, and the counts at the end of the heap are equal: in both orders, with `OFFSET`, a filter, other aggregates and `count` of a column. The rows are the rows of the scan with no tasks, which reads all the groups.
     #[test]
     fn heap_groups_tasks() {
