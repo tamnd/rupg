@@ -1,6 +1,6 @@
 //! The reduction of the rows of the tables of a join before the join (spec/14 section 14.8.2). Each table keeps the rows that pass its own conditions of `WHERE`, and then the rows whose key of an `=` with another table is a key of a row that the other table keeps, until no table loses a row. The join then reads and joins only these rows, so that a join of long tables makes the values of only the rows that can join.
 //!
-//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` can fail and no condition is volatile, because the join tests the conditions on fewer rows, and in another order.
+//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` is volatile and no condition can fail, because the join tests the conditions on fewer rows, and in another order. A join of two tables with one `=` of their columns can also have conditions that can fail and read the two tables, such as a subquery that reads a column of each table. The join tests such a condition only on the tuples of the `=`, and the reduction removes only the rows that have no other row for the `=`, so the condition sees the same tuples.
 
 use std::rc::Rc;
 
@@ -88,9 +88,18 @@ pub(crate) fn plan<'q>(
     }
     let mut plan =
         Plan { own: vec![Vec::new(); width], keys: vec![Vec::new(); width], edges: Vec::new() };
+    // The conditions that can fail and read the two tables, and the conditions that cannot fail and read the two tables.
+    let (mut both, mut joins) = (false, 0);
     for &cond in conds {
         if !harmless(cond) {
-            return None;
+            if width != 2 || crate::volatile(cond) || relations_of(cond).len() != 2 {
+                return None;
+            }
+            both = true;
+            continue;
+        }
+        if relations_of(cond).len() > 1 {
+            joins += 1;
         }
         if let Some([(a, x), (b, y)]) = equal_columns(cond) {
             let mut key = |relation: usize, column: usize| {
@@ -111,7 +120,9 @@ pub(crate) fn plan<'q>(
             plan.own[*relation].push(cond);
         }
     }
-    (!plan.edges.is_empty()).then_some(plan)
+    // The join tests a condition that can fail only on the tuples of its `=`, when no other condition reads the two tables.
+    let one = plan.edges.len() == 1 && joins == 1;
+    (!plan.edges.is_empty() && (!both || one)).then_some(plan)
 }
 
 /// The relation and the column of each side of an `=` of two columns of two relations, with integer or date values.

@@ -70,3 +70,22 @@ UPDATE 1
 fields count:20:8:-1,sum:1700:-1:-1
 row 3084,173173.00
 SELECT 1
+> SELECT count(*), sum(jf.v) FROM jf, jd WHERE jf.a = jd.a AND jd.g = 'red' AND jf.b < (SELECT max(js.n) * 10 FROM js WHERE js.n = jd.n)
+fields count:20:8:-1,sum:1700:-1:-1
+row 16927,952327.75
+SELECT 1
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jd.g = 'red' AND jf.k / (jd.n - jf.b % 100) > 0
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jd.g = 'red' AND jf.b IS NOT NULL AND jf.k / (jd.n - jf.b % 100 + 200) > 0
+fields count:20:8:-1
+row 35593
+SELECT 1
+> SELECT count(*) FROM jf, jd WHERE jf.a = jd.a AND jf.b = jd.n AND jf.k / (jd.n + 1) > 3
+fields count:20:8:-1
+row 17717
+SELECT 1
+> SELECT count(*), min(jf.k) FROM jf, jd WHERE jf.a = jd.a AND jd.n = 7 AND jf.k > (SELECT max(js.n) * 1000 FROM js WHERE js.n = jf.b % 100 AND js.n <> jd.n + 1)
+fields count:20:8:-1,min:23:4:-1
+row 1712,7007
+SELECT 1
