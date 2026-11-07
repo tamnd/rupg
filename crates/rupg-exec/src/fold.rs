@@ -813,6 +813,8 @@ fn context_dependent(expr: &Expr) -> bool {
                 || context_dependent(&case.default)
         }
         ExprKind::ArrayCoerce { arg, .. } => context_dependent(arg),
+        // The coercion of a SQL/JSON constructor is a cast of its `CaseTest`, the value of the constructor, as `CCDN_CASETESTEXPR_OK` lets it read.
+        ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).any(context_dependent),
         _ => expr.children().into_iter().any(context_dependent),
     }
 }

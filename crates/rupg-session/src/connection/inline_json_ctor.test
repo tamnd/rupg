@@ -1,0 +1,16 @@
+> CREATE FUNCTION jit(text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT $1 || '!' $$
+CREATE FUNCTION
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT jit(JSON_OBJECT('a': 'b' RETURNING text))
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (JSON_OBJECT('a' : 'b'::text RETURNING text) || '!'::text)
+EXPLAIN
+> SELECT jit(JSON_OBJECT('a': 'b' RETURNING text))
+fields jit:25:-1:-1
+row {"a" : "b"}!
+SELECT 1
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT jit(JSON_ARRAY(1, 2 RETURNING text))
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (JSON_ARRAY(1, 2 RETURNING text) || '!'::text)
+EXPLAIN
