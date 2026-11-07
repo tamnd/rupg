@@ -1,0 +1,16 @@
+> CREATE FUNCTION wrs_j() RETURNS TABLE (x json) LANGUAGE sql AS $$ SELECT '[1]'::json $$
+CREATE FUNCTION
+> SELECT js, pg_typeof(js), js->0 FROM wrs_j() js
+fields js:114:-1:-1,pg_typeof:2206:4:-1,?column?:114:-1:-1
+row [1],json,1
+SELECT 1
+> CREATE FUNCTION wrs_o(OUT y int) LANGUAGE sql AS $$ SELECT 1 $$
+CREATE FUNCTION
+> SELECT o, pg_typeof(o) FROM wrs_o() o
+fields o:23:4:-1,pg_typeof:2206:4:-1
+row 1,integer
+SELECT 1
+> SELECT o, pg_typeof(o) FROM wrs_o() WITH ORDINALITY o
+fields o:2249:-1:-1,pg_typeof:2206:4:-1
+row (1,1),record
+SELECT 1

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A whole-row reference to a function in `FROM` that returns one value of a scalar type, such as `RETURNS TABLE (x json)` or one `OUT` parameter, gives the value of the function rather than a record of one column, as `makeWholeRowVar` does, so `js->0` works on `LATERAL f(...) js`; with `WITH ORDINALITY` it is still a record (#1412).
 - Find the distinct results of a `regexp_replace` of a column of codes on the tasks, by parts of their hashes, so that no one task adds each result to the new dictionary.
 - `CREATE MATERIALIZED VIEW` in a trigger function that reads a transition table fails with `transition table "..." cannot be referenced in a persistent object`, as `find_expr_references_walker` refuses an `RTE_NAMEDTUPLESTORE`, and `CREATE TABLE AS` and `SELECT INTO` in a trigger function read the transition tables of the trigger, while `CREATE VIEW` does not see them (#1410).
 - The parallel group scan of the server compares the groups that the plan expects with the rows that the partial part of a split aggregate reads in all the processes. Before, under a `Gather` it compared them with the partial groups, so the tasks did not find the groups of a table on which the plan gave few workers.
