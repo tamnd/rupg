@@ -145,7 +145,7 @@ const CODESETS: [(&str, &str); 92] = [
     ("CP28598", "ISO_8859_8"),
 ];
 
-/// `pg_get_encoding_from_locale`: the encoding of a locale of the C library. `None` when the locale does not exist or its codeset is not in [`CODESETS`].
+/// `pg_get_encoding_from_locale`: the encoding of a locale of the C library. `None` when the locale does not exist or its codeset is not in `CODESETS`.
 pub fn locale_encoding(name: &str) -> Option<i32> {
     if name.eq_ignore_ascii_case("C") || name.eq_ignore_ascii_case("POSIX") {
         return Some(0);

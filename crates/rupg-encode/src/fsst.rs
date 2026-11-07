@@ -424,7 +424,7 @@ impl SymbolTable {
     ///
     /// A symbol is checked for room with one comparison against the last place an eight byte store
     /// still fits, which also tells the compiler the store is in bounds, so that and the length of
-    /// zero [`Decode`] gives the codes that are not symbols are the only two questions a code is asked.
+    /// zero `Decode` gives the codes that are not symbols are the only two questions a code is asked.
     /// The loop this replaced asked four, and its twenty instructions a code were half of what
     /// decompressing the `Referer` dictionary on ClickBench 29 cost.
     #[inline]

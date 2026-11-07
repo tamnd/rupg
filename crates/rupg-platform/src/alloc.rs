@@ -223,7 +223,7 @@ const LARGE_PAGE: usize = 2 << 20;
 /// The fewest bytes of a vector of [`large_vec`] that ask for large pages. A smaller block fits in the cache of addresses of the processor with small pages.
 const LARGE_VEC: usize = 4 * LARGE_PAGE;
 
-/// A vector of `len` copies of `value`, whose memory the system can give in large pages. Random reads of a large table, such as the hash table of `GROUP BY`, then miss the cache of addresses of the processor less often. Each miss of that cache reads the tables of the pages, and in a virtual machine these reads cost more. A vector of fewer than [`LARGE_VEC`] bytes, or a system with no large pages, gets small pages.
+/// A vector of `len` copies of `value`, whose memory the system can give in large pages. Random reads of a large table, such as the hash table of `GROUP BY`, then miss the cache of addresses of the processor less often. Each miss of that cache reads the tables of the pages, and in a virtual machine these reads cost more. A vector of fewer than `LARGE_VEC` bytes, or a system with no large pages, gets small pages.
 pub fn large_vec<T: Clone>(len: usize, value: T) -> Vec<T> {
     let mut v: Vec<T> = Vec::with_capacity(len);
     let bytes = len.saturating_mul(size_of::<T>());
