@@ -86,8 +86,11 @@ pub(crate) fn check_rows(
                 return Err(rupg_func::with_table_column(error, rel.oid, &column.name, session));
             }
         }
-        for (i, name) in info.checks.iter().enumerate() {
-            if matches!(row.get(info.width + i), Some(Value::Bool(false))) {
+        // The first column of the checks has the number of the check that failed.
+        if let Some(Value::Int4(number)) = row.get(info.width)
+            && let Some(name) = usize::try_from(*number - 1).ok().and_then(|i| info.checks.get(i))
+        {
+            {
                 let error = Error::new(
                     SqlState::CHECK_VIOLATION,
                     format!(
