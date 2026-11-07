@@ -2354,10 +2354,30 @@ pub(crate) fn with_checks(
             target.expr = expr.clone();
         }
     }
-    targets.extend(checks.into_iter().map(|(n, mut expr)| {
-        compute_generated(&mut expr, generated, &columns[..width]);
-        Target { name: n, expr, origin: None, junk: false }
-    }));
+    // `ExecRelCheck` tests the checks one at a time in the order of their names and stops at the first that fails, so a later check does not run on a row that an earlier one refuses. The first column of the checks is the number from 1 of the check that fails, or null, and the other columns are nulls.
+    let names: Vec<String> = checks.iter().map(|(n, _)| n.clone()).collect();
+    if !names.is_empty() {
+        let whens = checks
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, mut expr))| {
+                compute_generated(&mut expr, generated, &columns[..width]);
+                let failed = Expr::new(ExprKind::Bool(BoolOp::Not, vec![expr]), oid::BOOL);
+                let number = i32::try_from(i + 1).unwrap_or(i32::MAX);
+                (failed, Expr::new(ExprKind::Const(Value::Int4(number)), oid::INT4))
+            })
+            .collect();
+        let default = Box::new(Expr::new(ExprKind::Const(Value::Null), oid::INT4));
+        let case = crate::expr::Case { arg: None, whens, default };
+        let mut names = names.into_iter();
+        let first = names.next().unwrap_or_default();
+        let expr = Expr::new(ExprKind::Case(case), oid::INT4);
+        targets.push(Target { name: first, expr, origin: None, junk: false });
+        targets.extend(names.map(|n| {
+            let expr = Expr::new(ExprKind::Const(Value::Null), oid::INT4);
+            Target { name: n, expr, origin: None, junk: false }
+        }));
+    }
     targets.extend(tail);
     let mut relation = Relation::new(0, columns, Some(Box::new(rows)), None, None);
     relation.name = name.to_string();

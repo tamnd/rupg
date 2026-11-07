@@ -400,7 +400,26 @@ impl Connection {
         } else {
             (rupg_analyze::copy_insert(&target, &rv, &[]), vec![0; live.len()])
         };
-        let reader = self.reader_on(Arc::clone(work));
+        // `ATRewriteTable` checks only the new check constraints and the ones that `VALIDATE CONSTRAINT` validates, and the not-null constraints of all the columns. The plan runs on a catalog where the other checks are not enforced, so it does not test them.
+        let skipped: Vec<u32> = work
+            .constraints_of(rel.oid)
+            .filter(|c| {
+                c.kind == ConKind::Check
+                    && c.enforced
+                    && !(c.validated && old.constraint(c.oid).is_none_or(|o| !o.validated))
+            })
+            .map(|c| c.oid)
+            .collect();
+        let checked = if skipped.is_empty() {
+            Arc::clone(work)
+        } else {
+            let mut catalog = Catalog::clone(work);
+            for oid in skipped {
+                catalog.set_constraint_enforced(oid, false)?;
+            }
+            Arc::new(catalog)
+        };
+        let reader = self.reader_on(checked);
         let params = Params { types, variable: true };
         // A materialized view takes the `INSERT` of its own rows, as the fill of `REFRESH MATERIALIZED VIEW` does.
         if now.kind == RelKind::MatView {
@@ -413,21 +432,6 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("the rewrite of a table with no plan of its rows"));
         };
-        // `ATRewriteTable` checks only the new check constraints and the ones that `VALIDATE CONSTRAINT` validates, and the not-null constraints of all the columns.
-        let checks: Vec<(usize, &str)> = info
-            .checks
-            .iter()
-            .enumerate()
-            .filter(|&(_, name)| {
-                work.constraints_of(rel.oid).any(|c| {
-                    c.kind == ConKind::Check
-                        && c.name == *name
-                        && c.validated
-                        && old.constraint(c.oid).is_none_or(|o| !o.validated)
-                })
-            })
-            .map(|(at, name)| (at, name.as_str()))
-            .collect();
         let reshaped = reshaped_row_types(old, work);
         let reshape: Vec<bool> = live
             .iter()
@@ -469,8 +473,12 @@ impl Connection {
                         ));
                     }
                 }
-                for &(at, name) in &checks {
-                    if matches!(values.get(info.width + at), Some(Value::Bool(false))) {
+                // The first column of the checks has the number of the check that failed.
+                if let Some(Value::Int4(number)) = values.get(info.width)
+                    && let Some(name) =
+                        usize::try_from(*number - 1).ok().and_then(|i| info.checks.get(i))
+                {
+                    {
                         let error = Error::new(
                             SqlState::CHECK_VIOLATION,
                             format!(

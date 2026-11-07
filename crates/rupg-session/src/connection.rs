@@ -5345,6 +5345,12 @@ mod tests {
     }
 
     /// The order of the checks of `ALTER COLUMN ... TYPE`, a column that two subcommands change, the collation, a pseudo-type, the row type of the table, an array, the check constraints that it parses again in the order of their OIDs, and the indexes that keep their OIDs. `connection/alter_column_type_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// A write tests its check constraints in the order of their names and stops at the first that fails, and the rewrite of `ALTER TABLE` evaluates only the checks that it validates, as `ExecRelCheck` and `ATRewriteTable` do.
+    #[test]
+    fn check_order() {
+        big_stack(|| script(include_str!("connection/check_order.test")));
+    }
+
     #[test]
     fn alter_column_type_checks() {
         big_stack(|| script(include_str!("connection/alter_column_type_checks.test")));

@@ -845,11 +845,16 @@ impl<'a> Fold<'a> {
         for item in &query.from {
             mark(item, false, &mut nulled);
         }
-        // The `SELECT` parts of a set operation are not subqueries that the planner pulls up.
+        // The `SELECT` parts of a set operation are not subqueries that the planner pulls up. The rows of a write with check constraints are not either: `ExecRelCheck` tests the checks on each row, so the constants of a row do not fold into them.
+        let checked = query.write.as_ref().is_some_and(|w| !w.checks.is_empty());
         let pulled = query
             .relations
             .iter()
-            .map(|r| query.set_op.is_none() && r.subquery.as_deref().is_some_and(simple_subquery))
+            .map(|r| {
+                query.set_op.is_none()
+                    && !checked
+                    && r.subquery.as_deref().is_some_and(simple_subquery)
+            })
             .collect();
         let values = query.write.is_none() && query.set_op.is_none();
         Fold {

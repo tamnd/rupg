@@ -1,0 +1,26 @@
+> CREATE TABLE cj (js text, i int, CONSTRAINT c1 CHECK (js IS JSON), CONSTRAINT c2 CHECK (js::jsonb IS NOT NULL))
+CREATE TABLE
+> INSERT INTO cj VALUES ('', 1)
+ERROR 23514 new row for relation "cj" violates check constraint "c1"
+> INSERT INTO cj SELECT '', 1 FROM generate_series(1, 1)
+ERROR 23514 new row for relation "cj" violates check constraint "c1"
+> INSERT INTO cj VALUES ('{}', 1)
+INSERT 0 1
+> UPDATE cj SET js = ''
+ERROR 23514 new row for relation "cj" violates check constraint "c1"
+> CREATE TABLE co (a int, b int, CONSTRAINT z CHECK (a > 0), CONSTRAINT y CHECK (b > 0))
+CREATE TABLE
+> INSERT INTO co VALUES (-1, -1)
+ERROR 23514 new row for relation "co" violates check constraint "y"
+> INSERT INTO co VALUES (-1, 1)
+ERROR 23514 new row for relation "co" violates check constraint "z"
+> INSERT INTO co VALUES (5, 5)
+INSERT 0 1
+> ALTER TABLE co ADD CONSTRAINT x CHECK (100 / (a - 5) > 0) NOT VALID
+ALTER TABLE
+> ALTER TABLE co ALTER COLUMN b TYPE bigint
+ALTER TABLE
+> ALTER TABLE co ADD CONSTRAINT w CHECK (b < 0)
+ERROR 23514 check constraint "w" of relation "co" is violated by some row
+> ALTER TABLE co VALIDATE CONSTRAINT x
+ERROR 22012 division by zero
