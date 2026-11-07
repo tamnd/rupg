@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector scan of one table tests an `EXISTS` of its `WHERE` with one integer key and no other condition on the table as a probe of a set of the keys of the subquery, which runs once. When the subquery reads one table, the vectors give its keys, and its rows do not get values. TPC-H Q4 at scale 0.1 goes from 1.50 s to 0.79 s (#1400).
 - A scan of `pg_foreign_data_wrapper` and of `pg_foreign_server` gives a wrapper or a server whose row changed after the others, as `heap_update` writes the new version at the end of a small catalog. A rename, a change of the options, of the owner or of the ACL moves the row, so `alter_generic` of the regression suite gives its rows in the order of PostgreSQL (#1399).
 - The documentation of the workspace builds with warnings as errors again: five public items linked to private items in rupg-platform, rupg-encode, rupg-exec and rupg-session, and now name them as code (#1398).
 - A commit of the catalog no longer waits forever for a commit of rows on a store with a file. A commit of rows locks the heap and then the log, and the record of a commit of the catalog read the counter of the xids from the heap while the log was locked, so the two waited for each other and each later session waited behind them. The regression suite stopped in its second group of tests and the nightly run of rupg-compat ran until its time limit from 2026-11-01 (#1397).

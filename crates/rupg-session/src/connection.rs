@@ -4324,6 +4324,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lift.test")));
     }
 
+    /// The vector scan tests an `EXISTS` of `WHERE` with one integer key as a probe of the keys of the subquery that ran once, also with `NOT`, `OR`, a null key and a change of the rows, and an `EXISTS` of another form makes the row engine scan the table.
+    #[test]
+    fn semi_link() {
+        big_stack(|| script_tasks(include_str!("connection/semi_link.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
