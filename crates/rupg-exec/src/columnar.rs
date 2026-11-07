@@ -2712,7 +2712,7 @@ fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i
     results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
 }
 
-/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the counts as integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. The sort gives one order for each list of counts, so the rows of the groups are not read. `None` for a call that is not a count, or when the plan has a scan in the order of an index.
+/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the counts as integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. With `heap`, `order` has only the groups that can change the bounded heap of the sort of more than `2 * bound` groups, and the sort is that heap. The sort gives one order for each list of counts, so the rows of the groups are not read. `None` for a call that is not a count, or when the plan has a scan in the order of an index.
 fn count_top(
     query: &Query,
     session: &dyn Session,
@@ -2720,6 +2720,7 @@ fn count_top(
     order: &[usize],
     (agg, descending, bound): (*const Aggref, bool, usize),
     offset: usize,
+    heap: bool,
 ) -> Result<Option<Vec<usize>>> {
     let Some(counts) = top_counts(results, agg) else {
         return Ok(None);
@@ -2731,7 +2732,7 @@ fn count_top(
     let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
         Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
     };
-    if order.len() > bound.saturating_mul(2) {
+    if heap || order.len() > bound.saturating_mul(2) {
         let mut heap = sort::Bounded::new(bound);
         for (n, &g) in order.iter().enumerate() {
             crate::interrupt(session, n)?;
@@ -3144,6 +3145,8 @@ fn grouped(
     let mut hashes: Vec<u32> = Vec::new();
     // True when the scan found the groups with no hashes, which [`group_hashes`] gives when the order needs them.
     let mut deferred = false;
+    // True when the tasks found only the groups that can change the heap of the sort of `top`, which [`groups::Found::heap`] gives.
+    let mut heap = false;
     let mut hash_error: Option<Error> = None;
     // The keys of each group, from its first row, when the scan finds no hashes: the words of the keys and the mask of nulls while each key has one shape, else the values.
     let mut key_values: Vec<Value> = Vec::new();
@@ -3183,8 +3186,12 @@ fn grouped(
         // The summary answers some segments of a scan with no keys, which the tasks then do not read again.
         Some(tasks) if scan.open && !scan.answered.contains(&true) => {
             let estimate = session_groups(session, query);
-            let many = estimate.saturating_mul(groups::GROUP_ROWS) <= rows
-                && estimate.saturating_mul(groups::GROUP_INPUT) <= session_input(session, query);
+            // For `ORDER BY` of a count over a hash table that spills, the tasks give only the groups that can change the heap of the sort, so many groups for each row cost no copy of all the groups.
+            let spills = top.is_some() && hashing.is_some() && estimate > hashed::MOST_ENTRIES;
+            let many = spills
+                || estimate.saturating_mul(groups::GROUP_ROWS) <= rows
+                    && estimate.saturating_mul(groups::GROUP_INPUT)
+                        <= session_input(session, query);
             // With `LIMIT` and no sort of few groups that go in the order of a sort of their keys, the tasks find only the groups whose first key is not more than the first key of the last group of the limit.
             let lead = match first_groups.filter(|&n| n <= groups::FIRST_GROUPS) {
                 Some(n) => sorted_lead(scan.exec, query, &keys)?.map(|place| (place, n)),
@@ -3234,7 +3241,13 @@ fn grouped(
                         (d.from, i128::from(d.range.0) - by, i128::from(d.range.1) - by)
                     })
                     .collect();
-                Some(groups::Top { fold, descending, bound, ranges })
+                // A hash table of the plan that spills gives the groups in the order of their first rows, unless the sort of the counts reads the rows of a scan in the order of an index.
+                let spill = (hashing.is_some()
+                    && !session
+                        .join_order(query)
+                        .is_some_and(|o| o.iter().any(|s| !s.keys.is_empty())))
+                .then_some(hashed::MOST_ENTRIES);
+                Some(groups::Top { fold, descending, bound, ranges, spill })
             });
         // A sort of the groups by their keys does not read the order of their first rows.
         let ordered = !sorted_groups(query, session);
@@ -3285,6 +3298,7 @@ fn grouped(
                 states: aggs.iter().map(|_| groups::Folded::Count(vec![count])).collect(),
                 extremes: Vec::new(),
                 trailing: false,
+                heap: false,
             });
         }
     }
@@ -3313,6 +3327,7 @@ fn grouped(
     if let Some(found) = found {
         groups = found.firsts.len();
         trailing = found.trailing;
+        heap = found.heap;
         let mut folded = found.states.into_iter();
         for (call, state) in aggs.iter_mut().zip(&mut folded) {
             // `min` and `max` of a text column of codes: the tasks fold the place of each text in the order of the bytes, with the code in the low 32 bits, and the extreme code of each group goes into the state of the row engine.
@@ -3759,11 +3774,14 @@ fn grouped(
     };
     // The groups of `ORDER BY` of a count come from the counts alone when the counts of the result are all different, and then the scan needs no order of the groups.
     let quick = match top {
-        Some(key) => distinct_top(session, &results, key, offset)?,
-        None => None,
+        Some(key) if !heap => distinct_top(session, &results, key, offset)?,
+        _ => None,
     };
     let mut order = if quick.is_some() {
         Vec::new()
+    } else if heap {
+        // The groups that can change the heap of the sort, in the order of their first rows, which is the order of all the groups.
+        (0..groups).collect()
     } else {
         // With `ORDER BY` of a count, the order has only the groups that change the heap of [`count_top`], which keeps the same groups as with the full order.
         let want = match (top, first_groups) {
@@ -3789,7 +3807,7 @@ fn grouped(
     if let Some(key) = top {
         chosen = match quick {
             Some(quick) => Some(quick),
-            None => count_top(query, session, &results, &order, key, offset)?,
+            None => count_top(query, session, &results, &order, key, offset, heap)?,
         };
         // The groups of the result read their first rows, and the other groups read none.
         let mut wanted: Vec<usize> = match &chosen {

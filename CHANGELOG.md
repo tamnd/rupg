@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ORDER BY count(*) DESC LIMIT n` over a `GROUP BY` of many groups whose hash table spills runs on the tasks, which give only the groups that can change the bounded heap of the sort, also when the counts tie: ClickBench q33 went from 336 ms to 131 ms on 2M rows.
 - A whole-row reference to a function in `FROM` that returns one value of a scalar type, such as `RETURNS TABLE (x json)` or one `OUT` parameter, gives the value of the function rather than a record of one column, as `makeWholeRowVar` does, so `js->0` works on `LATERAL f(...) js`; with `WITH ORDINALITY` it is still a record (#1412).
 - Find the distinct results of a `regexp_replace` of a column of codes on the tasks, by parts of their hashes, so that no one task adds each result to the new dictionary.
 - `CREATE MATERIALIZED VIEW` in a trigger function that reads a transition table fails with `transition table "..." cannot be referenced in a persistent object`, as `find_expr_references_walker` refuses an `RTE_NAMEDTUPLESTORE`, and `CREATE TABLE AS` and `SELECT INTO` in a trigger function read the transition tables of the trigger, while `CREATE VIEW` does not see them (#1410).
