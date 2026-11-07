@@ -179,11 +179,15 @@ impl Catalog {
             PG_EVENT_TRIGGER => {
                 self.event_triggers.get_mut(&object.oid).map(|t| t.owner = owner).is_some()
             }
-            PG_FOREIGN_DATA_WRAPPER => {
-                self.fdws.get_mut(&object.oid).map(|f| f.owner = owner).is_some()
-            }
-            PG_FOREIGN_SERVER => {
-                self.servers.get_mut(&object.oid).map(|s| s.owner = owner).is_some()
+            PG_FOREIGN_DATA_WRAPPER | PG_FOREIGN_SERVER => {
+                let found = match object.class {
+                    PG_FOREIGN_DATA_WRAPPER => {
+                        self.fdws.get_mut(&object.oid).map(|f| f.owner = owner).is_some()
+                    }
+                    _ => self.servers.get_mut(&object.oid).map(|s| s.owner = owner).is_some(),
+                };
+                self.move_foreign_row(object);
+                found
             }
             PG_PUBLICATION => {
                 self.publications.get_mut(&object.oid).map(|p| p.owner = owner).is_some()
