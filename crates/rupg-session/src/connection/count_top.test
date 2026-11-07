@@ -1,0 +1,91 @@
+> CREATE TABLE gq (k int, v int, s text)
+CREATE TABLE
+> INSERT INTO gq SELECT i % 3000, i, CASE WHEN i % 3000 % 9 = 0 THEN NULL ELSE chr(97 + i % 3000 % 5) END FROM generate_series(1, 300000) i WHERE i % 11 <> 0
+INSERT 0 272728
+> INSERT INTO gq SELECT i % 500, -i, NULL FROM generate_series(1, 1000) i
+INSERT 0 1000
+> ANALYZE gq
+ANALYZE
+> SET max_parallel_workers_per_gather = 0
+SET
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 DESC LIMIT 5 OFFSET 2000
+fields k@gq.1:23:4:-1,count:20:8:-1
+row 749,91
+row 2307,91
+row 2229,91
+row 920,91
+row 1843,91
+SELECT 5
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 LIMIT 4 OFFSET 900
+fields k@gq.1:23:4:-1,count:20:8:-1
+row 2322,91
+row 1059,91
+row 878,91
+row 1384,91
+SELECT 4
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 DESC LIMIT 3 OFFSET 5000
+fields k@gq.1:23:4:-1,count:20:8:-1
+SELECT 0
+> SELECT s, k, max(v), count(*) AS c FROM gq WHERE v > 1000 GROUP BY s, k ORDER BY c DESC LIMIT 4 OFFSET 1500
+fields s@gq.3:25:-1:-1,k@gq.1:23:4:-1,max:23:4:-1,c:20:8:-1
+row c,2432,299432,91
+row e,1589,298589,91
+row e,1319,298319,91
+row c,2342,299342,91
+SELECT 4
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 DESC LIMIT 2990 OFFSET 2996
+fields k@gq.1:23:4:-1,count:20:8:-1
+row 2123,90
+row 2354,90
+row 737,90
+row 1573,90
+SELECT 4
+> SET enable_hashagg = off
+SET
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 DESC LIMIT 5 OFFSET 2000
+fields k@gq.1:23:4:-1,count:20:8:-1
+row 2150,91
+row 2151,91
+row 2152,91
+row 2153,91
+row 2154,91
+SELECT 5
+> SELECT k, count(*) FROM gq GROUP BY k ORDER BY 2 LIMIT 3 OFFSET 1000
+fields k@gq.1:23:4:-1,count:20:8:-1
+row 1072,91
+row 1002,91
+row 582,91
+SELECT 3
+> SELECT v FROM gq WHERE v BETWEEN 1 AND 120 ORDER BY k % 7, v % 3 DESC LIMIT 10 OFFSET 50
+fields v@gq.2:23:4:-1
+row 80
+row 101
+row 17
+row 115
+row 10
+row 31
+row 52
+row 73
+row 94
+row 87
+SELECT 10
+> SELECT v, date '2020-01-01' + k % 5 AS d FROM gq WHERE v < 0 ORDER BY d DESC LIMIT 5 OFFSET 600
+fields v@gq.2:23:4:-1,d:1082:4:-1
+row -1,2020-01-02
+row -6,2020-01-02
+row -11,2020-01-02
+row -16,2020-01-02
+row -21,2020-01-02
+SELECT 5
+> SELECT string_agg(v::text, ',' ORDER BY k % 4) FROM gq WHERE v BETWEEN 1 AND 60
+fields string_agg:25:-1:-1
+row 4,8,12,20,24,28,40,56,60,32,48,36,52,16,1,5,9,13,21,25,29,41,45,57,49,37,17,53,2,6,10,14,26,30,38,42,46,54,58,34,50,18,3,7,15,23,27,39,43,59,47,19,35,51,31
+SELECT 1
+> SELECT v, row_number() OVER (ORDER BY k % 3) FROM gq WHERE v BETWEEN 1 AND 60 ORDER BY 2 LIMIT 5 OFFSET 20
+fields v@gq.2:23:4:-1,row_number:20:8:-1
+row 4,21
+row 7,22
+row 10,23
+row 13,24
+row 16,25
+SELECT 5

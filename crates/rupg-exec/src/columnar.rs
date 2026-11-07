@@ -2161,7 +2161,7 @@ fn top(
     let rows = if streaming {
         heap.finish(&mut cmp)?
     } else {
-        sort::qsort(&mut first, &mut cmp)?;
+        keys.sort(&mut first, |r| r)?;
         first
     };
     Ok(rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX)).collect())
@@ -2570,32 +2570,44 @@ fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i
     results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
 }
 
-/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. A bounded heap compares the counts as integers, with the same steps as the sort of the rows. `None` for few groups or for a call that is not a count.
+/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the counts as integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. The sort gives one order for each list of counts, so the rows of the groups are not read. `None` for a call that is not a count, or when the plan has a scan in the order of an index.
 fn count_top(
+    query: &Query,
     session: &dyn Session,
     results: &Results<'_>,
     order: &[usize],
     (agg, descending, bound): (*const Aggref, bool, usize),
     offset: usize,
 ) -> Result<Option<Vec<usize>>> {
-    if order.len() <= bound.saturating_mul(4) {
-        return Ok(None);
-    }
     let Some(counts) = top_counts(results, agg) else {
         return Ok(None);
     };
+    // A plan with no `Sort` under the sort of the counts gives the rows in the order of its scans, which the sort keeps for equal counts, so the rows of the groups give the order.
+    if session.join_order(query).is_some_and(|o| o.iter().any(|s| !s.keys.is_empty())) {
+        return Ok(None);
+    }
     let mut cmp = |a: &(i64, usize), b: &(i64, usize)| {
         Ok(if descending { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) })
     };
-    let mut heap = sort::Bounded::new(bound);
-    for (n, &g) in order.iter().enumerate() {
-        crate::interrupt(session, n)?;
-        heap.push((counts[g], g), &mut cmp)?;
+    if order.len() > bound.saturating_mul(2) {
+        let mut heap = sort::Bounded::new(bound);
+        for (n, &g) in order.iter().enumerate() {
+            crate::interrupt(session, n)?;
+            heap.push((counts[g], g), &mut cmp)?;
+        }
+        return Ok(Some(heap.finish(&mut cmp)?.into_iter().skip(offset).map(|(_, g)| g).collect()));
     }
-    Ok(Some(heap.finish(&mut cmp)?.into_iter().skip(offset).map(|(_, g)| g).collect()))
+    // The count of each group and its place in `order`.
+    let mut items: Vec<(i64, usize)> =
+        order.iter().enumerate().map(|(n, &g)| (counts[g], n)).collect();
+    // The counts are `bigint`, whose comparator is `ssup_datum_signed_cmp`, so 40 or more groups take the radix sort.
+    let datums: Vec<Option<u64>> =
+        items.iter().map(|&(c, _)| sort::Radix::Signed.normalize(c, descending)).collect();
+    sort::memtuples(&mut items, &datums, false, false, &mut cmp)?;
+    Ok(Some(items.into_iter().take(bound).skip(offset).map(|(_, n)| order[n]).collect()))
 }
 
-/// The groups of [`count_top`] from the counts alone, with no order of the groups. When the first `bound` counts in the order of the sort and the count after them are all different, the bounded heap of the sort keeps the same groups and gives them in the order of their counts for each order in which the groups come. `None` when two of these counts are equal, or for few groups, as for [`count_top`].
+/// The groups of [`count_top`] from the counts alone, with no order of the groups. When the first `bound` counts in the order of the sort and the count after them are all different, the bounded heap of the sort keeps the same groups and gives them in the order of their counts for each order in which the groups come. `None` when two of these counts are equal, or for few groups.
 fn distinct_top(
     session: &dyn Session,
     results: &Results<'_>,
@@ -3605,7 +3617,7 @@ fn grouped(
     if let Some(key) = top {
         chosen = match quick {
             Some(quick) => Some(quick),
-            None => count_top(session, &results, &order, key, offset)?,
+            None => count_top(query, session, &results, &order, key, offset)?,
         };
         // The groups of the result read their first rows, and the other groups read none.
         let mut wanted: Vec<usize> = match &chosen {

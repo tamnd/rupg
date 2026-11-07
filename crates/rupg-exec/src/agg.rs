@@ -1774,7 +1774,7 @@ fn rows_of_group<'a>(
                     if agg.agg.distinct.is_empty() { &agg.agg.order } else { &agg.agg.distinct };
                 let types: Vec<u32> = agg.agg.args.iter().map(|a| a.ty).collect();
                 let keys = sort::Keys::new(list, &types, eval.session)?;
-                sort::qsort(&mut inputs, &mut |a, b| keys.compare(a, b))?;
+                keys.sort(&mut inputs, |r| r)?;
                 let mut last: Option<&Vec<Value>> = None;
                 for args in &inputs {
                     if !agg.agg.distinct.is_empty() {

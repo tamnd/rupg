@@ -2472,7 +2472,7 @@ fn order(
             let list: &[SortGroup] =
                 if query.sort.len() > query.distinct.len() { &query.sort } else { &query.distinct };
             let keys = sort::Keys::new(list, types, session)?;
-            sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
+            keys.sort(&mut rows, |r| r)?;
             let mut unique: Vec<Vec<Value>> = Vec::new();
             for row in rows {
                 if let Some(last) = unique.last()
@@ -2527,7 +2527,7 @@ fn order(
             Some(bound) if rows.len() > bound * 2 => {
                 rows = sort::bounded(rows, bound, &mut |a, b| keys.compare(a, b))?;
             }
-            _ => sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?,
+            _ => keys.sort(&mut rows, |r| r)?,
         }
     }
     let start = offset.min(rows.len());
