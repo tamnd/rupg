@@ -243,3 +243,24 @@ RESET
 RESET
 > reset enable_hashjoin
 RESET
+> set work_mem to 64
+SET
+> explain (analyze, costs off, summary off, timing off, buffers off) select sum(n) over() from generate_series(1,2500) a(n)
+fields QUERY PLAN:25:-1:-1
+row WindowAgg (actual rows=2500.00 loops=1)
+row   Window: w1 AS ()
+row   Storage: Disk  Maximum Storage: 72kB
+row   ->  Function Scan on generate_series a (actual rows=2500.00 loops=1)
+EXPLAIN
+> explain (analyze, costs off, summary off, timing off, buffers off) select sum(n) over(partition by m) from (SELECT n < 3 as m, n from generate_series(1,2500) a(n))
+fields QUERY PLAN:25:-1:-1
+row WindowAgg (actual rows=2500.00 loops=1)
+row   Window: w1 AS (PARTITION BY ((a.n < 3)))
+row   Storage: Disk  Maximum Storage: 72kB
+row   ->  Sort (actual rows=2500.00 loops=1)
+row         Sort Key: ((a.n < 3))
+row         Sort Method: external merge  Disk: 64kB
+row         ->  Function Scan on generate_series a (actual rows=2500.00 loops=1)
+EXPLAIN
+> reset work_mem
+RESET

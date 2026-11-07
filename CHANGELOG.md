@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN ANALYZE` shows a tuplestore or a sort that did not fit in `work_mem` as PostgreSQL does: `Storage: Disk` for a `WindowAgg`, a `Materialize` or a `CTE Scan`, and `Sort Method: external merge  Disk:` for a `Sort`, with the size of the temporary file. An error of a statement that is not a query in a PL/pgSQL `FOR` loop, such as the options of `EXPLAIN`, no longer gets the `SQL statement` context line, because the portal runs the statement at its first fetch, after `_SPI_error_callback` is gone (#1401).
 - The vector scan of one table tests an `EXISTS` of its `WHERE` with one integer key and no other condition on the table as a probe of a set of the keys of the subquery, which runs once. When the subquery reads one table, the vectors give its keys, and its rows do not get values. TPC-H Q4 at scale 0.1 goes from 1.50 s to 0.79 s (#1400).
 - A scan of `pg_foreign_data_wrapper` and of `pg_foreign_server` gives a wrapper or a server whose row changed after the others, as `heap_update` writes the new version at the end of a small catalog. A rename, a change of the options, of the owner or of the ACL moves the row, so `alter_generic` of the regression suite gives its rows in the order of PostgreSQL (#1399).
 - The documentation of the workspace builds with warnings as errors again: five public items linked to private items in rupg-platform, rupg-encode, rupg-exec and rupg-session, and now name them as code (#1398).

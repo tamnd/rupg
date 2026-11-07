@@ -221,6 +221,30 @@ fn kilobytes(bytes: u64) -> u64 {
     bytes.div_ceil(1024)
 }
 
+/// The kB of the temporary file of `rows` rows of `width` bytes: each `MinimalTuple` with its length word, in whole blocks of 8 kB as `BufFileSize` counts them.
+fn disk_kilobytes(rows: u64, width: u64) -> u64 {
+    (rows * (16 + width + 4)).div_ceil(8192).max(1) * 8
+}
+
+/// `work_mem` in kB, as `SHOW` gives it, with 4 MB when it does not parse.
+fn work_mem(cx: &Cx<'_, '_, '_>) -> u64 {
+    cx.session.setting("work_mem").as_deref().and_then(parse_kilobytes).unwrap_or(4096)
+}
+
+/// The kB of a memory setting in the text of `SHOW`: a number and a unit of `kB`, `MB`, `GB` or `TB`.
+fn parse_kilobytes(text: &str) -> Option<u64> {
+    let split = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let scale = match unit.trim() {
+        "" | "kB" => 1,
+        "MB" => 1 << 10,
+        "GB" => 1 << 20,
+        "TB" => 1 << 30,
+        _ => return None,
+    };
+    number.parse::<u64>().ok()?.checked_mul(scale)
+}
+
 /// The hash table of the inner side of a hash join: the rows by the values of the keys of the inner side, and the rows that a key does not find.
 #[derive(Default)]
 struct Probe {
@@ -645,12 +669,12 @@ impl<'p, 'q> Exec<'p, 'q> {
                     Some(row) => {
                         self.buf.push(row.clone());
                         self.pos += 1;
-                        self.store();
+                        self.store(cx);
                         Ok(Some(row))
                     }
                     None => {
                         self.filled = true;
-                        self.store();
+                        self.store(cx);
                         Ok(None)
                     }
                 }
@@ -720,8 +744,14 @@ impl<'p, 'q> Exec<'p, 'q> {
                         }
                         _ => self.buf.len(),
                     };
-                    self.actual.sorted =
-                        Some(kilobytes(24576 + kept as u64 * (width + 24)).max(25));
+                    let memory = kilobytes(24576 + kept as u64 * (width + 24)).max(25);
+                    // `tuplesort_puttuple_common`: a sort whose rows do not fit in `work_mem` writes runs to disk and merges them. A bounded sort keeps few rows and stays in memory.
+                    if !self.actual.heapsort && memory > work_mem(cx) {
+                        self.actual.sort_disk = true;
+                        self.actual.sorted = Some(disk_kilobytes(kept as u64, width));
+                    } else {
+                        self.actual.sorted = Some(memory);
+                    }
                 }
                 if self.pos < self.buf.len() {
                     self.pos += 1;
@@ -790,7 +820,7 @@ impl<'p, 'q> Exec<'p, 'q> {
                         self.buf.push(row);
                     }
                     self.filled = true;
-                    self.store();
+                    self.store(cx);
                 }
                 if self.pos < self.buf.len() {
                     self.pos += 1;
@@ -833,7 +863,7 @@ impl<'p, 'q> Exec<'p, 'q> {
     }
 
     /// The `Storage` of the tuplestore of a node that keeps its rows.
-    fn store(&mut self) {
+    fn store(&mut self, cx: &Cx<'_, '_, '_>) {
         // `tuplestore_begin_common` makes an array of 2048 pointers and `grow_memtuples` doubles it. Each row is a `MinimalTuple` with a header of 16 bytes and the header of its chunk.
         let rows = self.buf.len() as u64;
         let mut slots = 2048;
@@ -841,7 +871,14 @@ impl<'p, 'q> Exec<'p, 'q> {
             slots *= 2;
         }
         let tuple = (16 + width(self.node)).next_multiple_of(8) + 8;
-        self.actual.storage = Some(kilobytes(slots * 8 + 16 + rows * tuple));
+        let memory = kilobytes(slots * 8 + 16 + rows * tuple);
+        // `tuplestore_puttuple_common`: a tuplestore whose rows do not fit in `work_mem` writes them to a temporary file, and its maximum is the size of the file.
+        if memory > work_mem(cx) {
+            self.actual.storage_disk = true;
+            self.actual.storage = Some(disk_kilobytes(rows, width(self.node)));
+        } else {
+            self.actual.storage = Some(memory);
+        }
     }
 
     /// The rows of a scan, in `buf` and after `pos`, with the rows of its condition and its filter. A scan with no rows in `buf` reads the rows of its relation.
@@ -883,7 +920,7 @@ impl<'p, 'q> Exec<'p, 'q> {
             _ => None,
         };
         if cte.is_some() {
-            self.store();
+            self.store(cx);
         }
         while self.pos < self.buf.len() {
             let row = self.buf[self.pos].clone();
