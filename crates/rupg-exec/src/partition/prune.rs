@@ -74,6 +74,10 @@ pub(crate) fn pruned_leaves(
     nullable: bool,
     session: &dyn Session,
 ) -> Result<Vec<u32>> {
+    // `gen_partprune_steps_internal`: a constant false or null condition keeps no leaf.
+    if conds.iter().any(|c| matches!(c.kind, ExprKind::Const(Value::Bool(false) | Value::Null))) {
+        return Ok(Vec::new());
+    }
     let root = relation(catalog(session)?, oid)?;
     let mut clauses = Vec::new();
     let mut ors = Vec::new();

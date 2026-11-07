@@ -7266,11 +7266,11 @@ mod tests {
         big_stack(|| script(include_str!("connection/lock_status.test")));
     }
 
-    /// `cbrt`, `||/` and `gamma` give the same bits as PostgreSQL, because they call `cbrt` and `tgamma` of the C library, as `float.c` does. The code of Rust for these functions gave a different last bit for about half of these rows. glibc gives `3.0000000000000004` for `cbrt(27)`, and so does PostgreSQL. `connection/cmath.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `cbrt`, `||/` and `gamma` give the same bits as PostgreSQL, because they call `cbrt` and `tgamma` of the C library, as `float.c` does. The code of Rust for these functions gave a different last bit for about half of these rows. glibc gives `3.0000000000000004` for `cbrt(27)`, and so does PostgreSQL. glibc on arm64 gave a different last bit for `cbrt` of one row, so the test runs on x86-64, where the output of PostgreSQL was made. `connection/cmath.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     #[cfg_attr(
-        not(target_os = "linux"),
-        ignore = "the C library of this platform can give a different last bit than glibc, see Q20 (#33)"
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        ignore = "the C library of this platform can give a different last bit than glibc on x86-64, see Q20 (#33)"
     )]
     fn cmath() {
         big_stack(|| script(include_str!("connection/cmath.test")));
