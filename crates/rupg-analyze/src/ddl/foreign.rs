@@ -265,6 +265,7 @@ impl Definer<'_, '_> {
             validator,
             connection: funcs.connection.unwrap_or_default(),
             options,
+            row: 0,
         });
         Ok(())
     }
@@ -393,6 +394,7 @@ impl Definer<'_, '_> {
             kind: stmt.servertype.as_deref().map(str::to_string),
             version: stmt.version.as_deref().map(str::to_string),
             options,
+            row: 0,
         });
         Ok(())
     }

@@ -2031,6 +2031,7 @@ impl Catalog {
 
     /// Sets the ACL of an object, or drops the ACL for `None`.
     pub fn set_object_acl(&mut self, object: ObjRef, acl: Option<Vec<String>>) {
+        self.move_foreign_row(object);
         match acl {
             Some(acl) => Arc::make_mut(&mut self.acls).insert(object, acl),
             None if self.acls.contains_key(&object) => {

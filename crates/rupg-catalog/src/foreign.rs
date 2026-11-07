@@ -30,6 +30,8 @@ pub struct ForeignDataWrapper {
     pub connection: u32,
     /// `fdwoptions`: the options as `name=value`. No options give a null array.
     pub options: Vec<String>,
+    /// The place of the row in the heap of `pg_foreign_data_wrapper`. [`Catalog::create_fdw`] sets it, and each change of the row moves it after the other rows, as `heap_update` writes the new version of a row at the end of a small catalog.
+    pub row: u64,
 }
 
 /// A foreign server, one row of `pg_foreign_server`.
@@ -49,6 +51,8 @@ pub struct ForeignServer {
     pub version: Option<String>,
     /// `srvoptions`: the options as `name=value`. No options give a null array.
     pub options: Vec<String>,
+    /// The place of the row in the heap of `pg_foreign_server`, as [`ForeignDataWrapper::row`].
+    pub row: u64,
 }
 
 /// A user mapping, one row of `pg_user_mapping`.
@@ -85,6 +89,7 @@ impl Catalog {
     pub fn create_fdw(&mut self, mut new: ForeignDataWrapper) -> u32 {
         let oid = self.new_oid();
         new.oid = oid;
+        new.row = self.next_fdw_row();
         let me = ObjRef::new(PG_FOREIGN_DATA_WRAPPER, oid);
         for proc in new.procs() {
             self.depend(me, ObjRef::new(PG_PROC, proc), DepKind::Normal);
@@ -93,9 +98,40 @@ impl Catalog {
         oid
     }
 
-    /// The foreign-data wrappers, in the order of their OIDs.
+    /// The foreign-data wrappers, in the order of their rows in the heap, as a scan of `pg_foreign_data_wrapper` gives them.
     pub fn fdws(&self) -> impl Iterator<Item = &ForeignDataWrapper> {
-        self.fdws.values()
+        let mut fdws: Vec<_> = self.fdws.values().collect();
+        fdws.sort_by_key(|f| f.row);
+        fdws.into_iter()
+    }
+
+    /// The place after the last row of `pg_foreign_data_wrapper`.
+    fn next_fdw_row(&self) -> u64 {
+        self.fdws.values().map(|f| f.row + 1).max().unwrap_or_default()
+    }
+
+    /// The place after the last row of `pg_foreign_server`.
+    fn next_server_row(&self) -> u64 {
+        self.servers.values().map(|s| s.row + 1).max().unwrap_or_default()
+    }
+
+    /// `heap_update` of the row of the foreign-data wrapper or the foreign server `object`, for a change that the row itself does not keep, as of its ACL: the new version goes after the other rows.
+    pub(crate) fn move_foreign_row(&mut self, object: ObjRef) {
+        match object.class {
+            PG_FOREIGN_DATA_WRAPPER => {
+                let row = self.next_fdw_row();
+                if let Some(fdw) = self.fdws.get_mut(&object.oid) {
+                    fdw.row = row;
+                }
+            }
+            PG_FOREIGN_SERVER => {
+                let row = self.next_server_row();
+                if let Some(server) = self.servers.get_mut(&object.oid) {
+                    server.row = row;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The foreign-data wrapper with the OID.
@@ -110,9 +146,11 @@ impl Catalog {
 
     /// Changes the row of the foreign-data wrapper. A change of its functions makes the dependencies on functions again, as `AlterForeignDataWrapper` does.
     pub fn alter_fdw(&mut self, oid: u32, change: impl FnOnce(&mut ForeignDataWrapper)) {
+        let row = self.next_fdw_row();
         let Some(fdw) = self.fdws.get_mut(&oid) else { return };
         let old: Vec<u32> = fdw.procs().collect();
         change(fdw);
+        fdw.row = row;
         let new: Vec<u32> = fdw.procs().collect();
         if old != new {
             let me = ObjRef::new(PG_FOREIGN_DATA_WRAPPER, oid);
@@ -127,15 +165,18 @@ impl Catalog {
     pub fn create_server(&mut self, mut new: ForeignServer) -> u32 {
         let oid = self.new_oid();
         new.oid = oid;
+        new.row = self.next_server_row();
         let me = ObjRef::new(PG_FOREIGN_SERVER, oid);
         self.depend(me, ObjRef::new(PG_FOREIGN_DATA_WRAPPER, new.fdw), DepKind::Normal);
         self.servers.insert(oid, new);
         oid
     }
 
-    /// The foreign servers, in the order of their OIDs.
+    /// The foreign servers, in the order of their rows in the heap, as a scan of `pg_foreign_server` gives them.
     pub fn servers(&self) -> impl Iterator<Item = &ForeignServer> {
-        self.servers.values()
+        let mut servers: Vec<_> = self.servers.values().collect();
+        servers.sort_by_key(|s| s.row);
+        servers.into_iter()
     }
 
     /// The foreign server with the OID.
@@ -148,10 +189,12 @@ impl Catalog {
         self.servers.values().find(|s| s.name == name)
     }
 
-    /// Changes the row of the foreign server.
+    /// Changes the row of the foreign server, which moves after the other rows.
     pub fn alter_server(&mut self, oid: u32, change: impl FnOnce(&mut ForeignServer)) {
+        let row = self.next_server_row();
         if let Some(server) = self.servers.get_mut(&oid) {
             change(server);
+            server.row = row;
         }
     }
 
@@ -249,8 +292,61 @@ rupg_common::persist_struct!(ForeignDataWrapper {
     handler,
     validator,
     connection,
-    options
+    options,
+    row
 });
-rupg_common::persist_struct!(ForeignServer { oid, name, owner, fdw, kind, version, options });
+rupg_common::persist_struct!(ForeignServer { oid, name, owner, fdw, kind, version, options, row });
 rupg_common::persist_struct!(UserMapping { oid, user, server, options });
 rupg_common::persist_struct!(ForeignTable { server, options });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fdw(name: &str) -> ForeignDataWrapper {
+        ForeignDataWrapper {
+            oid: 0,
+            name: name.to_string(),
+            owner: 10,
+            handler: 0,
+            validator: 0,
+            connection: 0,
+            options: Vec::new(),
+            row: 0,
+        }
+    }
+
+    fn server(name: &str, fdw: u32) -> ForeignServer {
+        ForeignServer {
+            oid: 0,
+            name: name.to_string(),
+            owner: 10,
+            fdw,
+            kind: None,
+            version: None,
+            options: Vec::new(),
+            row: 0,
+        }
+    }
+
+    fn names<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
+        rows.collect()
+    }
+
+    /// As in `alter_generic` of the regression suite: a renamed wrapper or server comes after the others in a scan, as its new version goes at the end of the heap. So does a change of its ACL.
+    #[test]
+    fn a_changed_row_comes_after_the_others() {
+        let mut cat = Catalog::new();
+        let one = cat.create_fdw(fdw("alt_fdw1"));
+        let two = cat.create_fdw(fdw("alt_fdw2"));
+        let s1 = cat.create_server(server("alt_fserv1", one));
+        cat.create_server(server("alt_fserv2", two));
+        assert_eq!(names(cat.fdws().map(|f| f.name.as_str())), ["alt_fdw1", "alt_fdw2"]);
+        cat.alter_fdw(one, |f| f.name = "alt_fdw3".to_string());
+        cat.alter_server(s1, |s| s.name = "alt_fserv3".to_string());
+        assert_eq!(names(cat.fdws().map(|f| f.name.as_str())), ["alt_fdw2", "alt_fdw3"]);
+        assert_eq!(names(cat.servers().map(|s| s.name.as_str())), ["alt_fserv2", "alt_fserv3"]);
+        cat.set_object_acl(ObjRef::new(PG_FOREIGN_DATA_WRAPPER, two), Some(vec!["=U/x".into()]));
+        assert_eq!(names(cat.fdws().map(|f| f.name.as_str())), ["alt_fdw3", "alt_fdw2"]);
+    }
+}
