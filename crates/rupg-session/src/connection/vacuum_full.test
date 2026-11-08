@@ -1,0 +1,51 @@
+> CREATE FUNCTION vf_f(int) RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'vf_f % %', $1, current_setting('search_path'); RETURN $1; END $$
+CREATE FUNCTION
+> CREATE TABLE vf (a int, t text)
+CREATE TABLE
+> INSERT INTO vf VALUES (1, 'x'), (2, 'y')
+INSERT 0 2
+> CREATE INDEX vf_i ON vf (vf_f(a))
+NOTICE 00000 vf_f 1 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+NOTICE 00000 vf_f 2 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+CREATE INDEX
+> CREATE TEMP TABLE vf_old AS SELECT c.relfilenode AS heap, t.relfilenode AS toast, i.relfilenode AS index FROM pg_class c, pg_class t, pg_class i WHERE c.relname = 'vf' AND t.oid = c.reltoastrelid AND i.relname = 'vf_i'
+SELECT 1
+> VACUUM (FULL, PROCESS_MAIN FALSE) vf
+VACUUM
+> SELECT c.relfilenode = o.heap, t.relfilenode = o.toast, i.relfilenode = o.index FROM vf_old o, pg_class c, pg_class t, pg_class i WHERE c.relname = 'vf' AND t.oid = c.reltoastrelid AND i.relname = 'vf_i'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> VACUUM FULL vf
+NOTICE 00000 vf_f 1 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+NOTICE 00000 vf_f 2 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+VACUUM
+> SELECT c.relfilenode = o.heap, t.relfilenode = o.toast, i.relfilenode = o.index, c.reltuples FROM vf_old o, pg_class c, pg_class t, pg_class i WHERE c.relname = 'vf' AND t.oid = c.reltoastrelid AND i.relname = 'vf_i'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,reltuples@pg_class.11:700:4:-1
+row f,f,f,2
+SELECT 1
+> SELECT a, t FROM vf ORDER BY a
+fields a@vf.1:23:4:-1,t@vf.2:25:-1:-1
+row 1,x
+row 2,y
+SELECT 2
+> CREATE FUNCTION vf_analyze() RETURNS void LANGUAGE sql AS 'ANALYZE pg_am'
+CREATE FUNCTION
+> SELECT vf_analyze()
+fields vf_analyze:2278:4:-1
+row NULL
+SELECT 1
+> CREATE FUNCTION vf_wrap(int) RETURNS int IMMUTABLE LANGUAGE sql AS 'SELECT $1 FROM public.vf_analyze()'
+CREATE FUNCTION
+> CREATE INDEX vf_w ON vf (vf_wrap(a))
+CREATE INDEX
+> ANALYZE vf
+NOTICE 00000 vf_f 1 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+NOTICE 00000 vf_f 2 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+ERROR 0A000 ANALYZE cannot be executed from VACUUM or ANALYZE (SQL function "vf_analyze" statement 1
+SQL function "vf_wrap" statement 1)
+> VACUUM FULL vf
+NOTICE 00000 vf_f 1 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+NOTICE 00000 vf_f 2 pg_catalog, pg_temp (PL/pgSQL function public.vf_f(integer) line 1 at RAISE)
+ERROR 0A000 ANALYZE cannot be executed from VACUUM or ANALYZE (SQL function "vf_analyze" statement 1
+SQL function "vf_wrap" statement 1)

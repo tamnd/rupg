@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `VACUUM FULL` writes each table again, as `cluster_rel` does: a new file for the table, its TOAST table and their indexes, with the functions of the index expressions running once per row as the owner, and with `PROCESS_MAIN FALSE` only the TOAST table. `ANALYZE` runs in a function, and a `VACUUM` or an `ANALYZE` in a function of an index expression of another one fails with `ANALYZE cannot be executed from VACUUM or ANALYZE`. `CLUSTER` and `REPACK` compute the keys of the new indexes once, sort on the keys of the index as the owner with the `search_path` of `RestrictSearchPath`, and leave an invalid index invalid (#1417).
 - The sort of a dictionary by the bytes of its strings, for MIN and MAX of text and for ORDER BY of text, runs on all the tasks as a sample sort, which halves the first run of ClickBench q22, q23 and q31.
 - A correlated `EXISTS` or `NOT EXISTS` that reads one table no longer stops the reduction of the rows of a join to the rows that can join. In such a join the condition runs after the joins, once for each row of the table, as the semi join of the PostgreSQL plan of TPC-H Q21 comes after the joins with `supplier` and `nation`. TPC-H Q21 at scale 0.1 goes from 2.9 s to 0.8 s (#1415).
 - A `GROUP BY` of one key with `count(DISTINCT)` of one column and other aggregates runs on the tasks: they fold the other aggregates and count the pairs of a group and a value. ClickBench q10 went from 165 ms to 41 ms on 2M rows.

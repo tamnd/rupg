@@ -572,8 +572,9 @@ impl Definer<'_, '_> {
         for oid in heaps.into_iter().filter(|&oid| oid != 0) {
             self.catalog.set_new_file(oid)?;
         }
+        // `finish_heap_swap` reindexes with no `REINDEX_REL_CHECK_CONSTRAINTS`, so an invalid index stays invalid.
         for oid in indexes {
-            self.rebuild(oid)?;
+            self.catalog.set_new_file(oid)?;
         }
         let shown = self.qualified_relation(table);
         let order = match &info {

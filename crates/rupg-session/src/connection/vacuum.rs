@@ -1,11 +1,14 @@
-//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` runs as a plain `VACUUM`.
+//! `VACUUM` and `ANALYZE`, as `ExecVacuum` and `vacuum` of `vacuum.c` run them: the options, the checks of the options and of the relations, and the warnings for the relations that the statement skips. `VACUUM` removes the dead row versions of each table, and the statement sets `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of each table. `ANALYZE` writes the statistics of the columns to `pg_statistic`. `VACUUM FULL` writes each table again, as `CLUSTER` with no index does, and then runs as a plain `VACUUM`.
 
 use rupg_analyze::{Repack, VacuumRel};
 use rupg_catalog::size::{empty_index_pages, new_table_tuples};
 use rupg_catalog::{Catalog, Column, RelKind, Relation};
 
 use rupg_common::{Error, SqlState};
-use rupg_sql::nodes::{CheckPointStmt, DefElem, Node, VacuumStmt};
+use rupg_pgcatalog::builtin::{self, Named};
+use rupg_sql::nodes::{
+    CheckPointStmt, DefElem, Node, RangeVar, RepackCommand, RepackStmt, VacuumRelation, VacuumStmt,
+};
 use rupg_wire::CommandTag;
 
 use super::copy::{def_boolean, def_string};
@@ -275,6 +278,14 @@ impl Connection {
         } else {
             CommandTag::Analyze
         };
+        // `vacuum` refuses a call in a function of an index expression of another `VACUUM` or `ANALYZE`.
+        if self.in_vacuum.get() {
+            let statement = if stmt.is_vacuumcmd { "VACUUM" } else { "ANALYZE" };
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("{statement} cannot be executed from VACUUM or ANALYZE"),
+            ));
+        }
         let analyze = parsed.analyze || !stmt.is_vacuumcmd;
         let reader = self.reader();
         let mut warnings = Vec::new();
@@ -333,10 +344,26 @@ impl Connection {
         let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
         // `vacuum_rel` takes `ShareUpdateExclusiveLock`, and `AccessExclusiveLock` for `FULL`, which writes a new file.
         let mode = if vacuum.is_some_and(|parsed| parsed.full) { 8 } else { 4 };
+        self.in_vacuum.set(true);
+        let result = self.vacuum_relations(&catalog, relids, (vacuum, analyze), mode, notices);
+        self.in_vacuum.set(false);
+        result.map(|()| Done::Tag(tag))
+    }
+
+    /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest.
+    fn vacuum_relations(
+        &self,
+        catalog: &Catalog,
+        relids: Vec<(u32, Vec<String>)>,
+        (vacuum, analyze): (Option<&Parsed>, bool),
+        mode: u8,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        let reader = self.reader();
         for (relid, columns) in relids {
             rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
             if let Some(parsed) = vacuum
-                && let Some(name) = parallel_temp(&catalog, relid, parsed)
+                && let Some(name) = parallel_temp(catalog, relid, parsed)
             {
                 notices.push(Notice::warning(Error::new(SqlState::WARNING, format!(
                     "disabling parallel option of vacuum on \"{name}\" --- cannot vacuum temporary tables in parallel"
@@ -345,9 +372,57 @@ impl Connection {
             let analyze = analyze.then_some(columns.as_slice());
             // `vacuum_rel` runs as the owner of the relation with the `search_path` of `RestrictSearchPath`.
             let owner = catalog.relation(relid).map_or(self.current_role(), |r| r.owner);
-            self.as_maintenance(owner, || self.relation_stats(&catalog, relid, (vacuum, analyze)))?;
+            // `vacuum_rel` of `FULL` with no `PROCESS_MAIN` writes only the TOAST table again.
+            let full = vacuum.filter(|parsed| parsed.full).and_then(|parsed| {
+                let rel = catalog.relation(relid)?;
+                if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+                    None
+                } else if parsed.process_main {
+                    Some(relid)
+                } else {
+                    (parsed.process_toast && rel.toast != 0).then_some(rel.toast)
+                }
+            });
+            self.as_maintenance(owner, || {
+                if let Some(target) = full {
+                    self.vacuum_full(catalog, target, notices)?;
+                }
+                self.relation_stats(&self.catalog(), relid, (vacuum, analyze))
+            })?;
         }
-        Ok(Done::Tag(tag))
+        Ok(())
+    }
+
+    /// `cluster_rel` of `VACUUM FULL` on the relation `relid`, a table or a materialized view of the user or the TOAST table of one: a new file for the relation, its TOAST table and their indexes, which `REPACK` with no index writes in the physical order of the rows. A partitioned table has no storage, and rupg keeps the files of the built-in catalogs.
+    fn vacuum_full(
+        &self,
+        catalog: &Catalog,
+        relid: u32,
+        notices: &mut Vec<Notice>,
+    ) -> Result<(), Error> {
+        let Some(rel) = catalog.relation(relid) else { return Ok(()) };
+        let schema = match catalog.schema(rel.namespace) {
+            Some(schema) => schema.name.clone(),
+            None => builtin::named_by_oid(Named::Namespace, rel.namespace)
+                .map_or_else(String::new, |n| n.name.to_string()),
+        };
+        let relation = RangeVar {
+            schemaname: Some(schema.as_str().into()),
+            relname: Some(rel.name.as_str().into()),
+            inh: false,
+            location: -1,
+            ..RangeVar::default()
+        };
+        let stmt = RepackStmt {
+            command: RepackCommand::REPACK_COMMAND_VACUUMFULL,
+            relation: Some(Box::new(VacuumRelation {
+                relation: Some(Box::new(relation)),
+                ..VacuumRelation::default()
+            })),
+            ..RepackStmt::default()
+        };
+        let node = Node::RepackStmt(Box::new(stmt));
+        self.define_with(&node, "VACUUM FULL", notices, self.current_role(), false).map(|_| ())
     }
 
     /// `ExecCheckpoint`: the checks of the options and of the role, and then the write of the image of the store to its file.
@@ -410,7 +485,17 @@ impl Connection {
         match rel.kind {
             RelKind::Table | RelKind::MatView | RelKind::Toast => {
                 let mut rows = 0.0;
-                if let Some(parsed) = vacuum {
+                if let Some(parsed) = vacuum
+                    && parsed.full
+                    && rel.kind != RelKind::Toast
+                {
+                    // `copy_table_data` of `VACUUM FULL` set the stats of the new file.
+                    if parsed.process_main {
+                        rows = self.update_relstats(relid);
+                    } else if rel.toast != 0 && parsed.process_toast {
+                        self.update_relstats(rel.toast);
+                    }
+                } else if let Some(parsed) = vacuum {
                     if rel.toast != 0 && parsed.process_toast {
                         self.vacuum_heap(catalog, rel.toast, parsed);
                     }
@@ -546,7 +631,12 @@ impl Connection {
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>();
+        // The notices of the functions of the keys go to the client, also when an expression fails.
+        if index_keys.is_err() {
+            self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        }
+        let index_keys = index_keys?;
         let mut stats = Vec::new();
         for target in &targets {
             let at = usize::try_from(target.attnum - 1).unwrap_or(0);

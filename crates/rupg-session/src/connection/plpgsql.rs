@@ -614,10 +614,12 @@ impl Connection {
                 };
                 utility::run(node, text, &mut cx).map(|_| 0)
             })
-        } else if let Node::VacuumStmt(stmt) = node
-            && stmt.is_vacuumcmd
-        {
-            Err(self.prevent_in_call("VACUUM"))
+        } else if let Node::VacuumStmt(stmt) = node {
+            if stmt.is_vacuumcmd {
+                Err(self.prevent_in_call("VACUUM"))
+            } else {
+                self.vacuum(stmt, &mut notices).map(|_| 0)
+            }
         } else if let Some(done) = self.async_statement(node) {
             done.map(|_| 0)
         } else if let Node::CreatedbStmt(_) = node {
