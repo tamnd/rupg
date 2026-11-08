@@ -28,7 +28,7 @@ impl Status {
 }
 
 /// The honored parameters with the part of rupg that reads each one, in the order of the names without regard to case.
-pub static HONORED: [(&str, &str); 41] = [
+pub static HONORED: [(&str, &str); 42] = [
     ("application_name", "The server reports it to the client."),
     ("array_nulls", "The input of an array reads an unquoted NULL as a null when it is on."),
     ("bytea_output", "The output of bytea uses the hex or the escape form."),
@@ -56,6 +56,10 @@ pub static HONORED: [(&str, &str); 41] = [
         "The context of a bad parameter value in Bind shows this many bytes of the value.",
     ),
     ("max_identifier_length", "The lexer cuts a longer name to 63 bytes."),
+    (
+        "max_prepared_transactions",
+        "PREPARE TRANSACTION fails while it is 0, and at most this many transactions are prepared.",
+    ),
     ("md5_password_warnings", "The server warns when a client uses an MD5 password."),
     ("password_encryption", "The server stores new passwords with this method."),
     ("port", "The server listens on this port and names its socket with it."),

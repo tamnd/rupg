@@ -17,6 +17,7 @@ use crate::connection::Pending;
 use crate::guc::Source;
 use crate::heap::Heap;
 use crate::notify::Listeners;
+use crate::twophase::PreparedXacts;
 
 mod image;
 mod log;
@@ -68,6 +69,8 @@ pub struct Store {
     image: Option<image::ImageFile>,
     /// The sessions that listen for notifications.
     listeners: Listeners,
+    /// The prepared transactions of two phase commit.
+    prepared: PreparedXacts,
 }
 
 /// What [`Store::committed_view`] gives: the count of [`Store::generation`], the catalog of the last commit of a database, the roles and the owner of the database.
@@ -624,6 +627,11 @@ impl Store {
 
     pub(crate) fn heap(&self) -> &Heap {
         &self.heap
+    }
+
+    /// The prepared transactions of two phase commit.
+    pub(crate) fn prepared(&self) -> &PreparedXacts {
+        &self.prepared
     }
 
     /// The sessions that listen for notifications.

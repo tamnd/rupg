@@ -1,0 +1,122 @@
+//! `PREPARE TRANSACTION`, `COMMIT PREPARED` and `ROLLBACK PREPARED` (spec/11 section 11.10). A transaction that changed the catalog cannot be prepared yet: it holds the lock of the catalog of its database, and a prepared transaction would hold it until its end, so no other transaction of the database could change the catalog.
+
+use rupg_common::{Error, SqlState};
+use rupg_sql::nodes::{TransactionStmt, TransactionStmtKind};
+use rupg_wire::CommandTag;
+
+use super::{Connection, Done};
+use crate::twophase::Prepared;
+
+impl Connection {
+    /// The checks of `PrepareTransaction` after `PreCommit_CheckForSerializationFailure`, and `MarkAsPreparing`, which reserves the global identifier for the session until [`Connection::end_prepared`]. The transaction gets a transaction ID if it has none, as `GetCurrentTransactionId` gives it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`crate::twophase::PreparedXacts::reserve`], `0A000` for a transaction that used `LISTEN`, `UNLISTEN` or `NOTIFY`, that holds a lock at both levels, or that changed the catalog.
+    pub(super) fn prepare_checks(&self, gid: &str) -> Result<(), Error> {
+        let max = self
+            .settings
+            .borrow()
+            .get("max_prepared_transactions")
+            .and_then(|max| max.parse().ok())
+            .unwrap_or(0);
+        if !self.notify.borrow().is_empty() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot PREPARE a transaction that has executed LISTEN, UNLISTEN, or NOTIFY",
+            ));
+        }
+        if self.store.locks().holds_both_levels(self.pid) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot PREPARE while holding both session-level and transaction-level locks on the same object",
+            ));
+        }
+        if self.lease.borrow().is_some() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "rupg does not support PREPARE TRANSACTION for a transaction that changed the catalog",
+            ));
+        }
+        let xid = self.transaction_id(true).unwrap_or_default();
+        let entry = Prepared {
+            gid: gid.to_owned(),
+            xid,
+            database: self.database_oid,
+            owner: self.current_role(),
+            prepared: crate::query::now(&*self.clock),
+            sxact: self.sxact.get(),
+            writes: std::collections::BTreeMap::new(),
+            number: self.activity.number.unwrap_or_default(),
+            busy: Some(self.pid),
+        };
+        self.store.prepared().reserve(entry, max)
+    }
+
+    /// `PostPrepare_Locks` and the rest of `PrepareTransaction` after the reservation: the transaction ID, its row locks, its heavyweight locks and its record of serializable snapshot isolation go to the prepared transaction, and the session ends its transaction with no commit and no abort.
+    pub(super) fn end_prepared(&mut self) {
+        self.lease.get_mut().take();
+        let xid = self.xid.replace(0);
+        self.stable_xid.set(0);
+        self.end_notify(false);
+        let owner = Prepared::lock_owner(xid);
+        self.store.heap().hand_over(xid, owner);
+        self.store.locks().hand_over(self.pid, self.activity.fast.as_deref(), owner);
+        self.sxact.set(0);
+        self.store.prepared().prepared(self.pid, self.activity.take_writes());
+        self.store.commit(0, false, true);
+        self.end_heap_state();
+        self.marks.clear();
+    }
+
+    /// `FinishPreparedTransaction` for `COMMIT PREPARED` and `ROLLBACK PREPARED`, which cannot run in a transaction block.
+    ///
+    /// # Errors
+    ///
+    /// `25001` in a block, and the errors of [`crate::twophase::PreparedXacts::take`].
+    pub(super) fn finish_prepared(&mut self, stmt: &TransactionStmt) -> Result<Done, Error> {
+        let commit = stmt.kind == TransactionStmtKind::TRANS_STMT_COMMIT_PREPARED;
+        let (statement, tag) = if commit {
+            ("COMMIT PREPARED", CommandTag::CommitPrepared)
+        } else {
+            ("ROLLBACK PREPARED", CommandTag::RollbackPrepared)
+        };
+        if self.transaction.in_block() {
+            return Err(Error::new(
+                SqlState::ACTIVE_SQL_TRANSACTION,
+                format!("{statement} cannot run inside a transaction block"),
+            ));
+        }
+        let gid = stmt.gid.as_deref().unwrap_or_default();
+        let entry = self.store.prepared().take(
+            gid,
+            self.current_role(),
+            self.superuser(),
+            self.database_oid,
+        )?;
+        let heap = self.store.heap();
+        if commit {
+            self.store.commit(entry.xid, false, self.synchronous_commit());
+        } else {
+            heap.abort(entry.xid);
+            self.store.commit(0, false, true);
+        }
+        if entry.sxact != 0 {
+            heap.serializable_end(entry.sxact, commit);
+        }
+        self.store.locks().release_all(Prepared::lock_owner(entry.xid), false);
+        if !entry.writes.is_empty() {
+            self.store.report_writes(entry.database, &entry.writes, commit);
+        }
+        Ok(Done::Tag(tag))
+    }
+
+    /// The prepared transaction statements that the session runs itself: `COMMIT PREPARED` and `ROLLBACK PREPARED`.
+    pub(super) fn is_finish_prepared(stmt: &TransactionStmt) -> bool {
+        matches!(
+            stmt.kind,
+            TransactionStmtKind::TRANS_STMT_COMMIT_PREPARED
+                | TransactionStmtKind::TRANS_STMT_ROLLBACK_PREPARED
+        )
+    }
+}

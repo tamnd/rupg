@@ -580,7 +580,7 @@ pub(crate) fn is_savepoint(node: &Node) -> Option<&TransactionStmt> {
     .then_some(stmt)
 }
 
-/// `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, the forms with savepoints, and the forms that need two phase commit, which the session does not have yet.
+/// `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, the forms with savepoints, and the forms of two phase commit. The session runs `COMMIT PREPARED` and `ROLLBACK PREPARED` itself when it has a store.
 fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTag, Error> {
     match stmt.kind {
         TransactionStmtKind::TRANS_STMT_BEGIN | TransactionStmtKind::TRANS_STMT_START => {
@@ -614,7 +614,9 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
             cx.settings.set_subtransaction(cx.transaction.depth() > 0);
             Ok(tag)
         }
-        TransactionStmtKind::TRANS_STMT_PREPARE => prepare_transaction(cx),
+        TransactionStmtKind::TRANS_STMT_PREPARE => {
+            prepare_transaction(stmt.gid.as_deref().unwrap_or_default(), cx)
+        }
         _ => {
             let statement = if stmt.kind == TransactionStmtKind::TRANS_STMT_COMMIT_PREPARED {
                 "COMMIT PREPARED"
@@ -622,7 +624,7 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
                 "ROLLBACK PREPARED"
             };
             prevent_block(cx, statement)?;
-            // `LockGXact`: the server has no prepared transactions, as `max_prepared_transactions` is 0.
+            // `LockGXact`: the session runs the statement itself when it has a store of prepared transactions, so here none has the identifier.
             Err(Error::new(
                 SqlState::UNDEFINED_OBJECT,
                 format!(
@@ -634,8 +636,8 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
     }
 }
 
-/// `PrepareTransactionBlock`: `EndTransactionBlock`, then `PrepareTransaction` at the end of the statement. Outside of a block and in a failed block the statement gives the tag `ROLLBACK`. In a block, `PrepareTransaction` fails, and the error ends the block: a transaction that used the temporary schema cannot be prepared, and `MarkAsPreparing` refuses the rest, as `max_prepared_transactions` is 0.
-fn prepare_transaction(cx: &mut Context<'_>) -> Result<CommandTag, Error> {
+/// `PrepareTransactionBlock`: `EndTransactionBlock`, then `PrepareTransaction` at the end of the statement. Outside of a block and in a failed block the statement gives the tag `ROLLBACK`. In a block a transaction that used the temporary schema cannot be prepared, and `MarkAsPreparing` refuses all transactions while `max_prepared_transactions` is 0. The error ends the block. Otherwise the end of the statement prepares the transaction as `gid`, and the session makes the other checks of `PrepareTransaction` before it.
+fn prepare_transaction(gid: &str, cx: &mut Context<'_>) -> Result<CommandTag, Error> {
     let block = cx.transaction.block();
     let (commits, warning) = cx.transaction.commit(false)?;
     if let Some(warning) = warning {
@@ -644,15 +646,21 @@ fn prepare_transaction(cx: &mut Context<'_>) -> Result<CommandTag, Error> {
     if !commits || matches!(block, Block::Started | Block::Implicit) {
         return Ok(CommandTag::Rollback);
     }
-    Err(if cx.transaction.accessed_temp() {
-        Error::new(
+    if cx.transaction.accessed_temp() {
+        return Err(Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,
             "cannot PREPARE a transaction that has operated on temporary objects",
+        ));
+    }
+    if cx.settings.get("max_prepared_transactions").is_none_or(|max| max == "0") {
+        return Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "prepared transactions are disabled",
         )
-    } else {
-        Error::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "prepared transactions are disabled")
-            .with_hint("Set \"max_prepared_transactions\" to a nonzero value.")
-    })
+        .with_hint("Set \"max_prepared_transactions\" to a nonzero value."));
+    }
+    cx.transaction.prepare_as(gid);
+    Ok(CommandTag::PrepareTransaction)
 }
 
 /// `DISCARD ALL`, `DISCARD PLANS` and `DISCARD SEQUENCES`. The session has no plans or sequence caches yet, so only `DISCARD ALL` changes something: it resets the session authorization and all the settings. `DISCARD TEMP` runs as a definition, as it drops the objects of the temporary schema.

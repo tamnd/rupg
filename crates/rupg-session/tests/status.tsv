@@ -244,7 +244,7 @@ max_parallel_workers_per_gather	accepted
 max_pred_locks_per_page	accepted
 max_pred_locks_per_relation	accepted
 max_pred_locks_per_transaction	accepted
-max_prepared_transactions	accepted
+max_prepared_transactions	honored
 max_repack_replication_slots	accepted
 max_replication_slots	accepted
 max_slot_wal_keep_size	accepted

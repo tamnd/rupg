@@ -1783,10 +1783,36 @@ impl rupg_func::Session for Reader<'_> {
         self.take_locks(reads.iter().copied().filter(|&read| Some(read) != write), mode)
     }
 
+    fn prepared_xacts(&self) -> Vec<Vec<Value>> {
+        let Some((_, store)) = self.activity else { return Vec::new() };
+        store
+            .prepared()
+            .rows()
+            .into_iter()
+            .map(|(xid, gid, prepared, owner, database)| {
+                vec![
+                    Value::Oid(xid),
+                    Value::Text(gid),
+                    Value::TimestampTz(prepared),
+                    Value::Oid(owner),
+                    Value::Oid(database),
+                ]
+            })
+            .collect()
+    }
+
     fn locks(&self) -> Vec<Vec<Value>> {
         let Some((activity, store)) = self.activity else { return Vec::new() };
         let backends = activity.backends(store, &self.settings());
+        // The locks of a prepared transaction belong to a number that no session has. They show no process ID, and the virtual transaction ID of the session that prepared the transaction.
+        let prepared = store.prepared().lock_owners();
         let vxid = |pid: i32| {
+            if pid < 0 {
+                return prepared
+                    .iter()
+                    .find(|&&(xid, _)| crate::twophase::Prepared::lock_owner(xid) == pid)
+                    .map_or(Value::Null, |(_, number)| Value::text(format!("{number}/1")));
+            }
             backends
                 .iter()
                 .find(|b| b.pid == pid)
@@ -1796,7 +1822,7 @@ impl rupg_func::Session for Reader<'_> {
             let mut row = vec![Value::Null; 16];
             row[0] = Value::text(locktype);
             row[10] = vxid(pid);
-            row[11] = Value::Int4(pid);
+            row[11] = if pid < 0 { Value::Null } else { Value::Int4(pid) };
             row[12] = Value::text(mode_name(mode));
             row[13] = Value::Bool(granted);
             row[14] = Value::Bool(false);
@@ -1821,6 +1847,11 @@ impl rupg_func::Session for Reader<'_> {
                 own[6] = Value::Oid(xid);
                 rows.push(own);
             }
+        }
+        for &(xid, _) in &prepared {
+            let mut own = row("transactionid", crate::twophase::Prepared::lock_owner(xid), EXCLUSIVE, true);
+            own[6] = Value::Oid(xid);
+            rows.push(own);
         }
         for (tag, pid, mode, granted, fast) in store.locks().status() {
             let lock = match tag {
