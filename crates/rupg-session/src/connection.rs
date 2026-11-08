@@ -464,6 +464,8 @@ pub struct Connection {
     command: Cell<u32>,
     /// The snapshot of a transaction in `REPEATABLE READ` or `SERIALIZABLE`, from its first statement to its end.
     snapshot: RefCell<Option<Snapshot>>,
+    /// The record of the transaction in the serializable transactions of the heap, from its first statement in `SERIALIZABLE` to its end, or 0.
+    sxact: Cell<u64>,
     /// The rows of the deferred triggers of the foreign keys, in the order of the writes.
     deferred: RefCell<Vec<Batch>>,
     /// The `LISTEN`, `UNLISTEN` and `NOTIFY` of the transaction.
@@ -604,6 +606,7 @@ impl Connection {
             kept_catalog: RefCell::new(None),
             command: Cell::new(0),
             snapshot: RefCell::new(None),
+            sxact: Cell::new(0),
             deferred: RefCell::new(Vec::new()),
             notify: RefCell::default(),
             deferred_events: RefCell::new(Vec::new()),
@@ -752,7 +755,11 @@ impl Connection {
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
     fn view(&self) -> View {
         let heap = self.store.heap();
-        let serializable = self.known.borrow_mut().of(&self.settings.borrow()).serializable;
+        let (serializable, ssi, read_only) = {
+            let mut known = self.known.borrow_mut();
+            let known = known.of(&self.settings.borrow());
+            (known.serializable, known.ssi, known.read_only)
+        };
         self.holds_xmin.set(true);
         // `Heap::held_snapshot` holds the `xmin` of the new snapshot, so only a snapshot of the transaction needs a hold.
         let snapshot = if serializable {
@@ -761,6 +768,12 @@ impl Connection {
                 Some(snapshot) => {
                     heap.hold(self.pid, snapshot);
                     snapshot.clone()
+                }
+                None if ssi => {
+                    let (snapshot, sxact) =
+                        heap.serializable_snapshot_in(&self.xmin_slot(), read_only);
+                    self.sxact.set(sxact);
+                    kept.insert(snapshot).clone()
                 }
                 None => kept.insert(heap.held_snapshot_in(&self.xmin_slot())).clone(),
             }
@@ -773,6 +786,7 @@ impl Connection {
             xid: self.xid.get(),
             command: self.command.get(),
             serializable,
+            sxact: self.sxact.get(),
         }
     }
 
@@ -1394,6 +1408,10 @@ impl Connection {
                 heap.abort(xid);
             }
             self.store.commit(0, false, true);
+        }
+        let sxact = self.sxact.replace(0);
+        if sxact != 0 {
+            heap.serializable_end(sxact, commit);
         }
         let writes = self.activity.take_writes();
         if !writes.is_empty() {
@@ -2032,6 +2050,8 @@ impl Connection {
         }
         let view = View { xid: self.xid.get(), ..self.view() };
         for &table in tables {
+            // `CheckTableForSerializableConflictIn`.
+            heap.serializable_write(table, &view)?;
             while let Some(holder) = heap.truncate(table, &view) {
                 let name = work.relation(table).map_or("", |r| r.name.as_str());
                 let context = format!("while truncating relation \"{name}\"");
@@ -9322,6 +9342,12 @@ mod tests {
     #[test]
     fn lock_conflicts() {
         big_stack(|| two_sessions(include_str!("connection/lock_conflicts.test")));
+    }
+
+    /// `SERIALIZABLE` in two sessions, with the read-write conflicts of serializable snapshot isolation at the level of tables: write skew fails at the second commit, a pivot fails at its write after the commit of the transaction that it read, a read-only transaction that would see an anomaly makes the commit of the pivot fail, and a rollback or a transaction in `REPEATABLE READ` makes no conflict. `connection/serializable.test` is the output of PostgreSQL 19 for the same script on two connections to a new database, where each scan is a sequential scan, which locks the table.
+    #[test]
+    fn serializable() {
+        big_stack(|| two_sessions(include_str!("connection/serializable.test")));
     }
 
     /// The locks that statements take on relations in two sessions: a read and a write take a weak lock on the fast path, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE` and `CREATE INDEX` wait for them until `lock_timeout`, a strong request moves the weak locks to the table, and the rollback to a savepoint releases the locks after it.

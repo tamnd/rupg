@@ -28,7 +28,7 @@ impl Status {
 }
 
 /// The honored parameters with the part of rupg that reads each one, in the order of the names without regard to case.
-pub static HONORED: [(&str, &str); 39] = [
+pub static HONORED: [(&str, &str); 41] = [
     ("application_name", "The server reports it to the client."),
     ("array_nulls", "The input of an array reads an unquoted NULL as a null when it is on."),
     ("bytea_output", "The output of bytea uses the hex or the escape form."),
@@ -39,6 +39,10 @@ pub static HONORED: [(&str, &str); 39] = [
     ("client_min_messages", "The session sends only the notices at this level or above."),
     ("data_checksums", "rupg checks each page and has no way to turn it off."),
     ("DateStyle", "The output and the input of the date and time types follow it."),
+    (
+        "default_transaction_isolation",
+        "Each transaction starts at this isolation level, with serializable snapshot isolation for serializable.",
+    ),
     ("extra_float_digits", "The output of real and double precision follows it."),
     ("hba_file", "The server reads the rules of client authentication from it."),
     ("ident_file", "The server reads the user name maps from it."),
@@ -91,27 +95,19 @@ pub static HONORED: [(&str, &str); 39] = [
         "TimeZone",
         "The date and time functions use it. A named zone other than UTC, GMT and Etc/GMT+N gives 0A000 when a statement needs it.",
     ),
+    (
+        "transaction_isolation",
+        "The transaction keeps the snapshot of its first statement in repeatable read and serializable, and serializable checks the read-write conflicts.",
+    ),
     ("unix_socket_directories", "The server makes its Unix sockets in these directories."),
 ];
 
 /// The refused parameters, with the values that rupg refuses and the reason, in the order of the names without regard to case.
-pub static REFUSED: [(&str, &[&str], &str); 3] = [
-    (
-        "default_transaction_isolation",
-        &["serializable"],
-        "rupg has no serializable isolation before M5, and a client must not get a weaker level without an error.",
-    ),
-    (
-        "ssl_sni",
-        &["on"],
-        "rupg does not pick a certificate by the host name yet, and a client must not get another certificate than the one it asked for without an error.",
-    ),
-    (
-        "transaction_isolation",
-        &["serializable"],
-        "rupg has no serializable isolation before M5, and a client must not get a weaker level without an error.",
-    ),
-];
+pub static REFUSED: [(&str, &[&str], &str); 1] = [(
+    "ssl_sni",
+    &["on"],
+    "rupg does not pick a certificate by the host name yet, and a client must not get another certificate than the one it asked for without an error.",
+)];
 
 /// The status of a parameter.
 #[must_use]

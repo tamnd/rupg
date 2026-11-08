@@ -29,6 +29,10 @@ pub(super) struct Known {
     pub(super) plan_cache_mode: Option<String>,
     /// True when `transaction_isolation` is `repeatable read` or `serializable`, so the transaction keeps the snapshot of its first statement.
     pub(super) serializable: bool,
+    /// True when `transaction_isolation` is `serializable`, so the transaction checks its read-write conflicts.
+    pub(super) ssi: bool,
+    /// `transaction_read_only`.
+    pub(super) read_only: bool,
     /// True when `default_toast_compression` is `pglz`.
     pub(super) pglz: bool,
 }
@@ -72,6 +76,10 @@ impl Known {
                 settings.get_of(guc::known!("transaction_isolation")).as_deref(),
                 Some("repeatable read" | "serializable")
             ),
+            ssi: settings.get_of(guc::known!("transaction_isolation")).as_deref()
+                == Some("serializable"),
+            read_only: settings.get_of(guc::known!("transaction_read_only")).as_deref()
+                == Some("on"),
             pglz: settings.get_of(guc::known!("default_toast_compression")).as_deref()
                 == Some("pglz"),
         }

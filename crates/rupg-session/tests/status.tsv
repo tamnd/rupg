@@ -85,7 +85,7 @@ default_tablespace	accepted
 default_text_search_config	accepted
 default_toast_compression	accepted
 default_transaction_deferrable	accepted
-default_transaction_isolation	refused
+default_transaction_isolation	honored
 default_transaction_read_only	accepted
 default_with_oids	accepted
 dynamic_library_path	accepted
@@ -375,7 +375,7 @@ track_io_timing	accepted
 track_wal_io_timing	accepted
 transaction_buffers	accepted
 transaction_deferrable	accepted
-transaction_isolation	refused
+transaction_isolation	honored
 transaction_read_only	accepted
 transaction_timeout	accepted
 transform_null_equals	accepted

@@ -1056,6 +1056,19 @@ fn date_format(text: &str) -> DateFormat {
 }
 
 impl Reader<'_> {
+    /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a scan of the table `relation` in `SERIALIZABLE`. `PredicateLockingNeededForRelation` skips a system table, a temporary table and a materialized view.
+    fn serializable_read(&self, relation: u32, store: &Store, view: &View) -> Result<()> {
+        if view.sxact == 0 || relation < FIRST_NORMAL_OID {
+            return Ok(());
+        }
+        if self.catalog.relation(relation).is_some_and(|r| {
+            r.kind == rupg_catalog::RelKind::MatView || self.catalog.is_temp_schema(r.namespace)
+        }) {
+            return Ok(());
+        }
+        store.heap().serializable_read(relation, view)
+    }
+
     /// The order of the joins and the hash tables of the plan of `query`, which the statement plans once. `None` when the reader is not a session or the planner fails.
     fn planned(&self, query: &rupg_analyze::Query) -> Planned {
         let (_, store) = self.activity?;
@@ -1445,6 +1458,7 @@ impl rupg_func::Session for Reader<'_> {
     fn table_rows(&self, relation: u32, used: Option<&[bool]>) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
                 Ok(store.heap().visible_rows(relation, view, false, used))
             }
             _ => Ok(Vec::new()),
@@ -1457,7 +1471,10 @@ impl rupg_func::Session for Reader<'_> {
         columns: &[(usize, rupg_column::segment::Kind)],
     ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
         match (self.activity, &self.view) {
-            (Some((_, store)), Some(view)) => Ok(store.heap().columns(relation, view, columns)),
+            (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
+                Ok(store.heap().columns(relation, view, columns))
+            }
             _ => Ok(None),
         }
     }
@@ -1469,7 +1486,10 @@ impl rupg_func::Session for Reader<'_> {
         tids: &[u64],
     ) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
-            (Some((_, store)), Some(view)) => Ok(store.heap().rows_at(relation, view, used, tids)),
+            (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
+                Ok(store.heap().rows_at(relation, view, used, tids))
+            }
             _ => Ok(Vec::new()),
         }
     }
@@ -1483,6 +1503,7 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Option<Vec<Vec<Value>>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
                 Ok(store.heap().rows_at_places(relation, view, used, rows, places))
             }
             _ => Ok(None),
@@ -1498,6 +1519,7 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Option<Vec<Vec<Value>>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
                 Ok(store.heap().key_rows(relation, view, used, key_columns, key))
             }
             _ => Ok(None),
@@ -1512,6 +1534,7 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Option<Vec<rupg_func::SharedRow>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
                 Ok(store.heap().key_shared(relation, view, key_columns, key))
             }
             _ => Ok(None),
@@ -1525,6 +1548,7 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
+                self.serializable_read(relation, store, view)?;
                 Ok(store.heap().visible_rows(relation, view, true, used))
             }
             _ => Ok(Vec::new()),

@@ -1574,18 +1574,8 @@ mod tests {
     #[test]
     fn refused_values() {
         let mut s = startup();
-        let message = |r: Result<(), Error>| {
-            let error = r.unwrap_err();
-            format!("{} {}", error.state().as_str(), error.message())
-        };
-        assert_eq!(
-            message(set(&mut s, "default_transaction_isolation", "SERIALIZABLE")),
-            "0A000 rupg does not support parameter \"default_transaction_isolation\" set to \"serializable\""
-        );
-        assert_eq!(
-            message(set(&mut s, "transaction_isolation", "serializable")),
-            "0A000 rupg does not support parameter \"transaction_isolation\" set to \"serializable\""
-        );
+        set(&mut s, "default_transaction_isolation", "SERIALIZABLE").unwrap();
+        set(&mut s, "transaction_isolation", "serializable").unwrap();
         assert_eq!(state_of(set(&mut s, "transaction_isolation", "bogus")), "22023");
         set(&mut s, "session_replication_role", "local").unwrap();
         set(&mut s, "default_transaction_isolation", "repeatable read").unwrap();
