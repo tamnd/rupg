@@ -1,0 +1,36 @@
+> CREATE TABLE tl (id int, g int, v int, w int)
+CREATE TABLE
+> INSERT INTO tl SELECT i, (i * 7919) % 5000, i % 97, CASE WHEN i % 5 = 0 THEN NULL ELSE i % 13 END FROM generate_series(1, 200000) i
+INSERT 0 200000
+> INSERT INTO tl SELECT 200000 + r, j, r % 89, CASE WHEN r % 4 = 0 THEN NULL ELSE r % 7 END FROM generate_series(1, 12) j, generate_series(1, j * 3) r
+INSERT 0 234
+> ANALYZE tl
+ANALYZE
+> SELECT g, count(*), sum(v), avg(v), min(w), max(w) FROM tl GROUP BY g ORDER BY count(*) DESC LIMIT 5
+fields g@tl.2:23:4:-1,count:20:8:-1,sum:20:8:-1,avg:1700:-1:-1,min:23:4:-1,max:23:4:-1
+row 12,76,2699,35.5131578947368421,0,12
+row 11,73,2411,33.0273972602739726,0,12
+row 10,70,2243,32.0428571428571429,0,6
+row 9,67,2264,33.7910447761194030,0,12
+row 8,64,2308,36.0625000000000000,0,12
+SELECT 5
+> SELECT g, count(*), sum(v), min(w) FROM tl GROUP BY g ORDER BY count(*) LIMIT 3 OFFSET 2
+fields g@tl.2:23:4:-1,count:20:8:-1,sum:20:8:-1,min:23:4:-1
+row 3936,40,1940,0
+row 2574,40,2019,0
+row 1489,40,1887,0
+SELECT 3
+> SELECT g, count(w), sum(v), max(v), count(*) FROM tl GROUP BY g ORDER BY count(w) DESC LIMIT 4
+fields g@tl.2:23:4:-1,count:20:8:-1,sum:20:8:-1,max:23:4:-1,count:20:8:-1
+row 12,67,2699,96,76
+row 11,65,2411,96,73
+row 9,61,2264,93,67
+row 8,58,2308,95,64
+SELECT 4
+> SELECT g, count(*), sum(w), avg(w) FROM tl WHERE v > 10 GROUP BY g ORDER BY count(*) DESC LIMIT 4
+fields g@tl.2:23:4:-1,count:20:8:-1,sum:20:8:-1,avg:1700:-1:-1
+row 12,63,274,4.8928571428571429
+row 11,57,262,5.1372549019607843
+row 10,54,44,2.9333333333333333
+row 9,53,253,5.1632653061224490
+SELECT 4
