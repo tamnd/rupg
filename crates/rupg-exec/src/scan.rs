@@ -98,6 +98,8 @@ pub(crate) struct Tables {
     indexes: RefCell<Indexes>,
     /// For each relation whose scan kept only some columns, the place of each column in the rows. A relation with no entry has all the columns in each row.
     places: Vec<Option<Places>>,
+    /// True when [`crate::reduce`] kept only the rows that can join, so that [`tuples`] tests a correlated `EXISTS` of one table after the joins.
+    reduced: bool,
 }
 
 /// The columns that the rows of a scan keep: the place of each column of the relation in a row, or `NONE` for a column that the rows do not have, and the number of the kept columns, after which the ID of the version and the other system values come.
@@ -196,6 +198,7 @@ impl Tables {
             grown: vec![RefCell::default()],
             indexes: RefCell::default(),
             places: Vec::new(),
+            reduced: false,
         }
     }
 
@@ -599,7 +602,11 @@ pub(crate) fn read(
     let plain = query.write.is_none() && query.row_marks.is_empty();
     let mut rows = Vec::with_capacity(query.relations.len());
     let mut places = vec![None; query.relations.len()];
-    let reduce = narrow.as_ref().and_then(|_| crate::reduce::plan(query, &conds, session));
+    // A correlated `EXISTS` of one table does not stop the reduction, because [`tuples`] then tests it after the joins, on the tuples of the rows that can join.
+    let reducible: Vec<&Expr> =
+        conds.iter().copied().filter(|expr| late_relation(expr, query).is_none()).collect();
+    let reduce = narrow.as_ref().and_then(|_| crate::reduce::plan(query, &reducible, session));
+    let mut reduced = false;
     let mut selected: Vec<Option<columnar::Selected>> =
         query.relations.iter().map(|_| None).collect();
     let mut kept_of: Vec<Option<Vec<bool>>> = query.relations.iter().map(|_| None).collect();
@@ -707,6 +714,7 @@ pub(crate) fn read(
     if let (Some(plan), Some(test)) = (&reduce, narrow)
         && selected.iter().any(Option::is_some)
     {
+        reduced = true;
         let all = tables(query, rows.clone(), xids.clone(), places.clone());
         let found = crate::reduce::run(plan, &mut rows, &mut selected, all, test)?;
         for (index, found) in found.into_iter().enumerate() {
@@ -728,7 +736,9 @@ pub(crate) fn read(
             rows[index] = Rc::new(read);
         }
     }
-    Ok(tables(query, rows, xids, places))
+    let mut tables = tables(query, rows, xids, places);
+    tables.reduced = reduced;
+    Ok(tables)
 }
 
 /// The [`Tables`] of a query of one table with the rows `rows`, which have the columns that are true in `kept`.
@@ -754,6 +764,7 @@ fn tables(
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
         places,
+        reduced: false,
     }
 }
 
@@ -844,6 +855,7 @@ pub(crate) fn given(query: &Query, rows: Vec<Vec<Vec<Value>>>) -> Tables {
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
         places: Vec::new(),
+        reduced: false,
     }
 }
 
@@ -1686,6 +1698,60 @@ fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result
     keep_in(tuples, conds, test, &[])
 }
 
+/// The relation of a condition that [`tuples`] tests after the joins: an `EXISTS` or `NOT EXISTS` with a correlated subquery that reads one table of the query and calls no volatile function.
+fn late_relation(expr: &Expr, query: &Query) -> Option<usize> {
+    let link = match &expr.kind {
+        ExprKind::Bool(rupg_analyze::BoolOp::Not, args) => match args.as_slice() {
+            [arg] => arg,
+            _ => return None,
+        },
+        _ => expr,
+    };
+    let ExprKind::SubLink(sub) = &link.kind else { return None };
+    if sub.kind != rupg_analyze::SubLinkKind::Exists
+        || !crate::correlated(&sub.query)
+        || crate::volatile(expr)
+    {
+        return None;
+    }
+    let [relation] = relations_of(expr)[..] else { return None };
+    let table = query.relations.get(relation)?;
+    let plain = table.subquery.is_none()
+        && table.function.is_none()
+        && table.values.is_none()
+        && table.cte.is_none();
+    plain.then_some(relation)
+}
+
+/// The tuples that pass a condition that reads only the rows of `relation`, which has `rows` rows. The condition runs once for each row of the relation, and a tuple with the null row of an outer join runs it each time.
+fn keep_once(
+    tuples: Vec<Vec<usize>>,
+    cond: &Expr,
+    relation: usize,
+    rows: usize,
+    test: &mut Test<'_>,
+) -> Result<Vec<Vec<usize>>> {
+    // For each row: 0 when the condition has not run, 1 for a row that fails and 2 for a row that passes.
+    let mut known = vec![0_u8; rows];
+    let mut kept = Vec::with_capacity(tuples.len());
+    for tuple in tuples {
+        let row = tuple[relation];
+        let pass = match known.get(row).copied() {
+            Some(0) => {
+                let pass = test(cond, &tuple)? == Value::Bool(true);
+                known[row] = 1 + u8::from(pass);
+                pass
+            }
+            Some(state) => state == 2,
+            None => test(cond, &tuple)? == Value::Bool(true),
+        };
+        if pass {
+            kept.push(tuple);
+        }
+    }
+    Ok(kept)
+}
+
 /// The tuples that pass every condition. A condition can read the relations of the outer side of a nested loop, whose rows `context` has.
 fn keep_in(
     tuples: Vec<Vec<usize>>,
@@ -1761,6 +1827,19 @@ pub(crate) fn tuples(
             None => rest.push(expr),
         }
     }
+    // In a join that read only the rows that can join, a correlated `EXISTS` of one table runs after the joins with the other parts of `FROM`, as the semi join of a plan often comes after the joins that leave fewer rows. It runs once for each row of the table, so that it runs on no more rows than in the scan of the table.
+    let mut late = Vec::new();
+    if tables.reduced && items.len() > 1 && query.barrier.is_empty() {
+        for conds in &mut own {
+            conds.retain(|expr| match late_relation(expr, query) {
+                Some(relation) => {
+                    late.push((*expr, relation));
+                    false
+                }
+                None => true,
+            });
+        }
+    }
     let mut acc: Vec<Vec<usize>> = vec![vec![NONE; width]];
     let mut acc_relations: Vec<usize> = Vec::new();
     let order = join_order(&items, &rest, tables);
@@ -1792,6 +1871,9 @@ pub(crate) fn tuples(
         acc_relations = all;
     }
     let mut acc = keep(acc, &rest, scan.test)?;
+    for (expr, relation) in late {
+        acc = keep_once(acc, expr, relation, tables.rows[relation].len(), scan.test)?;
+    }
     let mut all: Vec<usize> = items.iter().flat_map(|(_, r)| r.iter().copied()).collect();
     all.sort_unstable();
     let planned = planned.filter(|(planned, _)| {

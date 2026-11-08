@@ -4336,6 +4336,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/semi_bound.test")));
     }
 
+    /// In a join that reads only the rows that can join, a correlated `EXISTS` or `NOT EXISTS` of one table runs after the joins with the other parts of `FROM`, once for each row of the table, and gives the rows of PostgreSQL 19, with a join that gives a row of the table many times, the null rows of an outer join, a subquery that is not lifted and an `EXISTS` of two tables.
+    #[test]
+    fn late_exists() {
+        big_stack(|| script_tasks(include_str!("connection/late_exists.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
