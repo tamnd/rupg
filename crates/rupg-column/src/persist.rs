@@ -110,18 +110,21 @@ impl Persist for Dictionary {
     fn put(&self, out: &mut Vec<u8>) {
         let (bytes, ends, base) = self.parts();
         put_bytes(out, bytes);
-        put_count(out, ends.len());
-        for end in ends {
-            end.put(out);
-        }
+        put_count(out, ends.len() / 8);
+        out.extend_from_slice(ends);
         base.put(out);
     }
 
+    /// The arena and the ends stay where the reader has them, in a mapping of the file when the reader has one.
     fn take(input: &mut Reader<'_>) -> Result<Dictionary> {
-        let bytes = take_bytes(input)?.to_vec();
-        let ends = Persist::take(input)?;
+        let n = input.count()?;
+        let bytes = input.shared(n)?;
+        let count = input.count()?;
+        let size =
+            count.checked_mul(8).ok_or_else(|| corrupt("a dictionary has too many strings"))?;
+        let ends = input.shared(size)?;
         let base = Persist::take(input)?;
-        Dictionary::from_parts(bytes, ends, base)
+        Dictionary::from_shared(bytes, ends, base)
     }
 }
 
@@ -212,5 +215,45 @@ mod tests {
         let at = bytes.iter().rposition(|&b| b == 5).unwrap();
         bytes[at] = 9;
         assert!(from_bytes::<Dictionary>(&bytes).is_err());
+    }
+
+    /// The bytes of a file in memory, for a read through a mapping.
+    #[derive(Debug)]
+    struct Memory(Vec<u8>);
+
+    impl rupg_common::bytes::Mapping for Memory {
+        fn bytes(&self) -> &[u8] {
+            &self.0
+        }
+    }
+
+    /// A dictionary that a read takes from a mapping keeps its strings in the mapping, finds each string, writes the same bytes, and copies its strings when it gets a new one.
+    #[test]
+    fn a_mapped_dictionary_owns_no_strings_until_it_grows() {
+        let mut dict = Dictionary::new();
+        let words: Vec<String> = (0..3000).map(|i| format!("http://example.com/{i}")).collect();
+        for word in &words {
+            dict.intern(word.as_bytes());
+        }
+        let bytes = to_bytes(&dict);
+        let map: std::sync::Arc<dyn rupg_common::bytes::Mapping> =
+            std::sync::Arc::new(Memory(bytes.clone()));
+        let mut read = Dictionary::take(&mut Reader::mapped(&map)).unwrap();
+        assert_eq!(read.footprint(), 0);
+        for (code, word) in words.iter().enumerate() {
+            assert_eq!(read.get(code as u32 + 1), word.as_bytes());
+            assert_eq!(read.find(word.as_bytes()), code as u32 + 1);
+        }
+        assert_eq!(read.find(b"http://example.com/x"), crate::dict::MISSING);
+        assert!(read.footprint() > 0 && read.footprint() < 3000 * 16);
+        assert_eq!(to_bytes(&read), bytes);
+        assert_eq!(read.intern(b"new"), 3001);
+        assert_eq!(read.intern(words[7].as_bytes()), 8);
+        assert_eq!(read.get(3001), b"new");
+        assert_eq!(read.find(b"new"), 3001);
+        assert!(read.footprint() > 3000 * 16);
+        let again: Dictionary = from_bytes(&to_bytes(&read)).unwrap();
+        assert_eq!(again.len(), 3001);
+        assert_eq!(again.get(3001), b"new");
     }
 }

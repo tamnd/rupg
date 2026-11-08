@@ -4,6 +4,7 @@
 
 use std::sync::OnceLock;
 
+use rupg_common::bytes::Bytes;
 use rupg_common::{Error, Result};
 use rupg_kernels::hash;
 
@@ -14,14 +15,16 @@ pub const NONE: u32 = 0;
 pub const MISSING: u32 = u32::MAX;
 
 /// The strings of one column of one table, each with its code.
+///
+/// A dictionary that a load reads from a mapping of the file keeps its strings and their ends in the mapping, and makes its table of codes when it first finds a string. A dictionary that no query reads then costs no memory of the process (spec/19 section 19.5).
 #[derive(Clone, Debug)]
 pub struct Dictionary {
     /// The bytes of every string, in the order of the codes.
-    bytes: Vec<u8>,
-    /// The end of each string in `bytes`. The string of code `c` ends at `ends[c - 1]`.
-    ends: Vec<u64>,
-    /// An open address table of codes, with [`NONE`] in an empty slot. Its length is a power of two.
-    slots: Vec<u32>,
+    bytes: Store,
+    /// The end of each string in `bytes`, as eight bytes little endian. The string of code `c` ends at end `c - 1`.
+    ends: Store,
+    /// An open address table of codes, with [`NONE`] in an empty slot. Its length is a power of two. The first find makes it.
+    slots: OnceLock<Vec<u32>>,
     /// The codes of the sorted base are 1 to `base`. The other codes are the tail, in the order they came (spec/09 section 9.5.3).
     base: u32,
     /// The place of each code in the order of the bytes of all the strings, which [`Dictionary::order`] makes when a query first needs it. A new string clears it.
@@ -39,9 +42,9 @@ impl Dictionary {
     #[must_use]
     pub fn new() -> Dictionary {
         Dictionary {
-            bytes: Vec::new(),
-            ends: Vec::new(),
-            slots: vec![NONE; 1024],
+            bytes: Store::default(),
+            ends: Store::default(),
+            slots: OnceLock::from(vec![NONE; 1024]),
             base: 0,
             order: OnceLock::new(),
         }
@@ -50,19 +53,26 @@ impl Dictionary {
     /// The number of strings.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.ends.len()
+        self.ends.slice().len() / 8
     }
 
     /// True when the dictionary has no strings.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.ends.is_empty()
+        self.ends.slice().is_empty()
     }
 
-    /// The bytes of the arena and of the table, for the memory report.
+    /// The bytes of the arena and of the table that the process owns, for the memory report. Bytes in a mapping of the file are not counted.
     #[must_use]
     pub fn footprint(&self) -> usize {
-        self.bytes.capacity() + self.ends.capacity() * 8 + self.slots.capacity() * 4
+        self.bytes.size()
+            + self.ends.size()
+            + self.slots.get().map_or(0, |slots| slots.capacity() * 4)
+    }
+
+    /// The table of codes, which the first call makes.
+    fn slots(&self) -> &[u32] {
+        self.slots.get_or_init(|| self.table((self.len() * 2 + 1).next_power_of_two().max(1024)))
     }
 
     /// The string of `code`.
@@ -71,20 +81,26 @@ impl Dictionary {
     ///
     /// When `code` is not a code of the dictionary.
     #[must_use]
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, code: u32) -> &[u8] {
-        let at = code as usize - 1;
-        let start = if at == 0 { 0 } else { self.ends[at - 1] as usize };
-        &self.bytes[start..self.ends[at] as usize]
+        self.strings().get(code)
+    }
+
+    /// The strings, for many reads of [`Strings::get`]. Bytes in a mapping of the file take a call to find them, so a loop over many codes takes the strings one time.
+    #[must_use]
+    #[inline]
+    pub fn strings(&self) -> Strings<'_> {
+        Strings { bytes: self.bytes.slice(), ends: self.ends.slice().as_chunks::<8>().0 }
     }
 
     /// The code of `value`, or [`MISSING`].
     #[must_use]
     pub fn find(&self, value: &[u8]) -> u32 {
-        let mask = self.slots.len() - 1;
+        let slots = self.slots();
+        let mask = slots.len() - 1;
         let mut at = hash::bytes(value) as usize & mask;
         loop {
-            let code = self.slots[at];
+            let code = slots[at];
             if code == NONE {
                 return MISSING;
             }
@@ -101,10 +117,11 @@ impl Dictionary {
     ///
     /// When the dictionary already has 4,294,967,294 strings.
     pub fn intern(&mut self, value: &[u8]) -> u32 {
-        let mask = self.slots.len() - 1;
+        let slots = self.slots();
+        let mask = slots.len() - 1;
         let mut at = hash::bytes(value) as usize & mask;
         loop {
-            let code = self.slots[at];
+            let code = slots[at];
             if code == NONE {
                 break;
             }
@@ -114,24 +131,29 @@ impl Dictionary {
             at = (at + 1) & mask;
         }
         assert!(
-            self.ends.len() < (MISSING - 1) as usize,
+            self.len() < (MISSING - 1) as usize,
             "a dictionary holds at most 4294967294 strings"
         );
-        self.bytes.extend_from_slice(value);
-        self.ends.push(self.bytes.len() as u64);
-        let code = self.ends.len() as u32;
-        self.slots[at] = code;
+        let bytes = self.bytes.owned_mut();
+        bytes.extend_from_slice(value);
+        let end = bytes.len() as u64;
+        self.ends.owned_mut().extend_from_slice(&end.to_le_bytes());
+        let code = self.len() as u32;
+        let slots = self.slots.get_mut().map_or(0, |slots| {
+            slots[at] = code;
+            slots.len()
+        });
         self.order = OnceLock::new();
-        if self.ends.len() * 2 > self.slots.len() {
+        if self.len() * 2 > slots {
             self.grow();
         }
         code
     }
 
-    /// The arena, the end of each string and the size of the sorted base, which [`Dictionary::from_parts`] takes back.
+    /// The arena, the end of each string as eight bytes little endian, and the size of the sorted base, which [`Dictionary::from_parts`] and [`Dictionary::from_shared`] take back.
     #[must_use]
-    pub fn parts(&self) -> (&[u8], &[u64], u32) {
-        (&self.bytes, &self.ends, self.base)
+    pub fn parts(&self) -> (&[u8], &[u8], u32) {
+        (self.bytes.slice(), self.ends.slice(), self.base)
     }
 
     /// The dictionary of the parts that [`Dictionary::parts`] gave, with a new table of codes.
@@ -140,32 +162,60 @@ impl Dictionary {
     ///
     /// `XX001` when an end is before the end before it or after the arena, the last end is not the end of the arena, the base has more codes than the dictionary, or the dictionary has too many strings.
     pub fn from_parts(bytes: Vec<u8>, ends: Vec<u64>, base: u32) -> Result<Dictionary> {
-        let ordered = ends.is_sorted() && ends.last().map_or(0, |&end| end) == bytes.len() as u64;
-        if !ordered || base as usize > ends.len() || ends.len() >= (MISSING - 1) as usize {
+        let mut raw = Vec::with_capacity(ends.len() * 8);
+        for end in ends {
+            raw.extend_from_slice(&end.to_le_bytes());
+        }
+        let ends = raw;
+        Dictionary::from_stores(Store::owned(bytes), Store::owned(ends), base)
+    }
+
+    /// The dictionary of an arena and of the ends of its strings as eight bytes little endian, which can be ranges of a mapping of the file. The dictionary reads them where they are, and makes its table of codes when it first finds a string.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Dictionary::from_parts`], and `XX001` when the bytes of the ends are not a whole number of ends.
+    pub fn from_shared(bytes: Bytes, ends: Bytes, base: u32) -> Result<Dictionary> {
+        Dictionary::from_stores(Store::mapped(bytes), Store::mapped(ends), base)
+    }
+
+    /// The dictionary of [`Dictionary::from_parts`] and [`Dictionary::from_shared`], with no table of codes yet.
+    fn from_stores(bytes: Store, ends: Store, base: u32) -> Result<Dictionary> {
+        let raw = ends.slice();
+        let mut last = 0;
+        let ordered = raw.len().is_multiple_of(8)
+            && raw.as_chunks::<8>().0.iter().all(|&end| {
+                let end = u64::from_le_bytes(end);
+                let after = end >= last;
+                last = end;
+                after
+            })
+            && last == bytes.slice().len() as u64;
+        let len = raw.len() / 8;
+        if !ordered || base as usize > len || len >= (MISSING - 1) as usize {
             return Err(Error::corrupted("a dictionary has bad string ends"));
         }
-        let size = (ends.len() * 2 + 1).next_power_of_two().max(1024);
-        let mut dict = Dictionary { bytes, ends, slots: Vec::new(), base, order: OnceLock::new() };
-        dict.fill(size);
-        Ok(dict)
+        Ok(Dictionary { bytes, ends, slots: OnceLock::new(), base, order: OnceLock::new() })
     }
 
     fn grow(&mut self) {
-        self.fill(self.slots.len() * 2);
+        let size = self.slots().len() * 2;
+        self.slots = OnceLock::from(self.table(size));
     }
 
-    /// Makes the table of codes again with `size` slots, a power of two.
-    fn fill(&mut self, size: usize) {
+    /// A table of codes with `size` slots, a power of two.
+    fn table(&self, size: usize) -> Vec<u32> {
         let mask = size - 1;
         let mut slots = vec![NONE; size];
-        for code in 1..=self.ends.len() as u32 {
-            let mut at = hash::bytes(self.get(code)) as usize & mask;
+        let strings = self.strings();
+        for code in 1..=self.len() as u32 {
+            let mut at = hash::bytes(strings.get(code)) as usize & mask;
             while slots[at] != NONE {
                 at = (at + 1) & mask;
             }
             slots[at] = code;
         }
-        self.slots = slots;
+        slots
     }
 
     /// The rank of `code` in the sorted base, or `None` for a code of the tail.
@@ -184,14 +234,15 @@ impl Dictionary {
     /// The places of [`Dictionary::order`], from a sort on `jobs` jobs at the same time, which `run` runs and returns when all of them ended. A sample of the strings gives the bounds of many parts, each job puts the codes of a run of the codes into their parts, and then the jobs sort the parts. The places are the places of [`Dictionary::order`]. A dictionary of few strings, or one job, sorts on the calling task.
     pub fn order_on(&self, jobs: usize, run: &Run<'_>) -> &[u32] {
         self.order.get_or_init(|| {
-            let codes: Vec<u32> = if jobs < 2 || self.ends.len() < PARALLEL_ORDER {
-                let mut codes: Vec<u32> = (1..=self.ends.len() as u32).collect();
-                sort_bytes(&mut codes, |c| self.get(c));
+            let strings = self.strings();
+            let codes: Vec<u32> = if jobs < 2 || self.len() < PARALLEL_ORDER {
+                let mut codes: Vec<u32> = (1..=self.len() as u32).collect();
+                sort_bytes(&mut codes, |c| strings.get(c));
                 codes
             } else {
                 self.sort_parts(jobs, run)
             };
-            let mut places = vec![0; self.ends.len() + 1];
+            let mut places = vec![0; self.len() + 1];
             for (place, &code) in codes.iter().enumerate() {
                 places[code as usize] = place as u32 + 1;
             }
@@ -201,14 +252,15 @@ impl Dictionary {
 
     /// The codes of all the strings in the order of their bytes, from the sort of [`Dictionary::order_on`] of more than one job.
     fn sort_parts(&self, jobs: usize, run: &Run<'_>) -> Vec<u32> {
-        let n = self.ends.len();
+        let n = self.len();
+        let strings = self.strings();
         let parts = jobs * PARTS_OF_JOB;
         // Each part gets about `SAMPLE_OF_PART` strings of the sample, so the sizes of the parts are close.
         let step = (n / (parts * SAMPLE_OF_PART)).max(1);
         let mut sample: Vec<u32> = (1..=n as u32).step_by(step).collect();
-        sort_bytes(&mut sample, |c| self.get(c));
+        sort_bytes(&mut sample, |c| strings.get(c));
         let bounds: Vec<&[u8]> =
-            (1..parts).map(|i| self.get(sample[i * sample.len() / parts])).collect();
+            (1..parts).map(|i| strings.get(sample[i * sample.len() / parts])).collect();
         // The part of a string is the number of bounds that are not after it.
         let chunk = n.div_ceil(jobs);
         let mut found: Vec<Vec<Vec<u32>>> = vec![Vec::new(); n.div_ceil(chunk)];
@@ -221,7 +273,7 @@ impl Dictionary {
                     *out = vec![Vec::new(); parts];
                     let from = j * chunk + 1;
                     for code in from..(from + chunk).min(n + 1) {
-                        let text = self.get(code as u32);
+                        let text = strings.get(code as u32);
                         out[bounds.partition_point(|b| *b <= text)].push(code as u32);
                     }
                 }) as Job<'_>
@@ -256,7 +308,7 @@ impl Dictionary {
                         let next =
                             queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop();
                         let Some(slice) = next else { break };
-                        sort_bytes(slice, |c| self.get(c));
+                        sort_bytes(slice, |c| strings.get(c));
                     }
                 }) as Job<'_>
             })
@@ -275,6 +327,30 @@ impl Dictionary {
     #[must_use]
     pub fn base(&self) -> u32 {
         self.base
+    }
+}
+
+/// The strings of a [`Dictionary`], which [`Dictionary::strings`] gives.
+#[derive(Clone, Copy, Debug)]
+pub struct Strings<'a> {
+    /// The bytes of every string, in the order of the codes.
+    bytes: &'a [u8],
+    /// The end of each string in `bytes`, little endian.
+    ends: &'a [[u8; 8]],
+}
+
+impl<'a> Strings<'a> {
+    /// The string of `code`.
+    ///
+    /// # Panics
+    ///
+    /// When `code` is not a code of the dictionary.
+    #[must_use]
+    #[inline(always)]
+    pub fn get(self, code: u32) -> &'a [u8] {
+        let at = code as usize - 1;
+        let start = if at == 0 { 0 } else { u64::from_le_bytes(self.ends[at - 1]) as usize };
+        &self.bytes[start..u64::from_le_bytes(self.ends[at]) as usize]
     }
 }
 
@@ -340,6 +416,7 @@ mod tests {
 
     /// The sort of the places on many jobs gives the places of a sort of the bytes, for texts with long common starts, texts that are the start of others, zero bytes and many equal parts of the sample.
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn a_sort_on_many_jobs_is_the_sort_of_the_bytes() {
         let mut dict = Dictionary::new();
         let mut seed = 7_u64;
@@ -423,5 +500,46 @@ mod tests {
         dict.intern(b"banana");
         assert!(!dict.has_order());
         assert_eq!(dict.order()[6], 4);
+    }
+}
+
+/// Bytes that a dictionary owns and can grow, or a range of a mapping of the file, which a new string first copies.
+#[derive(Clone, Debug, Default)]
+struct Store {
+    /// The bytes in a mapping of the file, if the bytes are there.
+    mapped: Option<Bytes>,
+    /// The bytes that the dictionary owns, when it has no mapped bytes.
+    owned: Vec<u8>,
+}
+
+impl Store {
+    /// Bytes that the dictionary owns.
+    fn owned(bytes: Vec<u8>) -> Store {
+        Store { mapped: None, owned: bytes }
+    }
+
+    /// Bytes in a mapping of the file.
+    fn mapped(bytes: Bytes) -> Store {
+        Store { mapped: Some(bytes), owned: Vec::new() }
+    }
+
+    /// All the bytes.
+    #[inline(always)]
+    fn slice(&self) -> &[u8] {
+        self.mapped.as_deref().unwrap_or(&self.owned)
+    }
+
+    /// The bytes that the process owns, which are not the bytes of a mapping of the file.
+    fn size(&self) -> usize {
+        let copied = self.mapped.as_ref().filter(|bytes| !bytes.is_mapped());
+        self.owned.capacity() + copied.map_or(0, |bytes| bytes.len())
+    }
+
+    /// The bytes to grow, which are a copy of the mapped bytes the first time.
+    fn owned_mut(&mut self) -> &mut Vec<u8> {
+        if let Some(bytes) = self.mapped.take() {
+            self.owned = bytes.to_vec();
+        }
+        &mut self.owned
     }
 }
