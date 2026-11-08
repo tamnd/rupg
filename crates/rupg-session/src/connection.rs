@@ -2127,7 +2127,7 @@ impl Connection {
 
     /// Reads at most one message from `input` and writes the answer to `out`.
     pub fn step(&mut self, input: &[u8], out: &mut OutBuf) -> Step {
-        // `ProcessInterrupts` with `ProcDiePending`: `DROP DATABASE` with `FORCE` in another session ended this session.
+        // `ProcessInterrupts` with `ProcDiePending`: `DROP DATABASE` with `FORCE` or `pg_terminate_backend` in another session ended this session.
         if self.end.load(Ordering::Relaxed) {
             let error = Error::new(
                 SqlState::ADMIN_SHUTDOWN,
@@ -2230,6 +2230,15 @@ impl Connection {
                 Next::Close
             }
         };
+        // `pg_terminate_backend` during the message ends the session after it.
+        if !matches!(next, Next::Close) && self.end.load(Ordering::Relaxed) {
+            let error = Error::new(
+                SqlState::ADMIN_SHUTDOWN,
+                "terminating connection due to administrator command",
+            );
+            write_error(out, "FATAL", &error, None, false);
+            return Step { used, next: Next::Close };
+        }
         Step { used, next }
     }
 
@@ -2926,7 +2935,10 @@ impl Connection {
 
     /// Writes the error of a statement and aborts its transaction. In a failed block the portals stay, but they cannot run.
     fn fail(&mut self, error: &Error, position: Option<usize>, out: &mut OutBuf) {
-        write_error(out, "ERROR", error, position, false);
+        // A session that `pg_terminate_backend` ends reports the end of the session in place of the error of the statement, at the end of the step.
+        if !self.end.load(Ordering::Relaxed) {
+            write_error(out, "ERROR", error, position, false);
+        }
         self.abort();
     }
 
@@ -2986,8 +2998,12 @@ impl Connection {
         drop(settings.set_internal("role", "none"));
         drop(settings.set_internal("session_authorization", &self.user));
         let mut out = OutBuf::new();
+        // The drop runs also after `pg_terminate_backend`, as `before_shmem_exit` runs the callback after `ProcessInterrupts`.
+        let ended = self.end.swap(false, Ordering::Relaxed);
+        self.cancel.store(false, Ordering::Relaxed);
         self.simple_query(&format!("DROP SCHEMA {temp}, pg_toast_temp_{number} CASCADE"), &mut out);
         self.finish_xact();
+        self.end.store(ended, Ordering::Relaxed);
     }
 }
 
@@ -3339,7 +3355,8 @@ mod tests {
                 Next::Read => break,
                 Next::Close => {
                     out.command_complete(b"(closed)");
-                    break;
+                    // A session that `pg_terminate_backend` ended closes before it reads the input.
+                    return out;
                 }
                 Next::Continue | Next::Flush => {}
             }
@@ -8829,6 +8846,12 @@ mod tests {
     #[test]
     fn am_properties() {
         big_stack(|| script(include_str!("connection/am_properties.test")));
+    }
+
+    /// `pg_cancel_backend` and `pg_terminate_backend`: the cancel of a session with no statement, which does nothing, the warning for a process ID with no session, the error of a negative timeout, the errors of a role that is not a superuser, and the end of the other session at its next message. `connection/signal.test` is the output of PostgreSQL 19 for the same script, with the process IDs of the sessions.
+    #[test]
+    fn signal_backend() {
+        big_stack(|| two_sessions(include_str!("connection/signal.test")));
     }
 
     /// The advisory lock functions in one session: the counts of each mode and level, the warning of an unlock of a lock that the session does not hold, and the release of the locks of the transaction level at the end of the transaction and at an error. `connection/advisory.test` is the output of PostgreSQL 19 for the same script in a new database.

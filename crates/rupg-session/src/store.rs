@@ -86,6 +86,8 @@ struct Slot {
     backend: Row,
     /// The flag that tells the session to end, as `SIGTERM` does. A session with the flag does not count as a session of its database.
     end: Arc<AtomicBool>,
+    /// The flag that tells the session to cancel its statement, as `SIGINT` does.
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -681,7 +683,12 @@ impl Store {
     }
 
     /// `pgstat_bestart`: puts a session in the first free slot of the table, and gives the number of the slot and the row. The session ends when another session sets `end`.
-    pub(crate) fn join_row(&self, mut backend: Backend, end: Arc<AtomicBool>) -> (i32, Row) {
+    pub(crate) fn join_row(
+        &self,
+        mut backend: Backend,
+        end: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
+    ) -> (i32, Row) {
         let _ = self.stats_reset.compare_exchange(
             0,
             backend.backend_start,
@@ -693,7 +700,7 @@ impl Store {
         let number = i32::try_from(slot).unwrap_or(i32::MAX);
         backend.number = number;
         let row = Arc::new(Mutex::new(backend));
-        let entry = Some(Slot { backend: Arc::clone(&row), end });
+        let entry = Some(Slot { backend: Arc::clone(&row), end, cancel });
         if slot == backends.len() {
             backends.push(entry);
         } else {
@@ -705,7 +712,31 @@ impl Store {
     /// [`Store::join_row`], with the number of the slot only.
     #[cfg(test)]
     pub(crate) fn join(&self, backend: Backend, end: Arc<AtomicBool>) -> i32 {
-        self.join_row(backend, end).0
+        self.join_row(backend, end, Arc::default()).0
+    }
+
+    /// `BackendPidGetProc`: the role of the session with the process ID `pid`, or `None` when no session has it or the session ends.
+    pub(crate) fn backend_role(&self, pid: i32) -> Option<u32> {
+        self.backends_mut().iter().flatten().find_map(|slot| {
+            let backend = lock(&slot.backend);
+            (backend.pid == pid && !slot.end.load(Ordering::Relaxed)).then_some(backend.role)
+        })
+    }
+
+    /// The signal of `pg_signal_backend` to the session with the process ID `pid`: the cancel of its statement, or its end with `terminate`, which also stops a wait of the session. False when no session has the process ID.
+    pub(crate) fn signal(&self, pid: i32, terminate: bool) -> bool {
+        let backends = self.backends_mut();
+        let Some(slot) = backends.iter().flatten().find(|slot| lock(&slot.backend).pid == pid)
+        else {
+            return false;
+        };
+        if terminate {
+            slot.end.store(true, Ordering::Relaxed);
+        }
+        slot.cancel.store(true, Ordering::Relaxed);
+        drop(backends);
+        self.left.notify_all();
+        true
     }
 
     /// The end of a session, which frees its slot.

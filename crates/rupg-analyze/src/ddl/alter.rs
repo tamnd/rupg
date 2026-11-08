@@ -227,6 +227,74 @@ pub(super) struct Target {
     pub(super) namespace: u32,
 }
 
+/// `AlterTableGetLockLevel`: the strongest lock that the commands of the statement need. A command that changes what a query reads of the table takes `AccessExclusiveLock`. The others take weaker locks, which let the reads and some writes go on.
+fn lock_level(stmt: &AlterTableStmt) -> u8 {
+    stmt.cmds
+        .iter()
+        .flatten()
+        .filter_map(|cmd| match cmd {
+            Node::AlterTableCmd(cmd) => Some(command_lock(cmd)),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(super::ACCESS_EXCLUSIVE)
+}
+
+/// The lock of one command of `AlterTableGetLockLevel`.
+fn command_lock(cmd: &AlterTableCmd) -> u8 {
+    use super::{ACCESS_EXCLUSIVE, SHARE_ROW_EXCLUSIVE, SHARE_UPDATE_EXCLUSIVE};
+    match cmd.subtype {
+        AlterTableType::AT_ValidateConstraint
+        | AlterTableType::AT_SetStatistics
+        | AlterTableType::AT_ClusterOn
+        | AlterTableType::AT_DropCluster
+        | AlterTableType::AT_SetOptions
+        | AlterTableType::AT_ResetOptions
+        | AlterTableType::AT_AttachPartition
+        | AlterTableType::AT_DetachPartitionFinalize => SHARE_UPDATE_EXCLUSIVE,
+        AlterTableType::AT_DetachPartition if cmd.def.as_ref().is_some_and(|def| {
+            matches!(def, Node::PartitionCmd(part) if part.concurrent)
+        }) =>
+        {
+            SHARE_UPDATE_EXCLUSIVE
+        }
+        AlterTableType::AT_EnableTrig
+        | AlterTableType::AT_EnableAlwaysTrig
+        | AlterTableType::AT_EnableReplicaTrig
+        | AlterTableType::AT_EnableTrigAll
+        | AlterTableType::AT_EnableTrigUser
+        | AlterTableType::AT_DisableTrig
+        | AlterTableType::AT_DisableTrigAll
+        | AlterTableType::AT_DisableTrigUser
+        | AlterTableType::AT_AlterConstraint => SHARE_ROW_EXCLUSIVE,
+        AlterTableType::AT_AddConstraint
+        | AlterTableType::AT_ReAddConstraint
+        | AlterTableType::AT_ReAddDomainConstraint
+        | AlterTableType::AT_AddIndexConstraint => match cmd.def.as_ref() {
+            Some(Node::Constraint(con)) if con.contype == ConstrType::CONSTR_FOREIGN => {
+                SHARE_ROW_EXCLUSIVE
+            }
+            _ => ACCESS_EXCLUSIVE,
+        },
+        AlterTableType::AT_SetRelOptions
+        | AlterTableType::AT_ResetRelOptions
+        | AlterTableType::AT_ReplaceRelOptions => {
+            // `AlterTableGetRelOptionsLockLevel`: the options of the storage take `ShareUpdateExclusiveLock`, and the options of a view and `user_catalog_table` take `AccessExclusiveLock`.
+            let strong = match cmd.def.as_ref() {
+                Some(Node::List(options)) => options.iter().flatten().any(|option| {
+                    matches!(option, Node::DefElem(def) if matches!(
+                        def.defname.as_deref().unwrap_or_default(),
+                        "check_option" | "security_barrier" | "security_invoker" | "user_catalog_table"
+                    ))
+                }),
+                _ => true,
+            };
+            if strong { ACCESS_EXCLUSIVE } else { SHARE_UPDATE_EXCLUSIVE }
+        }
+        _ => ACCESS_EXCLUSIVE,
+    }
+}
+
 impl Definer<'_, '_> {
     /// `AlterTable` for the statement, after the lookup of `AlterTableLookupRelation`.
     pub(super) fn alter_table(&mut self, stmt: &AlterTableStmt) -> Result<()> {
@@ -250,8 +318,9 @@ impl Definer<'_, '_> {
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
         let table = ObjRef::new(PG_CLASS, target.oid);
+        let mode = lock_level(stmt);
         // `CheckAlterTableIsSafe`.
-        self.check_not_in_use(target.oid, "ALTER TABLE")?;
+        self.check_not_in_use_locked(target.oid, "ALTER TABLE", Some(mode))?;
         if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
             && matches!(
                 cmd.subtype,
@@ -288,7 +357,7 @@ impl Definer<'_, '_> {
                 reached.extend(typed.into_iter().map(|t| (t, true)));
             }
             for (child, typed) in reached {
-                self.check_not_in_use(child.oid, "ALTER TABLE")?;
+                self.check_not_in_use_locked(child.oid, "ALTER TABLE", Some(mode))?;
                 let at = match queue.iter().position(|(t, _)| t.oid == child.oid) {
                     Some(at) => at,
                     None => {

@@ -1,0 +1,37 @@
+A> SELECT pg_cancel_backend(1235)
+fields pg_cancel_backend:16:1:-1
+row t
+SELECT 1
+B> SELECT 1 AS one
+fields one:23:4:-1
+row 1
+SELECT 1
+A> SELECT pg_cancel_backend(99)
+fields pg_cancel_backend:16:1:-1
+WARNING 01000 PID 99 is not a PostgreSQL backend process
+row f
+SELECT 1
+A> SELECT pg_terminate_backend(99, -1)
+fields pg_terminate_backend:16:1:-1
+ERROR 22023 "timeout" must not be negative
+A> CREATE ROLE regress_signal
+CREATE ROLE
+A> SET ROLE regress_signal
+SET
+is_superuser=off
+A> SELECT pg_cancel_backend(1235)
+fields pg_cancel_backend:16:1:-1
+ERROR 42501 permission denied to cancel query
+A> SELECT pg_terminate_backend(1235)
+fields pg_terminate_backend:16:1:-1
+ERROR 42501 permission denied to terminate process
+A> RESET ROLE
+RESET
+is_superuser=on
+A> SELECT pg_terminate_backend(1235)
+fields pg_terminate_backend:16:1:-1
+row t
+SELECT 1
+B> SELECT 1 AS one
+FATAL 57P01 terminating connection due to administrator command
+(closed)

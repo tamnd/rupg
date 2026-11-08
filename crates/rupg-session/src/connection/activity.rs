@@ -311,7 +311,7 @@ impl Connection {
             ..Backend::default()
         };
         self.activity.database = self.database_oid;
-        let (number, row) = self.store.join_row(backend, Arc::clone(&self.end));
+        let (number, row) = self.store.join_row(backend, Arc::clone(&self.end), Arc::clone(&self.cancel));
         self.activity.number = Some(number);
         self.activity.row = Some(row);
         self.activity.fast = Some(self.store.locks().join(self.pid));

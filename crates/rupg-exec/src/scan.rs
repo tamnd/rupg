@@ -957,19 +957,26 @@ pub(crate) fn check_scannable(reads: &[u32], session: &dyn Session) -> Result<()
 }
 
 /// The relations that a query reads, also in its subqueries, its queries of `WITH` and its sublinks, which [`check_scannable`] checks. They do not change with the catalog, so a plan finds them once.
-pub(crate) fn scanned_relations(query: &Query) -> Vec<u32> {
-    let mut reads = Vec::new();
+/// The second list has the relations that the query reads with their children, with no `ONLY`.
+pub(crate) fn scanned_relations(query: &Query) -> (Vec<u32>, Vec<u32>) {
+    let mut reads = (Vec::new(), Vec::new());
     add_scanned(query, &mut reads);
     reads
 }
 
-fn add_scanned(query: &Query, reads: &mut Vec<u32>) {
+fn add_scanned(query: &Query, reads: &mut (Vec<u32>, Vec<u32>)) {
     for relation in &query.relations {
         match relation.subquery.as_deref() {
             Some(sub) => add_scanned(sub, reads),
-            // `Expr::find` also visits the sublinks in a sublink, so a relation can come again. The first time is the one that counts for the order of the errors.
-            None if !reads.contains(&relation.oid) => reads.push(relation.oid),
-            None => {}
+            None => {
+                // `Expr::find` also visits the sublinks in a sublink, so a relation can come again. The first time is the one that counts for the order of the errors.
+                if !reads.0.contains(&relation.oid) {
+                    reads.0.push(relation.oid);
+                }
+                if !relation.only && !reads.1.contains(&relation.oid) {
+                    reads.1.push(relation.oid);
+                }
+            }
         }
     }
     for cte in &query.ctes {
@@ -983,6 +990,23 @@ fn add_scanned(query: &Query, reads: &mut Vec<u32>) {
             None::<()>
         })
     });
+}
+
+/// `expand_inherited_rtentry`: the children of `INHERITS` of the tables of `parents`, in the order of `find_all_inheritors`, which the statement locks with the mode of their parent. The partitions of a partitioned table are not in the list.
+pub(crate) fn inherited_relations(parents: &[u32], session: &dyn Session) -> Vec<u32> {
+    let Some(catalog) = session.catalog() else { return Vec::new() };
+    let mut children = Vec::new();
+    for &parent in parents {
+        if catalog.relation(parent).is_none_or(|r| r.kind != rupg_catalog::RelKind::Table) {
+            continue;
+        }
+        for child in catalog.all_inheritors(parent) {
+            if !children.contains(&child) && !parents.contains(&child) {
+                children.push(child);
+            }
+        }
+    }
+    children
 }
 
 /// The rows of a query of one table of the user whose conditions `conds` of `WHERE` have an `=` or an `= ANY` of an array of each key column of a unique index with a constant or a parameter of `params`, as an `Index Scan` reads them. The rows are the versions with the key, which the query tests again with all the conditions. With `used`, each row has only the columns that are true in `used`, in their order. The result has true when a parameter gave a value of the key. `None` is a query that reads all the rows: the query reads more than one relation or a table with children, a condition is not an `=` of one type that has a hash, or the key has a collation that is not deterministic.

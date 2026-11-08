@@ -34,8 +34,8 @@ pub struct Plan {
     run: Option<Arc<Query>>,
     /// `row_security_user_id`: the current user when a table of the query has row security, whose policies the plan has for that role.
     row_security: Option<u32>,
-    /// The relations that [`Plan::query`] reads, also in its subqueries, its queries of `WITH` and its sublinks, in the order of [`scan::check_scannable`]. The first start of a copy finds them, and the copies share them, as they share the query.
-    reads: Arc<OnceLock<Vec<u32>>>,
+    /// The relations that [`Plan::query`] reads, also in its subqueries, its queries of `WITH` and its sublinks, in the order of [`scan::check_scannable`], and the ones that it reads with their children of `INHERITS`. The first start of a copy finds them, and the copies share them, as they share the query.
+    reads: Arc<OnceLock<(Vec<u32>, Vec<u32>)>>,
 }
 
 /// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
@@ -2026,7 +2026,12 @@ impl Plan {
         // `AcquireExecutorLocks`: `RowShareLock` for a statement with `FOR UPDATE` or `FOR SHARE`, and `AccessShareLock` for the others.
         let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
         let mode = if self.lock_clause().is_some() { 2 } else { 1 };
+        let (reads, parents) = (&reads.0, &reads.1);
         session.lock_relations(reads, mode, self.query.write.as_ref().map(|write| write.table))?;
+        let children = scan::inherited_relations(parents, session);
+        if !children.is_empty() {
+            session.lock_relations(&children, mode, None)?;
+        }
         rupg_func::check_permissions(&self.query.perms, session)?;
         rupg_func::check_execute(&self.query.funcs, session)?;
         check_row_marks(&self.query, session)?;
