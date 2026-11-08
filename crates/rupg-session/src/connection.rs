@@ -7932,6 +7932,40 @@ mod tests {
         });
     }
 
+    /// A timed checkpoint writes the image only after a change: a commit that the log has, or the statistics of `ANALYZE` and the stats of `VACUUM`, which the log does not have. A load that read records from the log writes the image at its first timed checkpoint, and a load with an empty log does not.
+    #[test]
+    fn a_timed_checkpoint_writes_the_image_only_after_a_change() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let store = open();
+            let (mut a, _) = connect_to(&store, 1234);
+            send(&mut a, &query("CREATE TABLE t (a int)"));
+            assert!(store.timed_checkpoint().unwrap());
+            assert!(!store.timed_checkpoint().unwrap());
+            send(&mut a, &query("SELECT count(*) FROM t"));
+            assert!(!store.timed_checkpoint().unwrap());
+            send(&mut a, &query("INSERT INTO t VALUES (1), (2)"));
+            assert!(store.timed_checkpoint().unwrap());
+            send(&mut a, &query("ANALYZE t"));
+            assert!(store.timed_checkpoint().unwrap());
+            assert!(!store.timed_checkpoint().unwrap());
+            send(&mut a, &query("DELETE FROM t WHERE a = 1"));
+            store.checkpoint().unwrap();
+            send(&mut a, &query("VACUUM t"));
+            assert!(store.timed_checkpoint().unwrap());
+            send(&mut a, &query("INSERT INTO t VALUES (3)"));
+            drop(a);
+            let back = open();
+            assert!(back.timed_checkpoint().unwrap());
+            assert!(!back.timed_checkpoint().unwrap());
+            let again = open();
+            assert!(!again.timed_checkpoint().unwrap());
+        });
+    }
+
     /// A store that opens an image in a file of the operating system reads the frozen columns from a mapping of the file, with no copy. The end of each statement gives the pages back, and the next statement reads the same values. An image that the same process writes gives its columns to the tables that did not change, and writes the new file while the columns still read the old one.
     #[test]
     #[allow(clippy::disallowed_methods)]

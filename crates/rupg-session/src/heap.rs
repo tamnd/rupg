@@ -152,6 +152,8 @@ struct State {
     xmins: HashMap<i32, Arc<AtomicU32>>,
     /// The versions of the rows of each table, by the OID of the database and the OID of the table.
     tables: Tables,
+    /// The number of the changes that the log does not have: the statistics of `ANALYZE`, and the `LP_DEAD` items and the stats of a table of `VACUUM`. A timed checkpoint writes the image when the number changed after the last image, though the log has no record.
+    unlogged: u64,
     /// The tables that each transaction in progress truncated, whose versions from before the `TRUNCATE` go at the commit.
     truncating: HashMap<u32, Vec<(u32, u32)>>,
     /// The transaction that each waiting transaction waits for, the edges of the wait graph of `DeadLockCheck`.
@@ -419,9 +421,16 @@ impl Tables {
     }
 }
 
-/// The frozen columns that [`Heap::image`] wrote, by table, which [`Heap::adopt`] compares with the columns of the tables after the image.
+/// The frozen columns that [`Heap::image`] wrote, by table, which [`Heap::adopt`] compares with the columns of the tables after the image, and the number of the changes that the log does not have at the image, of [`Heap::unlogged`].
 #[derive(Debug, Default)]
-pub(crate) struct Imaged(Vec<((u32, u32), Columned)>);
+pub(crate) struct Imaged(Vec<((u32, u32), Columned)>, u64);
+
+impl Imaged {
+    /// The number of [`Heap::unlogged`] at the image.
+    pub(crate) fn unlogged(&self) -> u64 {
+        self.1
+    }
+}
 
 /// The frozen columns of a table, by place.
 type Columned = Vec<Arc<Stored>>;
@@ -3163,6 +3172,7 @@ impl Heap {
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
     pub(crate) fn set_statistics(&self, database: u32, relation: u32, rows: Vec<Statistic>) {
         let mut state = self.state();
+        state.unlogged += 1;
         let table = state.tables.settings((database, relation));
         for row in rows {
             table.statistics.insert((row.attnum, row.inherit), row);
@@ -3233,14 +3243,22 @@ impl Heap {
 
     /// `lazy_vacuum_heap_rel` after the vacuum of the indexes of a table: its `LP_DEAD` items become `LP_UNUSED`.
     pub(crate) fn vacuumed_indexes(&self, database: u32, relation: u32) {
-        if let Some(table) = self.state().tables.get_mut(&(database, relation)) {
+        let mut state = self.state();
+        state.unlogged += 1;
+        if let Some(table) = state.tables.get_mut(&(database, relation)) {
             table.lp_dead.clear();
         }
+    }
+
+    /// The number of the changes that the log does not have, which [`Imaged::unlogged`] gives at an image.
+    pub(crate) fn unlogged(&self) -> u64 {
+        self.state_read().unlogged
     }
 
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
     pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
         let mut state = self.state();
+        state.unlogged += 1;
         state.tables.settings((database, relation)).pages.set_stats(relpages, reltuples);
     }
 
@@ -3252,6 +3270,7 @@ impl Heap {
         (indexed, freeze, truncate): (bool, bool, bool),
     ) -> Vacuumed {
         let mut state = self.state();
+        state.unlogged += 1;
         let State { tables, running, xmins, latest_completed, .. } = &mut *state;
         // `GetOldestNonRemovableTransactionId`, without the snapshot of `VACUUM`, as `PROC_IN_VACUUM` leaves it out.
         let published = self.published();
@@ -3730,6 +3749,7 @@ impl Heap {
     pub(crate) fn image(&self, out: &mut Vec<u8>) -> Imaged {
         let mut imaged = Imaged::default();
         let state = self.state();
+        imaged.1 = state.unlogged;
         let running = &state.running;
         state.next_xid.put(out);
         state.latest_completed.put(out);

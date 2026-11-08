@@ -229,7 +229,7 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
     }
 }
 
-/// The checkpointer: a thread that writes the image of the data each `checkpoint_timeout`.
+/// The checkpointer: a thread that writes the image of the data each `checkpoint_timeout` when the data changed after the last image.
 #[allow(clippy::disallowed_methods)]
 fn checkpoints(server: &rupg::server::Server) {
     let store = server.store();
@@ -237,7 +237,7 @@ fn checkpoints(server: &rupg::server::Server) {
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(every);
-            if let Err(e) = store.checkpoint() {
+            if let Err(e) = store.timed_checkpoint() {
                 eprintln!("LOG:  checkpoint failed: {e}");
             }
         }
