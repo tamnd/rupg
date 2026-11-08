@@ -1215,8 +1215,14 @@ impl Definer<'_, '_> {
     /// `CheckTableNotInUse`: the statement `stmt` cannot change the relation `oid` while an active query of the session has it open, or while the transaction has events of its `AFTER` triggers that did not fire yet.
     fn check_not_in_use(&self, oid: u32, stmt: &str) -> Result<()> {
         // `CREATE INDEX` takes its own lock, which is weaker.
-        if stmt != "CREATE INDEX" {
-            self.an.env.relation_lock(oid, ACCESS_EXCLUSIVE)?;
+        let mode = if stmt == "CREATE INDEX" { None } else { Some(ACCESS_EXCLUSIVE) };
+        self.check_not_in_use_locked(oid, stmt, mode)
+    }
+
+    /// [`Definer::check_not_in_use`] after the lock of the relation in `mode`, or with no lock.
+    fn check_not_in_use_locked(&self, oid: u32, stmt: &str, mode: Option<u8>) -> Result<()> {
+        if let Some(mode) = mode {
+            self.an.env.relation_lock(oid, mode)?;
         }
         let name = || self.catalog.relation(oid).map(|r| r.name.clone()).unwrap_or_default();
         if self.an.env.table_in_use(oid) {

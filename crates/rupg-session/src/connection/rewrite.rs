@@ -239,12 +239,13 @@ impl Connection {
         for &table in tables {
             let Some(rel) = old.relation(table) else { continue };
             let in_place = keeps_rows(&old, work, rel, transforms, fills);
-            loop {
-                let view = View { xid: self.xid.get(), ..self.view() };
-                let holder =
-                    if in_place { heap.holder(table, &view) } else { heap.truncate(table, &view) };
-                let Some(holder) = holder else { break };
-                self.reader().wait_xact(view.xid, holder, "")?;
+            // A check of the rows in place reads them with the snapshot, as `validateCheckConstraint` and `RI_Initial_Check` do: the lock of the table waits for the writers whose mode conflicts with it, and `VALIDATE CONSTRAINT` does not wait for the writers of `ShareUpdateExclusiveLock`.
+            if !in_place {
+                loop {
+                    let view = View { xid: self.xid.get(), ..self.view() };
+                    let Some(holder) = heap.truncate(table, &view) else { break };
+                    self.reader().wait_xact(view.xid, holder, "")?;
+                }
             }
             // The rows that the truncate deleted stay visible to the command that deleted them.
             let view = View { xid: self.xid.get(), ..self.view() };

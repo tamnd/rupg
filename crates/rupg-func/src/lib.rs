@@ -573,6 +573,16 @@ pub trait Session {
         let _ = pid;
         Vec::new()
     }
+    /// `BackendPidGetProc`: the OID of the role of the session with the process ID `pid`, with 0 for a session with no role, or `None` when no session of the server has the process ID. A session with no server has no other sessions.
+    fn backend_role(&self, pid: i32) -> Option<u32> {
+        let _ = pid;
+        None
+    }
+    /// The signal of `pg_signal_backend`: the session with the process ID `pid` cancels its statement, as `SIGINT` does, or ends with `terminate`, as `SIGTERM` does. False when no session has the process ID.
+    fn signal_backend(&self, pid: i32, terminate: bool) -> bool {
+        let _ = (pid, terminate);
+        false
+    }
     /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions and of the statistics.
     fn clear_backends(&self) {}
     /// `pgstat_count_heap_scan`: counts a sequential scan of a relation in the counts of the transaction. A session with no server keeps no counts.

@@ -172,7 +172,7 @@ fn privileges(text: &str, map: PrivMap) -> Result<u32> {
 }
 
 /// The OID of the role with this name. The login role of the server is the bootstrap superuser, so the name of the current user also gives its OID.
-fn role_oid(name: &str, session: &dyn Session) -> Option<u32> {
+pub(crate) fn role_oid(name: &str, session: &dyn Session) -> Option<u32> {
     rupg_pgcatalog::roles::current().oid(name).or_else(|| {
         (name == session.user() || name == session.session_user()).then_some(BOOTSTRAP_SUPERUSER)
     })
@@ -200,7 +200,7 @@ pub(crate) fn current_user(session: &dyn Session) -> u32 {
 }
 
 /// `superuser_arg`. A role that does not exist is not a superuser.
-fn superuser(role: u32) -> bool {
+pub(crate) fn superuser(role: u32) -> bool {
     rupg_pgcatalog::roles::current().superuser(role)
 }
 
@@ -248,7 +248,7 @@ fn reaches(member: u32, role: u32, how: Recurse) -> bool {
 }
 
 /// `has_privs_of_role`.
-fn has_privs_of_role(member: u32, role: u32) -> bool {
+pub(crate) fn has_privs_of_role(member: u32, role: u32) -> bool {
     reaches(member, role, Recurse::Privs)
 }
 

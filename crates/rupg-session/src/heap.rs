@@ -3543,13 +3543,6 @@ impl Heap {
         table.check_keys((&places, &unique), &[recheck.tid], checked, &mut Vec::new())
     }
 
-    /// A transaction other than the one of `view` that is in progress and wrote a version of the table `relation`, which a check of the rows in place waits for, as the lock of the table waits for it in PostgreSQL.
-    pub(crate) fn holder(&self, relation: u32, view: &View) -> Option<u32> {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        state.tables.get(&(view.database, relation))?.holder(view.xid, &state.running)
-    }
-
     /// `_bt_load` with `UNIQUE_CHECK_YES` of a new unique index on the versions that the table `relation` has, as `CREATE UNIQUE INDEX` and `ALTER TABLE ... ADD UNIQUE` check them. The versions stay in place. The result is the first live version, in the order of the IDs, with the key of a live version before it, or a transaction in progress to wait for.
     ///
     /// # Errors

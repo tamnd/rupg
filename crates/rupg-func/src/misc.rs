@@ -144,6 +144,125 @@ fn pg_blocking_pids(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(pids(call.session.blocking_pids(pid)))
 }
 
+/// The result of `pg_signal_backend`.
+enum Signaled {
+    Sent,
+    /// No session has the process ID, which gives a warning.
+    NoSession,
+    /// The session is of a superuser, or of no role, and the current user is not a superuser.
+    NoSuperuser,
+    /// The current user has neither the privileges of the role of the session nor those of `pg_signal_backend`.
+    NoPermission,
+}
+
+/// `pg_signal_backend`: the checks of the current user against the role of the session `pid`, then the signal.
+fn signal_backend(call: &Call<'_>, pid: i32, terminate: bool) -> Signaled {
+    let session = call.session;
+    let Some(role) = session.backend_role(pid) else {
+        session.warn(Error::new(
+            SqlState::WARNING,
+            format!("PID {pid} is not a PostgreSQL backend process"),
+        ));
+        return Signaled::NoSession;
+    };
+    let user = crate::acl::current_user(session);
+    if (role == 0 || crate::acl::superuser(role)) && !crate::acl::superuser(user) {
+        return Signaled::NoSuperuser;
+    }
+    let signaller = crate::acl::role_oid("pg_signal_backend", session);
+    if !crate::acl::has_privs_of_role(user, role)
+        && !signaller.is_some_and(|signaller| crate::acl::has_privs_of_role(user, signaller))
+    {
+        return Signaled::NoPermission;
+    }
+    if session.signal_backend(pid, terminate) { Signaled::Sent } else { Signaled::NoSession }
+}
+
+/// `pg_cancel_backend(int4)`: the session `pid` cancels its statement.
+fn pg_cancel_backend(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Int4(pid)] = args else { return Err(bad_value()) };
+    match signal_backend(call, *pid, false) {
+        Signaled::Sent => Ok(Value::Bool(true)),
+        Signaled::NoSession => Ok(Value::Bool(false)),
+        Signaled::NoSuperuser => Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            "permission denied to cancel query",
+        )
+        .with_detail(
+            "Only roles with the SUPERUSER attribute may cancel queries of roles with the SUPERUSER attribute.",
+        )),
+        Signaled::NoPermission => Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            "permission denied to cancel query",
+        )
+        .with_detail(
+            "Only roles with privileges of the role whose query is being canceled or with privileges of the \"pg_signal_backend\" role may cancel this query.",
+        )),
+    }
+}
+
+/// The longest wait of one check of `pg_wait_until_termination`, 100 milliseconds.
+const TERMINATION_CHECK_US: i64 = 100_000;
+
+/// `pg_terminate_backend(int4, int8)`: the session `pid` ends. With a timeout in milliseconds, the call waits for the end of the session, as `pg_wait_until_termination` does, and gives false with a warning when the session did not end in time.
+fn pg_terminate_backend(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Int4(pid), Value::Int8(timeout)] = args else { return Err(bad_value()) };
+    let (pid, timeout) = (*pid, *timeout);
+    if timeout < 0 {
+        return Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "\"timeout\" must not be negative"));
+    }
+    match signal_backend(call, pid, true) {
+        Signaled::Sent => {}
+        Signaled::NoSession => return Ok(Value::Bool(false)),
+        Signaled::NoSuperuser => {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to terminate process",
+            )
+            .with_detail(
+                "Only roles with the SUPERUSER attribute may terminate processes of roles with the SUPERUSER attribute.",
+            ));
+        }
+        Signaled::NoPermission => {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to terminate process",
+            )
+            .with_detail(
+                "Only roles with privileges of the role whose process is being terminated or with privileges of the \"pg_signal_backend\" role may terminate this process.",
+            ));
+        }
+    }
+    // `ProcessInterrupts` with `ProcDiePending`: a session that terminates itself ends in the statement, before it sends the result.
+    if pid == call.session.backend_pid() {
+        return Err(Error::new(
+            SqlState::ADMIN_SHUTDOWN,
+            "terminating connection due to administrator command",
+        ));
+    }
+    if timeout == 0 {
+        return Ok(Value::Bool(true));
+    }
+    let mut left = timeout.saturating_mul(1000);
+    loop {
+        if call.session.backend_role(pid).is_none() {
+            return Ok(Value::Bool(true));
+        }
+        if left <= 0 {
+            break;
+        }
+        let slice = left.min(TERMINATION_CHECK_US);
+        call.session.sleep(slice)?;
+        call.session.interrupted()?;
+        left -= slice;
+    }
+    call.session.warn(Error::new(
+        SqlState::WARNING,
+        format!("backend with PID {pid} did not terminate within {timeout} milliseconds"),
+    ));
+    Ok(Value::Bool(false))
+}
+
 /// `pg_isolation_test_session_is_blocked(int4, int4[])`: true when one of the sessions in the array blocks the session `pid`, as isolationtester asks after each step.
 fn pg_isolation_test_session_is_blocked(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Some(&Value::Int4(pid)) = args.first() else { return Err(bad_value()) };
@@ -542,6 +661,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_notification_queue_usage" => |_, _| Ok(Value::Float8(0.0)),
         "pg_trigger_depth" => pg_trigger_depth,
         "pg_blocking_pids" => pg_blocking_pids,
+        "pg_cancel_backend" => pg_cancel_backend,
+        "pg_terminate_backend" => pg_terminate_backend,
         // No session waits for a safe snapshot, as a `SERIALIZABLE READ ONLY DEFERRABLE` transaction takes its snapshot with no wait.
         "pg_safe_snapshot_blocking_pids" => |_, _| Ok(pids(Vec::new())),
         "pg_isolation_test_session_is_blocked" => pg_isolation_test_session_is_blocked,

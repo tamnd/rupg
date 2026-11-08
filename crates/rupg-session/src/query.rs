@@ -1425,6 +1425,14 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn backend_role(&self, pid: i32) -> Option<u32> {
+        self.activity.and_then(|(_, store)| store.backend_role(pid))
+    }
+
+    fn signal_backend(&self, pid: i32, terminate: bool) -> bool {
+        self.activity.is_some_and(|(_, store)| store.signal(pid, terminate))
+    }
+
     fn blocking_pids(&self, pid: i32) -> Vec<i32> {
         let Some((_, store)) = self.activity else { return Vec::new() };
         let mut pids = store.locks().blockers(pid);
