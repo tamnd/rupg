@@ -69,8 +69,8 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_stat_get_progress_info" => crate::replication::progress_info,
         "pg_stat_get_wal_senders"
         | "pg_stat_get_subscription"
-        | "pg_get_replication_slots"
-        | "pg_prepared_xact" => crate::replication::none,
+        | "pg_get_replication_slots" => crate::replication::none,
+        "pg_prepared_xact" => prepared_xacts,
         "pg_stat_get_wal_receiver" => crate::replication::wal_receiver,
         "pg_stat_get_subscription_stats" => crate::replication::subscription_stats,
         "pg_stat_get_replication_slot" => crate::replication::replication_slot,
@@ -226,6 +226,11 @@ fn ddl_commands(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_cursor`: the open cursors of the session, which the view `pg_cursors` reads.
 fn cursors(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.cursors())
+}
+
+/// `pg_prepared_xact`: the prepared transactions of two phase commit, which the view `pg_prepared_xacts` reads.
+fn prepared_xacts(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(call.session.prepared_xacts())
 }
 
 /// `pg_lock_status`: the locks of the sessions, which the view `pg_locks` reads.

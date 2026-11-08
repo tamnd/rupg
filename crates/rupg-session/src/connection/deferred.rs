@@ -206,6 +206,9 @@ impl Connection {
         if sxact != 0 {
             self.store.heap().serializable_pre_commit(sxact)?;
         }
+        if let Some(gid) = self.transaction.gid() {
+            self.prepare_checks(gid)?;
+        }
         Ok(())
     }
 

@@ -810,6 +810,11 @@ impl Connection {
                 })?
             } else if let Node::AlterDatabaseSetStmt(stmt) = node {
                 self.alter_database_set(stmt)?
+            } else if let Node::TransactionStmt(stmt) = node
+                && Connection::is_finish_prepared(stmt)
+            {
+                immediate_commit = true;
+                self.finish_prepared(stmt)?
             } else {
                 let mut notices = Vec::new();
                 let ts_config = self.ts_config(node)?;

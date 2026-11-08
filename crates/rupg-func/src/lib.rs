@@ -433,6 +433,10 @@ pub trait Session {
         let _ = (reads, mode, write);
         Ok(())
     }
+    /// The rows of `pg_prepared_xact`, in the 5 columns of the function: the prepared transactions of the server. A session with no server has none.
+    fn prepared_xacts(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
     /// The rows of `pg_lock_status`, in the 16 columns of the function: the locks that the sessions hold or wait for. A session with no server has no locks.
     fn locks(&self) -> Vec<Vec<Value>> {
         Vec::new()

@@ -65,6 +65,7 @@ mod route;
 mod savepoint;
 mod tablespaces;
 mod trigger;
+mod twophase;
 mod upsert;
 mod vacuum;
 mod writes;
@@ -1421,6 +1422,11 @@ impl Connection {
             let catalog = self.store.committed(self.database_oid);
             heap.drop_tables(self.database_oid, |relation| catalog.relation(relation).is_some());
         }
+        self.end_heap_state();
+    }
+
+    /// The end of the state of a transaction in the session: its command counter, its snapshot, its `xmin`, its deferred triggers and its events.
+    fn end_heap_state(&self) {
         self.command.set(0);
         self.snapshot.replace(None);
         self.release_xmin();
@@ -2520,6 +2526,11 @@ impl Connection {
             } else if let Node::ClosePortalStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.close_cursor(stmt, b"")
+            } else if let Node::TransactionStmt(stmt) = node
+                && Connection::is_finish_prepared(stmt)
+            {
+                drop(self.portals.get_mut().close(b""));
+                self.finish_prepared(stmt)
             } else if let Node::DoStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 let mut warnings = Vec::new();
@@ -2873,16 +2884,21 @@ impl Connection {
         self.toast_oids();
         self.xact_started = false;
         let (ending, chained) = self.transaction.finish_command();
+        let prepared = self.transaction.take_gid().is_some() && ending == Ending::Commit;
         let kept = chained.then(|| self.settings.get_mut().characteristics());
         if ending != Ending::None {
             self.settings.get_mut().end(ending == Ending::Commit);
-            let defined = self.lease.get_mut().is_some();
-            if let Some(lease) = self.lease.get_mut().take()
-                && ending == Ending::Commit
-            {
-                lease.commit();
+            if prepared {
+                self.end_prepared();
+            } else {
+                let defined = self.lease.get_mut().is_some();
+                if let Some(lease) = self.lease.get_mut().take()
+                    && ending == Ending::Commit
+                {
+                    lease.commit();
+                }
+                self.end_rows(ending == Ending::Commit, defined);
             }
-            self.end_rows(ending == Ending::Commit, defined);
             self.transaction_ended();
         }
         if kept.is_some() {
@@ -2917,6 +2933,9 @@ impl Connection {
     /// The part of `AbortCurrentTransaction` of [`Connection::fail`] after the error went to the client.
     fn abort(&mut self) {
         self.xact_started = false;
+        if self.transaction.gid().is_some() {
+            self.store.prepared().forget(self.pid);
+        }
         match self.transaction.abort_current() {
             Ending::Savepoint => self.roll_back_subtransaction(),
             ending => {
@@ -3224,8 +3243,17 @@ mod tests {
 
     /// A session with the process ID `pid` on the store of a server.
     fn connect_to(store: &Arc<Store>, pid: i32) -> (Connection, Vec<String>) {
+        connect_with(store, pid, &[])
+    }
+
+    /// [`connect_to`] on a server with the settings `config`.
+    fn connect_with(
+        store: &Arc<Store>,
+        pid: i32,
+        config: &[(String, String)],
+    ) -> (Connection, Vec<String>) {
         let start = start(None, &[("application_name", "test")]);
-        let settings = session_settings(&base_settings(&[]).unwrap(), &start, &[]).unwrap();
+        let settings = session_settings(&base_settings(config).unwrap(), &start, &[]).unwrap();
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
         connection.set_store(Arc::clone(store));
         // The oracle runs the scripts on a Unix socket.
@@ -4251,9 +4279,14 @@ mod tests {
 
     /// Runs a script on two sessions of one server, as [`script`] does. A line `A> ` or `B> ` is a simple query of the session `A` or `B`.
     fn two_sessions(text: &str) {
+        two_sessions_with(text, &[]);
+    }
+
+    /// [`two_sessions`] on a server with the settings `config`.
+    fn two_sessions_with(text: &str, config: &[(String, String)]) {
         let store = Arc::new(Store::new());
-        let (mut a, _) = connect_to(&store, 1234);
-        let (mut b, _) = connect_to(&store, 1235);
+        let (mut a, _) = connect_with(&store, 1234, config);
+        let (mut b, _) = connect_with(&store, 1235, config);
         let starts = |l: &str| l.starts_with("A> ") || l.starts_with("B> ");
         let mut lines = text.lines().peekable();
         while let Some(line) = lines.next() {
@@ -9348,6 +9381,15 @@ mod tests {
     #[test]
     fn serializable() {
         big_stack(|| two_sessions(include_str!("connection/serializable.test")));
+    }
+
+    /// `PREPARE TRANSACTION` hands the transaction ID, the row locks and the advisory locks of the transaction to a prepared transaction, which another session commits or rolls back. `connection/twophase.test` is the output of PostgreSQL 18 for the same script on two sessions with `max_prepared_transactions` at 10, without the statement that waits for the prepared transaction.
+    #[test]
+    fn two_phase() {
+        big_stack(|| {
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            two_sessions_with(include_str!("connection/twophase.test"), &config);
+        });
     }
 
     /// The locks that statements take on relations in two sessions: a read and a write take a weak lock on the fast path, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE` and `CREATE INDEX` wait for them until `lock_timeout`, a strong request moves the weak locks to the table, and the rollback to a savepoint releases the locks after it.

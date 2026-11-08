@@ -1,6 +1,6 @@
-//! The functions of the views of the work that rupg does not do yet: the progress of `VACUUM`, `ANALYZE`, `REPACK`, `CREATE INDEX`, `BASE_BACKUP` and `COPY TO`, the WAL senders and the WAL receiver, the logical replication workers and their statistics, the replication slots and the prepared transactions.
+//! The functions of the views of the work that rupg does not do yet: the progress of `VACUUM`, `ANALYZE`, `REPACK`, `CREATE INDEX`, `BASE_BACKUP` and `COPY TO`, the WAL senders and the WAL receiver, the logical replication workers and their statistics, and the replication slots.
 //!
-//! rupg has no WAL, no replication and no two-phase commit, and only `COPY FROM` reports its progress, so these functions give what PostgreSQL gives on a server with none of that work: no rows, or one row of nulls for `pg_stat_get_wal_receiver`, and zero counts for the statistics of a subscription or of a replication slot.
+//! rupg has no WAL and no replication, and only `COPY FROM` reports its progress, so these functions give what PostgreSQL gives on a server with none of that work: no rows, or one row of nulls for `pg_stat_get_wal_receiver`, and zero counts for the statistics of a subscription or of a replication slot.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{Value, name_in};
@@ -47,7 +47,7 @@ pub(crate) fn progress_info(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<V
     Ok(rows.collect())
 }
 
-/// A set function with no rows: `pg_stat_get_wal_senders`, `pg_stat_get_subscription`, `pg_get_replication_slots` and `pg_prepared_xact`.
+/// A set function with no rows: `pg_stat_get_wal_senders`, `pg_stat_get_subscription` and `pg_get_replication_slots`.
 pub(crate) fn none(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(Vec::new())
 }

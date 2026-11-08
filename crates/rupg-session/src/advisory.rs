@@ -546,6 +546,37 @@ impl Locks {
         }
     }
 
+    /// `CheckForSessionAndXactLocks`: true when the owner holds a tag at the session level and at the transaction level, in any modes, which a prepared transaction cannot keep apart.
+    pub(crate) fn holds_both_levels(&self, owner: i32) -> bool {
+        self.table().values().any(|lock| {
+            let mine = || lock.holds.iter().filter(|h| h.owner == owner);
+            mine().any(|h| h.session > 0) && mine().any(|h| h.xact > 0)
+        })
+    }
+
+    /// `PostPrepare_Locks`: the holds of the transaction level of `owner`, in the table and on its fast path, go to the owner `to` of a prepared transaction, which keeps them in the table until it ends.
+    pub(crate) fn hand_over(&self, owner: i32, fast: Option<&Fast>, to: i32) {
+        let moved = fast.map_or_else(Vec::new, |fast| std::mem::take(&mut *fast.holds()));
+        let mut table = self.table();
+        let mut held = Vec::new();
+        table.retain(|tag, lock| {
+            lock.holds.retain_mut(|hold| {
+                if hold.owner != owner || hold.xact == 0 {
+                    return true;
+                }
+                held.push((*tag, hold.mode, std::mem::take(&mut hold.xact)));
+                hold.session > 0
+            });
+            !lock.holds.is_empty() || !lock.queue.is_empty()
+        });
+        for (tag, mode, count) in moved.into_iter().chain(held) {
+            table.entry(tag).or_default().hold(to, mode).xact += count;
+        }
+        if !table.is_empty() {
+            self.used.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// `LockReleaseAll` for one level: releases all the holds of the owner at the session level or at the transaction level.
     pub(crate) fn release_all(&self, owner: i32, session: bool) {
         // The owner set the flag itself before it got any hold, so a clear flag means that it holds nothing.

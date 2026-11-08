@@ -2089,6 +2089,11 @@ impl Heap {
         xid
     }
 
+    /// `MarkAsPrepared`: the transaction `xid` stays in progress after the session that began it ends it, with `owner` as the owner of its locks.
+    pub(crate) fn hand_over(&self, xid: u32, owner: i32) {
+        self.state().owners.insert(xid, owner);
+    }
+
     /// `ReadNextFullTransactionId`: the transaction ID that the next transaction that writes gets.
     pub(crate) fn next_xid(&self) -> u32 {
         self.state().next_xid.max(INITDB_NEXT_XID)

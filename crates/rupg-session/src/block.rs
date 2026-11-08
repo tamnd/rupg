@@ -50,6 +50,8 @@ pub struct Transaction {
     chain: bool,
     savepoints: Vec<String>,
     temp: Cell<bool>,
+    /// The global identifier of `PREPARE TRANSACTION`, set when the end of the statement prepares the transaction in place of its commit.
+    gid: Option<String>,
 }
 
 impl Default for Transaction {
@@ -59,6 +61,7 @@ impl Default for Transaction {
             chain: false,
             savepoints: Vec::new(),
             temp: Cell::new(false),
+            gid: None,
         }
     }
 }
@@ -119,6 +122,21 @@ impl Transaction {
     /// True when the transaction used an object of the temporary schema of the session.
     pub fn accessed_temp(&self) -> bool {
         self.temp.get()
+    }
+
+    /// `PrepareTransactionBlock`: the end of the statement prepares the transaction as `gid` in place of its commit.
+    pub fn prepare_as(&mut self, gid: &str) {
+        self.gid = Some(gid.to_owned());
+    }
+
+    /// The global identifier of the transaction that the end of the statement prepares.
+    pub fn gid(&self) -> Option<&str> {
+        self.gid.as_deref()
+    }
+
+    /// The global identifier of the transaction that ends, which a commit takes to prepare it.
+    pub fn take_gid(&mut self) -> Option<String> {
+        self.gid.take()
     }
 
     /// True when the end of the current statement commits the transaction, as [`Transaction::finish_command`] decides.
@@ -294,6 +312,7 @@ impl Transaction {
     /// `AbortCurrentTransaction`: the end of a statement that failed. A block that the client started becomes a failed block, and any other transaction ends. In a subtransaction only the subtransaction rolls back.
     pub fn abort_current(&mut self) -> Ending {
         self.chain = false;
+        self.gid = None;
         let (ending, next) = match self.block {
             Block::Default | Block::Abort => (Ending::None, self.block),
             Block::InProgress if !self.savepoints.is_empty() => (Ending::Savepoint, Block::Abort),
