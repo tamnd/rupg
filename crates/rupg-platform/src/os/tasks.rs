@@ -14,8 +14,11 @@ use crate::tasks::{Job, Join, Task, TaskHandle, Tasks};
 /// The stack of each thread. It is the stack of the main thread on Linux, which is the stack of a PostgreSQL backend. The parser of a debug build needs more than the 2 MiB that Rust gives a new thread.
 pub const STACK_SIZE: usize = 8 << 20;
 
-/// How long a thread with no task waits for one before it ends.
+/// How long a thread with no task waits for one after its trim of [`TRIM_IDLE`] before it ends.
 const KEEP_IDLE: Duration = Duration::from_secs(10);
+
+/// How long a thread with no task waits before it gives the free pages of its heap in the allocator back to the system. The heap of a thread gives its pages back only while the thread allocates or frees, so an idle thread that ran a large job of a query kept the pages of that job. On ClickBench with 2M rows the server kept 815 MB after the 43 queries. It is the purge delay of [`crate::alloc::tune`], so a thread of a busy query keeps its pages for its next job.
+const TRIM_IDLE: Duration = Duration::from_secs(1);
 
 /// The most threads that wait for a task. A thread after that one ends at the end of its task.
 const MAX_IDLE: usize = 64;
@@ -83,11 +86,18 @@ fn work(worker: &Arc<Worker>) {
             return;
         }
         let mut next = lock(&worker.next);
+        let mut trimmed = false;
         while next.is_none() {
+            let wait = if trimmed { KEEP_IDLE } else { TRIM_IDLE };
             let (guard, wait) =
-                worker.wake.wait_timeout(next, KEEP_IDLE).unwrap_or_else(PoisonError::into_inner);
+                worker.wake.wait_timeout(next, wait).unwrap_or_else(PoisonError::into_inner);
             next = guard;
-            if wait.timed_out() && next.is_none() {
+            if wait.timed_out() && next.is_none() && !trimmed {
+                trimmed = true;
+                drop(next);
+                crate::alloc::trim();
+                next = lock(&worker.next);
+            } else if wait.timed_out() && next.is_none() {
                 drop(next);
                 let mut idle = lock(&IDLE);
                 if let Some(at) = idle.iter().position(|w| Arc::ptr_eq(w, worker)) {
@@ -359,6 +369,14 @@ mod tests {
         assert_eq!(id_of("rupg-reuse"), first);
         assert_eq!(id_of("rupg-reuse"), first);
         assert_ne!(id_of("rupg-other"), first);
+    }
+
+    /// A thread that waited past [`TRIM_IDLE`] gave its free pages back and still runs the next task with its name.
+    #[test]
+    fn a_thread_that_trimmed_runs_the_next_task() {
+        let first = id_of("rupg-trim");
+        thread::sleep(TRIM_IDLE + Duration::from_millis(300));
+        assert_eq!(id_of("rupg-trim"), first);
     }
 
     #[test]
