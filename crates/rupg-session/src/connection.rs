@@ -4416,6 +4416,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/late_exists.test")));
     }
 
+    /// An `OR` of two or more tables gives the reduction of a join a condition of each table that each arm restricts, and the join gives the rows of PostgreSQL 19, with an arm that does not restrict a table, a test of nulls, three arms and an arm that reads two tables.
+    #[test]
+    fn reduce_or() {
+        big_stack(|| script_tasks(include_str!("connection/reduce_or.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
