@@ -848,13 +848,9 @@ mod tests {
         s.run("SET TRANSACTION READ ONLY").unwrap();
         assert_eq!(s.warnings(), ["SET TRANSACTION can only be used in transaction blocks"]);
         assert_eq!(s.show("transaction_read_only"), "off");
-        assert_eq!(s.state("BEGIN ISOLATION LEVEL SERIALIZABLE"), "0A000");
+        s.run("BEGIN ISOLATION LEVEL SERIALIZABLE").unwrap();
+        assert_eq!(s.show("transaction_isolation"), "serializable");
         s.run("COMMIT").unwrap();
-        assert_eq!(
-            s.warnings(),
-            ["there is no transaction in progress"],
-            "the failed BEGIN leaves no block"
-        );
         s.run("BEGIN ISOLATION LEVEL READ UNCOMMITTED, READ ONLY, DEFERRABLE").unwrap();
         assert_eq!(s.show("transaction_isolation"), "read uncommitted");
         assert_eq!(s.show("transaction_read_only"), "on");

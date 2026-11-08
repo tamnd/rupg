@@ -200,8 +200,13 @@ impl Connection {
                 self.fire_deferred(true)?;
             }
         }
-        // `PreCommit_on_commit_actions` comes after `AfterTriggerFireDeferred` in `CommitTransaction`.
-        self.on_commit_actions()
+        // `PreCommit_on_commit_actions` comes after `AfterTriggerFireDeferred` in `CommitTransaction`, and `PreCommit_CheckForSerializationFailure` after both.
+        self.on_commit_actions()?;
+        let sxact = self.sxact.get();
+        if sxact != 0 {
+            self.store.heap().serializable_pre_commit(sxact)?;
+        }
+        Ok(())
     }
 
     /// `AfterTriggerPendingOnRel`: true when the queue of the transaction has rows of the triggers of the table `table`, as the deferred checks of its foreign keys and of its unique constraints and the events of its constraint triggers.

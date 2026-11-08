@@ -27,6 +27,7 @@ mod btree;
 mod cells;
 mod fsm;
 mod pages;
+mod ssi;
 
 /// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it. A function in an expression can read and change the heap, so the heap calls it only when it is not locked.
 pub(crate) type Derive<'a> = &'a dyn Fn(&Derived, &[Value]) -> Result<Option<Vec<Value>>>;
@@ -131,6 +132,8 @@ pub(crate) struct Heap {
     published: Mutex<Option<Snapshot>>,
     /// The tasks of the server, which encode the columns of a load at the same time, or `None` to encode them on the thread of the session.
     tasks: Option<Arc<dyn Tasks>>,
+    /// The serializable transactions and their `SIREAD` locks. A lock of it comes before a lock of the state.
+    ssi: Mutex<ssi::Ssi>,
 }
 
 #[derive(Debug, Default)]
@@ -1923,6 +1926,8 @@ pub(crate) struct View {
     pub(crate) command: u32,
     /// True in `REPEATABLE READ` and `SERIALIZABLE`, where a row that another transaction changed after the snapshot is an error.
     pub(crate) serializable: bool,
+    /// The record of the transaction in `SERIALIZABLE`, which checks its read-write conflicts, or 0.
+    pub(crate) sxact: u64,
 }
 
 /// A change of a row by `UPDATE` or `DELETE`: the ID of the version, and the new values, or `None` to delete it.
@@ -2155,6 +2160,65 @@ impl Heap {
         }
         drop(published);
         snapshot
+    }
+
+    /// The state of serializable snapshot isolation.
+    fn ssi(&self) -> MutexGuard<'_, ssi::Ssi> {
+        self.ssi.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `GetSerializableTransactionSnapshot`: [`Heap::held_snapshot_in`] for the first statement of a transaction in `SERIALIZABLE`, and the record of the transaction, which `read_only` declares `READ ONLY`. The snapshot and the record are under the lock of the serializable transactions, so the commits before the snapshot are the ones that the record counts.
+    pub(crate) fn serializable_snapshot_in(
+        &self,
+        xmin: &AtomicU32,
+        read_only: bool,
+    ) -> (Snapshot, u64) {
+        let mut ssi = self.ssi();
+        let snapshot = self.held_snapshot_in(xmin);
+        let id = ssi.begin(snapshot.xmin(), read_only);
+        (snapshot, id)
+    }
+
+    /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a read of the table `relation` with the view.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the read makes a dangerous structure where the transaction of the view must fail.
+    pub(crate) fn serializable_read(&self, relation: u32, view: &View) -> Result<()> {
+        if view.sxact == 0 {
+            return Ok(());
+        }
+        let snapshot = &view.snapshot;
+        let concurrent = |xid: u32| !committed_before(xid, snapshot);
+        self.ssi().read(view.sxact, (view.database, relation), &concurrent)
+    }
+
+    /// `CheckForSerializableConflictIn` for a write of the table `relation` with the view.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the write makes a dangerous structure where the transaction of the view must fail.
+    pub(crate) fn serializable_write(&self, relation: u32, view: &View) -> Result<()> {
+        if view.sxact == 0 {
+            return Ok(());
+        }
+        let xmin = view.snapshot.xmin();
+        self.ssi().write(view.sxact, view.xid, (view.database, relation), xmin)
+    }
+
+    /// `PreCommit_CheckForSerializationFailure` for the transaction of the record `sxact`.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the transaction must fail.
+    pub(crate) fn serializable_pre_commit(&self, sxact: u64) -> Result<()> {
+        self.ssi().pre_commit(sxact)
+    }
+
+    /// `ReleasePredicateLocks` at the end of the transaction of the record `sxact`.
+    pub(crate) fn serializable_end(&self, sxact: u64, commit: bool) {
+        let next_xid = self.next_xid();
+        self.ssi().end(sxact, commit, next_xid);
     }
 
     fn snapshot_of(state: &State) -> Snapshot {
@@ -2539,6 +2603,7 @@ impl Heap {
         kept: &[u64],
         ids: &mut Vec<u64>,
     ) -> Result<Changed> {
+        self.serializable_write(relation, view)?;
         ids.clear();
         let count = rows.len() as u64;
         let made = (view.xid, view.command);
@@ -2624,6 +2689,7 @@ impl Heap {
         arbiters: &[usize],
         kept: Option<u64>,
     ) -> Result<Speculative> {
+        self.serializable_write(relation, view)?;
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
@@ -2740,6 +2806,7 @@ impl Heap {
         kept: &[u64],
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
+        self.serializable_write(relation, view)?;
         applied.clear();
         let mut keys = Vec::with_capacity(changes.len());
         for (_, values) in &changes {
@@ -3789,7 +3856,12 @@ impl Heap {
             }
             state.tables.0.insert(key, table);
         }
-        Ok(Heap { state: RwLock::new(state), published: Mutex::default(), tasks: None })
+        Ok(Heap {
+            state: RwLock::new(state),
+            published: Mutex::default(),
+            tasks: None,
+            ssi: Mutex::default(),
+        })
     }
 
     /// The versions of a table whose values are in encoded columns.
@@ -4010,7 +4082,7 @@ mod tests {
     }
 
     fn view(snapshot: Snapshot, xid: u32, command: u32) -> View {
-        View { database: 1, snapshot, xid, command, serializable: false }
+        View { database: 1, snapshot, xid, command, serializable: false, sxact: 0 }
     }
 
     /// The ID of the version of the first row that the view sees.

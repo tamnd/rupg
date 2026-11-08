@@ -128,6 +128,8 @@ For a join, PostgreSQL rechecks with the newest version of the locked row and th
 
 **Deferrable.** `SERIALIZABLE READ ONLY DEFERRABLE` waits for a safe snapshot and then records no reads. A read-only transaction whose snapshot becomes safe stops recording, as in PostgreSQL.
 
+**Now.** A read records its table, as the sequential scan of PostgreSQL locks the relation, so an index scan or a TID scan gives the false positives of a sequential scan, and `pg_locks` shows no `SIReadLock`. A temporary table, a materialized view and a system table record nothing, as `PredicateLockingNeededForRelation` skips them. `DEFERRABLE` does not wait yet, and a read-only transaction keeps recording. The records of transactions, the conflicts, the sequence numbers of commits and the release of committed records are those of `predicate.c` (`crates/rupg-session/src/heap/ssi.rs`).
+
 **Cost.** Only serializable transactions record reads. G5 runs TPC-C at `READ COMMITTED`, with a `SERIALIZABLE` row published beside it.
 
 ## 11.6 Savepoints

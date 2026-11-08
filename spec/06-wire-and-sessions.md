@@ -271,7 +271,7 @@ Some parameters map to a rupg mechanism with another shape. The mapping is part 
 | `maintenance_work_mem` | The reservation of one index build or mover task |
 | `synchronous_commit` | `off` acknowledges a commit before its log records are durable. Every other value waits for durability. With replicas, `remote_write` and `remote_apply` follow document 18 |
 | `max_parallel_workers_per_gather` | The largest number of workers that run the morsels of one query. 0 means one worker |
-| `default_transaction_isolation`, `transaction_isolation` | The isolation levels of document 11. Until M5 provides `serializable`, a request for it is refused, so a client never gets a weaker level without an error |
+| `default_transaction_isolation`, `transaction_isolation` | The isolation levels of document 11, with `serializable` as serializable snapshot isolation (section 11.5.3) |
 | `session_replication_role` | Honored from M7, when triggers exist. Before M7, `replica` is refused |
 | `jit` | Accepted only. rupg's compile tiers (document 14) are controlled by `rupg.compile`. asyncpg turns `jit` off to avoid PostgreSQL's compile time, and that must not turn off rupg's compiled pipelines |
 | `track_activity_query_size` | Honored. It sizes the query text in each activity slot (section 6.4) |
