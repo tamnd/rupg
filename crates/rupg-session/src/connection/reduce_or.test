@@ -1,0 +1,63 @@
+> CREATE TABLE rn (n int, name text)
+CREATE TABLE
+> INSERT INTO rn SELECT i, 'N' || i FROM generate_series(0, 9) i
+INSERT 0 10
+> CREATE TABLE rs (s int, n int)
+CREATE TABLE
+> INSERT INTO rs SELECT i, i % 10 FROM generate_series(0, 299) i
+INSERT 0 300
+> CREATE TABLE rc (c int, n int)
+CREATE TABLE
+> INSERT INTO rc SELECT i, (i * 3) % 10 FROM generate_series(0, 499) i
+INSERT 0 500
+> CREATE TABLE ro (o int, c int)
+CREATE TABLE
+> INSERT INTO ro SELECT i, (i * 7) % 500 FROM generate_series(1, 3000) i
+INSERT 0 3000
+> CREATE TABLE rl (o int, s int, q int, d date)
+CREATE TABLE
+> INSERT INTO rl SELECT CASE WHEN i % 23 = 0 THEN NULL ELSE i / 3 END, (i * 37 + i / 11) % 300, CASE WHEN i % 31 = 0 THEN NULL ELSE i % 50 END, date '2000-01-01' + i % 400 FROM generate_series(1, 9000) i
+INSERT 0 9000
+> SELECT n1.name, n2.name, count(*), sum(rl.q) FROM rs, rl, ro, rc, rn n1, rn n2 WHERE rs.s = rl.s AND ro.o = rl.o AND rc.c = ro.c AND rs.n = n1.n AND rc.n = n2.n AND ((n1.name = 'N1' AND n2.name = 'N2') OR (n1.name = 'N2' AND n2.name = 'N1')) AND rl.d BETWEEN date '2000-02-01' AND date '2000-10-01' GROUP BY 1, 2 ORDER BY 1, 2
+fields name@rn.2:25:-1:-1,name@rn.2:25:-1:-1,count:20:8:-1,sum:20:8:-1
+row N1,N2,49,1183
+row N2,N1,66,1516
+SELECT 2
+> SELECT count(*), sum(rl.q), sum(n1.n), sum(n2.n) FROM rs, rl, ro, rc, rn n1, rn n2 WHERE rs.s = rl.s AND ro.o = rl.o AND rc.c = ro.c AND rs.n = n1.n AND rc.n = n2.n AND ((n1.name = 'N1' AND rl.q < 5) OR n2.name = 'N3')
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 929,19647,3855,2837
+SELECT 1
+> SELECT count(*), sum(rl.q), sum(rs.n) FROM rs, rl, ro WHERE rs.s = rl.s AND ro.o = rl.o AND ((rl.o IS NULL AND rs.n = 1) OR (rl.q = 3 AND rs.n = 2) OR (rl.q IS NULL AND ro.c > 5))
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 288,42,1292
+SELECT 1
+> SELECT count(*), sum(rl.q), sum(n1.n), sum(n2.n) FROM rs, rl, ro, rc, rn n1, rn n2 WHERE rs.s = rl.s AND ro.o = rl.o AND rc.c = ro.c AND rs.n = n1.n AND rc.n = n2.n AND ((n1.name = 'N1' AND n1.n < 5 AND n2.name = 'N2') OR (n1.name = 'N7' AND n2.n > 8) OR (n1.n = 4 AND n2.n = 4 AND rl.q = 7))
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 155,3998,617,849
+SELECT 1
+> SELECT count(*), sum(rl.q), sum(rs.s) FROM rs, rl, rn n1, rn n2 WHERE rs.s = rl.s AND rs.n = n1.n AND rl.q = n2.n AND ((n1.name = 'N1' AND n2.name = 'N2') OR (n1.name = 'N4' AND n2.name = 'N4') OR (rs.s < 3 AND n1.n = n2.n))
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 47,92,5876
+SELECT 1
+> SELECT count(*), sum(rl.q), sum(ro.c) FROM rl, ro WHERE ro.o = rl.o AND ((rl.q < 3 AND ro.c < 100) OR (rl.q > 47 AND ro.c > 400))
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 163,3295,33977
+SELECT 1
+> SELECT n1.name, n2.name, rl.o, rl.s FROM rs, rl, ro, rc, rn n1, rn n2 WHERE rs.s = rl.s AND ro.o = rl.o AND rc.c = ro.c AND rs.n = n1.n AND rc.n = n2.n AND ((n1.name = 'N3' AND n2.name = 'N6' AND rl.q = 9) OR (n1.name = 'N6' AND n2.name = 'N3' AND rl.q = 1)) ORDER BY 3, 4, 1
+fields name@rn.2:25:-1:-1,name@rn.2:25:-1:-1,o@rl.1:23:4:-1,s@rl.2:23:4:-1
+row N6,N3,33,146
+row N3,N6,186,33
+row N6,N3,583,146
+row N3,N6,736,33
+row N6,N3,1133,146
+row N3,N6,1286,33
+row N6,N3,1683,146
+row N3,N6,1836,33
+row N6,N3,2233,146
+row N3,N6,2386,33
+row N6,N3,2783,146
+SELECT 11
+> SELECT count(*), sum(rl.q) FROM rs, rl, rn n1 WHERE rs.s = rl.s AND rs.n = n1.n AND (n1.name = 'N5' OR rl.q = 1 OR n1.name IS NULL)
+fields count:20:8:-1,sum:20:8:-1
+row 976,19554
+SELECT 1

@@ -605,6 +605,9 @@ pub(crate) fn read(
     // A correlated `EXISTS` of one table does not stop the reduction, because [`tuples`] then tests it after the joins, on the tuples of the rows that can join.
     let reducible: Vec<&Expr> =
         conds.iter().copied().filter(|expr| late_relation(expr, query).is_none()).collect();
+    // The `OR` of two or more tables also gives a condition of each table to the reduction, but not to the join.
+    let derived = crate::reduce::restrictions(&reducible);
+    let reducible: Vec<&Expr> = reducible.into_iter().chain(&derived).collect();
     let reduce = narrow.as_ref().and_then(|_| crate::reduce::plan(query, &reducible, session));
     let mut reduced = false;
     let mut selected: Vec<Option<columnar::Selected>> =

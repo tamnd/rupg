@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use rupg_analyze::{Expr, ExprKind, FromItem, Query};
+use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Query};
 use rupg_common::Result;
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
@@ -123,6 +123,40 @@ pub(crate) fn plan<'q>(
     // The join tests a condition that can fail only on the tuples of its `=`, when no other condition reads the two tables.
     let one = plan.edges.len() == 1 && joins == 1;
     (!plan.edges.is_empty() && (!both || one)).then_some(plan)
+}
+
+/// `extract_restriction_or_clauses`: the conditions that the reduction can also test, from the `OR` conditions of `conds` that read two or more relations and cannot fail. For each relation of such an `OR`, when each arm of the `OR` has one or more conditions of `AND` that read only this relation, the result has the `OR` of these conditions of each arm. A tuple that passes the `OR` passes one arm, so its row of the relation passes the conditions of the relation of this arm. The reduction then keeps fewer rows, as the reduction of TPC-H Q7 keeps only the two nations of its `OR`.
+pub(crate) fn restrictions(conds: &[&Expr]) -> Vec<Expr> {
+    let mut out = Vec::new();
+    for cond in conds {
+        let ExprKind::Bool(BoolOp::Or, arms) = &cond.kind else { continue };
+        let relations = relations_of(cond);
+        if relations.len() < 2 || !harmless(cond) {
+            continue;
+        }
+        'relation: for relation in relations {
+            let mut parts = Vec::with_capacity(arms.len());
+            for arm in arms {
+                let mut all = Vec::new();
+                crate::scan::conjuncts(arm, &mut all);
+                let mut own: Vec<Expr> =
+                    all.into_iter().filter(|e| relations_of(e) == [relation]).cloned().collect();
+                let part = match own.len() {
+                    0 => continue 'relation,
+                    1 => own.remove(0),
+                    _ => boolean(BoolOp::And, own),
+                };
+                parts.push(part);
+            }
+            out.push(boolean(BoolOp::Or, parts));
+        }
+    }
+    out
+}
+
+/// A condition of `AND` or `OR` of `args`.
+fn boolean(op: BoolOp, args: Vec<Expr>) -> Expr {
+    Expr { kind: ExprKind::Bool(op, args), ty: 16, typmod: -1, location: None }
 }
 
 /// The relation and the column of each side of an `=` of two columns of two relations, with integer or date values.

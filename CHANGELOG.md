@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An `OR` that reads two or more tables now gives the reduction of the rows of a join a condition for each table, as `extract_restriction_or_clauses` of PostgreSQL does. Each table gets the `OR` of its own conditions in each arm, and only the reduction tests this condition. TPC-H Q7 at scale 0.1 goes from 5.6 s to 0.9 s (#1423).
 - Two-phase commit: `PREPARE TRANSACTION` hands the transaction ID, the row locks, the relation and advisory locks and the SSI record of the transaction to a prepared transaction, which `COMMIT PREPARED` or `ROLLBACK PREPARED` ends from any session of the database, and `pg_prepared_xacts` lists. `max_prepared_transactions` is honored. A transaction that changed the catalog cannot be prepared yet (#1421).
 - A load of the image checks the headers of the cold rows one vector at a time, and gives the memory of its checks back to the system. The server holds 42 MB at rest on the 2 million rows of ClickBench, down from 169 MB, and its peak at start is 181 MB, down from 306 MB.
 - A dictionary of a stored column keeps its strings and their ends in the mapping of the file, and makes its table of codes when it first finds a string. The server holds 169 MB at rest on the 2 million rows of ClickBench, down from 385 MB, and its peak at start is 307 MB, down from 795 MB.
