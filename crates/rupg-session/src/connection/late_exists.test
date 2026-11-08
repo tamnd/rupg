@@ -1,0 +1,85 @@
+> CREATE TABLE lo (k int, f char(1))
+CREATE TABLE
+> INSERT INTO lo SELECT i, CASE WHEN i % 3 = 0 THEN 'O' ELSE 'F' END FROM generate_series(1, 3300) i
+INSERT 0 3300
+> CREATE TABLE ll (o int, s int, x date, y date)
+CREATE TABLE
+> INSERT INTO ll SELECT CASE WHEN i % 17 = 0 THEN NULL ELSE i / 3 END, CASE WHEN i % 19 = 0 THEN NULL ELSE (i * 7) % 200 END, date '2000-01-01' + (i * 5) % 50, date '2000-01-01' + (i * 3) % 50 FROM generate_series(1, 9000) i
+INSERT 0 9000
+> CREATE TABLE ls (s int, n int, name text)
+CREATE TABLE
+> INSERT INTO ls SELECT i, i % 7, 'S' || lpad(i::text, 3, '0') FROM generate_series(0, 199) i
+INSERT 0 200
+> CREATE TABLE ln (n int, name text)
+CREATE TABLE
+> INSERT INTO ln SELECT i, 'N' || i FROM generate_series(0, 6) i
+INSERT 0 7
+> SELECT ls.name, count(*) FROM ls, ll l1, lo, ln WHERE ls.s = l1.s AND lo.k = l1.o AND lo.f = 'F' AND l1.x > l1.y AND EXISTS (SELECT 1 FROM ll l2 WHERE l2.o = l1.o AND l2.s <> l1.s) AND NOT EXISTS (SELECT 1 FROM ll l3 WHERE l3.o = l1.o AND l3.s <> l1.s AND l3.x > l3.y) AND ls.n = ln.n AND ln.name = 'N3' GROUP BY ls.name ORDER BY 2 DESC, 1
+fields name@ls.3:25:-1:-1,count:20:8:-1
+row S003,11
+row S073,10
+row S038,9
+row S157,9
+row S045,2
+row S066,1
+row S164,1
+SELECT 7
+> SELECT count(*), sum(l1.o), sum(lo.k) FROM ll l1, lo WHERE lo.k = l1.o AND EXISTS (SELECT 1 FROM ll l2 WHERE l2.o = l1.o AND l2.s > l1.s)
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 5023,7533669,7533669
+SELECT 1
+> SELECT count(*), sum(a.k), sum(b.s) FROM lo a, ll b WHERE b.o % 100 = a.k % 100 AND a.k > 2900 AND NOT EXISTS (SELECT 1 FROM ll c WHERE c.o = a.k)
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 25413,80063685,2390130
+SELECT 1
+> SELECT count(*), count(b.o), sum(a.k) FROM lo a LEFT JOIN ll b ON b.o = a.k AND b.s < 20, ln WHERE ln.n = a.k % 7 AND NOT EXISTS (SELECT 1 FROM ll c WHERE c.o = b.o AND c.s <> b.s)
+fields count:20:8:-1,count:20:8:-1,sum:20:8:-1
+row 2817,6,4721444
+SELECT 1
+> SELECT count(*), count(b.o), sum(a.k) FROM lo a LEFT JOIN ll b ON b.o = a.k AND b.s < 20, ln WHERE ln.n = a.k % 7 AND EXISTS (SELECT 1 FROM ll c WHERE c.o = b.o AND c.s <> b.s)
+fields count:20:8:-1,count:20:8:-1,sum:20:8:-1
+row 802,802,1194826
+SELECT 1
+> SELECT a.k, ln.name FROM lo a, ln WHERE ln.n = a.k % 7 AND a.k < 200 AND a.k % 10 = 0 AND EXISTS (SELECT 1 FROM ll c WHERE c.o > a.k * 50 AND c.s = a.k LIMIT 1) ORDER BY 1
+fields k@lo.1:23:4:-1,name@ln.2:25:-1:-1
+row 10,N3
+row 20,N6
+row 30,N2
+row 40,N5
+row 50,N1
+SELECT 5
+> SELECT count(*), sum(a.k) FROM lo a, ln WHERE ln.n = a.k % 7 AND EXISTS (SELECT 1 FROM ll c WHERE c.o = a.k AND c.s = ln.n)
+fields count:20:8:-1,sum:20:8:-1
+row 40,60050
+SELECT 1
+> SELECT count(*), sum(a.k) FROM lo a, ln WHERE ln.n = a.k % 7 AND ln.name <> 'N2' AND EXISTS (SELECT 1 FROM ll c WHERE c.o = a.k AND c.s IS NULL)
+fields count:20:8:-1,sum:20:8:-1
+row 384,575692
+SELECT 1
+> SELECT a.k, ls.name FROM lo a, ls WHERE ls.s = a.k AND a.k < 60 AND NOT EXISTS (SELECT 1 FROM ll c WHERE c.o = a.k AND c.x < c.y) ORDER BY 1
+fields k@lo.1:23:4:-1,name@ls.3:25:-1:-1
+row 1,S001
+row 2,S002
+row 9,S009
+row 12,S012
+row 17,S017
+row 18,S018
+row 19,S019
+row 25,S025
+row 28,S028
+row 29,S029
+row 34,S034
+row 35,S035
+row 39,S039
+row 42,S042
+row 45,S045
+row 50,S050
+row 51,S051
+row 52,S052
+row 56,S056
+row 59,S059
+SELECT 20
+> SELECT count(*) FROM lo a, ls WHERE ls.s = a.k % 200 AND EXISTS (SELECT 1 FROM ll c WHERE c.o = a.k AND 1 / (c.s - c.s + 1) = 1)
+fields count:20:8:-1
+row 3000
+SELECT 1
