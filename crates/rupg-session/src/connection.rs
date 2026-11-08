@@ -1482,6 +1482,24 @@ impl Connection {
         }
     }
 
+    /// [`rupg_func::Session::failed_insert`]: the rows `rows` that an `INSERT` into the table `table` wrote before a row that failed a check go into the heap with the transaction of the session, which gets an ID as it does for a write, and the command of `view`. The error of the statement then takes the versions away, as for the rows of an `INSERT` that a later write of the statement fails, and their pages stay.
+    pub(crate) fn failed_insert(&self, table: u32, view: &View, rows: Vec<Vec<Value>>) {
+        if rows.is_empty()
+            || self.catalog().relation(table).is_none_or(|r| r.kind != rupg_catalog::RelKind::Table)
+        {
+            return;
+        }
+        let heap = self.store.heap();
+        if self.xid.get() == 0 {
+            self.xid.set(heap.begin(self.pid));
+        }
+        self.heap_layout(table);
+        let view = View { xid: self.xid.get(), ..view.clone() };
+        let no_key = |_: &Derived, _: &[Value]| Ok(None);
+        // With no unique key, the insert cannot fail.
+        let _ = heap.insert(table, &view, rows, (&[], &no_key), &[]);
+    }
+
     /// [`Self::heap_layout`] for the columns of the relation `relation`, with `attstorage` of each column and the method of `attcompression` or else of `default_toast_compression`.
     fn relation_layout(&self, relation: &rupg_catalog::Relation) {
         let default = if self.known.borrow_mut().of(&self.settings.borrow()).pglz {
@@ -6705,6 +6723,12 @@ mod tests {
     #[test]
     fn heap_size() {
         big_stack(|| script(include_str!("connection/heap_size.test")));
+    }
+
+    /// The rows of an `INSERT` before a row that fails a check take their pages, which stay after the error, as `ExecInsert` inserts each row after its checks. `VACUUM` truncates the empty pages from the option `TRUNCATE`, else the reloption `vacuum_truncate`, else the setting `vacuum_truncate`. `connection/failed_insert_pages.test` is the output of PostgreSQL 18 for the same script in a new database.
+    #[test]
+    fn failed_insert_pages() {
+        big_stack(|| script(include_str!("connection/failed_insert_pages.test")));
     }
 
     /// `VACUUM` removes the dead versions, gives their slots and their space back through the free space map, truncates the empty pages at the end of the heap, and sets `relallvisible` and `relallfrozen` from the visibility map. `connection/heap_vacuum.test` is the output of PostgreSQL 19 for the same script in a new database.

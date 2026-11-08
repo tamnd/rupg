@@ -43,7 +43,7 @@ pub(crate) fn check_rows(
     let mut out = Vec::with_capacity(rows.len());
     let mut router = crate::partition::Router::default();
     let partition = rel.filter(|r| r.partition_of.is_some());
-    for (at, mut row) in rows.into_iter().enumerate() {
+    let mut check_row = |at: usize, mut row: Vec<Value>| -> Result<Vec<Value>> {
         // `ExecUpdateAct` checks the partition constraint first.
         if kind == WriteKind::Update
             && let Some(rel) = partition
@@ -120,7 +120,19 @@ pub(crate) fn check_rows(
                 session,
             )?);
         }
-        out.push(row);
+        Ok(row)
+    };
+    for (at, row) in rows.into_iter().enumerate() {
+        match check_row(at, row) {
+            Ok(row) => out.push(row),
+            Err(error) => {
+                // `ExecInsert` inserts each row after its checks, so the rows before the row that fails take their pages.
+                if kind == WriteKind::Insert && !out.is_empty() {
+                    session.failed_insert(info.table, out);
+                }
+                return Err(error);
+            }
+        }
     }
     Ok(out)
 }

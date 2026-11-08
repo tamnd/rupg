@@ -313,6 +313,10 @@ pub trait Session {
         let _ = assign;
         None
     }
+    /// `ExecInsert` of the rows `rows` of an `INSERT` into the table `table` before a row that failed a check: the rows go into the heap, and the abort of the statement takes them away, so the pages that they took stay in the table. A session with no heap does nothing.
+    fn failed_insert(&self, table: u32, rows: Vec<Vec<Value>>) {
+        let _ = (table, rows);
+    }
     /// `ReadNextFullTransactionId`: the ID that the next transaction gets.
     fn next_transaction_id(&self) -> u64 {
         3
