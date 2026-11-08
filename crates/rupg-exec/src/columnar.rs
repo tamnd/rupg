@@ -4286,6 +4286,7 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
         return None;
     }
     let order = (kind == Mapped::Order).then(|| dict_order(dict, Some(tasks)));
+    let strings = dict.strings();
     let mut values = vec![0_i64; codes + 1];
     let jobs: Vec<Job<'_>> = values
         .chunks_mut(MAP_CODES)
@@ -4299,8 +4300,8 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
                         continue;
                     }
                     *value = match (kind, order) {
-                        (Mapped::Chars, _) => chars(dict.get(code)) as i64,
-                        (Mapped::Octets, _) => dict.get(code).len() as i64,
+                        (Mapped::Chars, _) => chars(strings.get(code)) as i64,
+                        (Mapped::Octets, _) => strings.get(code).len() as i64,
                         (Mapped::Order, Some(order)) => {
                             i64::from(order[code as usize]) << 32 | i64::from(code)
                         }
@@ -4353,8 +4354,9 @@ fn key_map(
     from: usize,
     replace: &rupg_func::Replace,
 ) -> Option<(groups::Map, Dictionary)> {
-    let source = exec.stored[from].dict.as_ref()?;
-    let codes = source.len();
+    let dict = exec.stored[from].dict.as_ref()?;
+    let source = dict.strings();
+    let codes = dict.len();
     let mut chunks: Vec<Option<KeyChunk>> = Vec::new();
     chunks.resize_with(codes.div_ceil(MAP_CODES), || None);
     let jobs: Vec<Job<'_>> = chunks
@@ -4494,6 +4496,7 @@ fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
     let mut bits = vec![0u64; codes / 64 + 1];
     let mut failed = vec![false; bits.len().div_ceil(CODE_WORDS)];
     let pattern = &pattern[..];
+    let strings = dict.strings();
     let jobs: Vec<Job<'_>> = bits
         .chunks_mut(CODE_WORDS)
         .zip(failed.iter_mut())
@@ -4509,7 +4512,7 @@ fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
                             continue;
                         }
                         let Ok(code) = u32::try_from(code) else { continue };
-                        let text = dict.get(code);
+                        let text = strings.get(code);
                         let text = if fold {
                             folded.clear();
                             folded.extend(text.iter().map(u8::to_ascii_lowercase));
@@ -5240,13 +5243,15 @@ fn code_places(
     distinct.sort_unstable();
     distinct.dedup();
     let mut by_bytes: Vec<u32> = (0..distinct.len() as u32).collect();
+    let strings = dict.strings();
     by_bytes.sort_unstable_by(|&a, &b| {
-        dict.get(distinct[a as usize]).cmp(dict.get(distinct[b as usize]))
+        strings.get(distinct[a as usize]).cmp(strings.get(distinct[b as usize]))
     });
     let mut ranks = vec![0_u64; distinct.len()];
     let mut rank = 0;
     for (n, &at) in by_bytes.iter().enumerate() {
-        if n == 0 || dict.get(distinct[at as usize]) != dict.get(distinct[by_bytes[n - 1] as usize])
+        if n == 0
+            || strings.get(distinct[at as usize]) != strings.get(distinct[by_bytes[n - 1] as usize])
         {
             rank += 1;
         }
