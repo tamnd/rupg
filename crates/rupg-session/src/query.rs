@@ -1358,6 +1358,12 @@ impl rupg_func::Session for Reader<'_> {
         self.conn?.transaction_id(assign).map(u64::from)
     }
 
+    fn failed_insert(&self, table: u32, rows: Vec<Vec<Value>>) {
+        if let (Some(conn), Some(view)) = (self.conn, &self.view) {
+            conn.failed_insert(table, view, rows);
+        }
+    }
+
     fn next_transaction_id(&self) -> u64 {
         self.conn.map_or(662, |conn| u64::from(conn.heap().next_xid()))
     }

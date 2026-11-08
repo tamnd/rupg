@@ -670,7 +670,7 @@ impl Connection {
         Ok(())
     }
 
-    /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE` or the reloption `vacuum_truncate`. The result is `reltuples`.
+    /// `heap_vacuum_rel` of the heap of `relid`: an aggressive `VACUUM` with `FREEZE`, which skips only the pages that are all frozen, no skipped pages with `DISABLE_PAGE_SKIPPING`, and the truncation of the empty pages at the end from `TRUNCATE`, the reloption `vacuum_truncate` or the setting `vacuum_truncate`. The result is `reltuples`.
     fn vacuum_heap(&self, catalog: &Catalog, relid: u32, parsed: &Parsed) -> f32 {
         let skip = if parsed.disable_page_skipping {
             Skip::None
@@ -679,13 +679,16 @@ impl Connection {
         } else {
             Skip::Visible
         };
+        // `vacuum_rel`: the option `TRUNCATE`, else the reloption `vacuum_truncate`, else the setting `vacuum_truncate`.
         let truncate = parsed.truncate.unwrap_or_else(|| {
             let options = catalog.relation(relid).map(|r| r.options.as_slice()).unwrap_or_default();
-            !options.iter().any(|o| {
-                o.strip_prefix("vacuum_truncate=").is_some_and(|v| {
-                    matches!(v.to_ascii_lowercase().as_str(), "false" | "off" | "no" | "0")
-                })
-            })
+            let off = |v: &str| {
+                matches!(v.to_ascii_lowercase().as_str(), "false" | "off" | "no" | "0" | "f" | "n")
+            };
+            match options.iter().find_map(|o| o.strip_prefix("vacuum_truncate=")) {
+                Some(value) => !off(value),
+                None => self.settings.borrow().get("vacuum_truncate").is_none_or(|v| !off(&v)),
+            }
         });
         let indexed = catalog.relations().any(|r| {
             r.kind == RelKind::Index && r.index.as_ref().is_some_and(|i| i.table == relid)

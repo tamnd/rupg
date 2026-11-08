@@ -1,0 +1,80 @@
+> CREATE TABLE fi (i int NOT NULL CHECK (i < 100), j text);
+CREATE TABLE
+> INSERT INTO fi VALUES (1, NULL), (NULL, NULL);
+ERROR 23502 null value in column "i" of relation "fi" violates not-null constraint
+> SELECT pg_relation_size('fi') AS main;
+fields main:20:8:-1
+row 8192
+SELECT 1
+> SELECT count(*) FROM fi;
+fields count:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO fi VALUES (2, 'x');
+INSERT 0 1
+> SELECT ctid, i FROM fi;
+fields ctid@fi.-1:27:6:-1,i@fi.1:23:4:-1
+row (0,2),2
+SELECT 1
+> CREATE TABLE fj (i int CHECK (i < 100));
+CREATE TABLE
+> INSERT INTO fj VALUES (200);
+ERROR 23514 new row for relation "fj" violates check constraint "fj_i_check"
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO fj SELECT g FROM generate_series(1, 1000) g;
+ERROR 23514 new row for relation "fj" violates check constraint "fj_i_check"
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 8192
+SELECT 1
+> SET vacuum_truncate = false;
+SET
+> VACUUM fj;
+VACUUM
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 8192
+SELECT 1
+> ALTER TABLE fj SET (vacuum_truncate = true);
+ALTER TABLE
+> VACUUM fj;
+VACUUM
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO fj SELECT g FROM generate_series(1, 1000) g;
+ERROR 23514 new row for relation "fj" violates check constraint "fj_i_check"
+> ALTER TABLE fj RESET (vacuum_truncate);
+ALTER TABLE
+> VACUUM fj;
+VACUUM
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 8192
+SELECT 1
+> VACUUM (TRUNCATE) fj;
+VACUUM
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 0
+SELECT 1
+> RESET vacuum_truncate;
+RESET
+> BEGIN;
+BEGIN
+> SAVEPOINT a;
+SAVEPOINT
+> INSERT INTO fj VALUES (1), (2), (300);
+ERROR 23514 new row for relation "fj" violates check constraint "fj_i_check"
+> ROLLBACK TO a;
+ROLLBACK
+> SELECT pg_relation_size('fj') AS main;
+fields main:20:8:-1
+row 8192
+SELECT 1
+> COMMIT;
+COMMIT
