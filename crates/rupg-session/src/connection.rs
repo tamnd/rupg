@@ -494,6 +494,8 @@ pub struct Connection {
     merged: Cell<[u64; 3]>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
     trigger_warnings: RefCell<Vec<Error>>,
+    /// `in_vacuum`: a `VACUUM` or an `ANALYZE` runs, so a function that it calls cannot run another one.
+    in_vacuum: Cell<bool>,
     /// The transition tables of the trigger whose function runs, which the readers of its queries get.
     transition: RefCell<Option<Transition>>,
     /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other.
@@ -617,6 +619,7 @@ impl Connection {
             open_tables: RefCell::new(Vec::new()),
             merged: Cell::new([0; 3]),
             trigger_warnings: RefCell::new(Vec::new()),
+            in_vacuum: Cell::new(false),
             transition: RefCell::new(None),
             trigger_depth: Cell::new(0),
             event_frames: RefCell::new(Vec::new()),
@@ -8162,6 +8165,12 @@ mod tests {
     #[test]
     fn whole_row_scalar() {
         big_stack(|| script(include_str!("connection/whole_row_scalar.test")));
+    }
+
+    /// `VACUUM FULL` writes the table, its TOAST table and their indexes again, as `cluster_rel` does, with the functions of the index expressions running once per row as the owner with the `search_path` of `RestrictSearchPath`, and with `PROCESS_MAIN FALSE` only the TOAST table. A function of an index expression cannot run `ANALYZE` in a `VACUUM` or an `ANALYZE`, while `ANALYZE` in a function runs. PostgreSQL 18 gives the same notices, errors and rows.
+    #[test]
+    fn vacuum_full() {
+        big_stack(|| script(include_str!("connection/vacuum_full.test")));
     }
 
     #[test]

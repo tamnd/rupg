@@ -266,14 +266,14 @@ impl Connection {
                 filled = Arc::new(catalog);
                 &filled
             };
-            self.rewrite_table(&old, rel, work, (&view, in_place), rows, transforms)?;
+            self.rewrite_table(&old, rel, work, (&view, in_place, false), rows, transforms)?;
         }
         // A function in an index expression can end commands after the command of the rewrite.
         self.command.set(self.command.get().max(command + 1));
         Ok(())
     }
 
-    /// `copy_table_data` of `CLUSTER` and `REPACK`: the rows of each table of `repacked` go again into the table, in the order of the keys of the index or in their physical order, with the messages of `VERBOSE`. rupg removes no dead row version, as each one is gone already or visible to a transaction.
+    /// `copy_table_data` of `CLUSTER`, `REPACK` and `VACUUM FULL`: the rows of each table of `repacked` go again into the table, in the order of the keys of the index or in their physical order, with the messages of `VERBOSE`. rupg removes no dead row version, as each one is gone already or visible to a transaction.
     pub(super) fn repack_rows(
         &self,
         repacked: &[Repack],
@@ -301,17 +301,18 @@ impl Connection {
             let view = View { xid: self.xid.get(), ..self.view() };
             let mut rows = heap.rows(table, &view);
             if let Some(order) = &repack.order {
-                rows = rupg_exec::cluster_order(
-                    order,
-                    rows,
-                    &self.reader_without_view(Arc::clone(work)),
-                )?;
+                // The keys of the sort run as the owner of the table with the `search_path` of `RestrictSearchPath`, and the notices of their functions go to the client.
+                let reader = self.reader_without_view(Arc::clone(work));
+                let sorted = self
+                    .as_maintenance(rel.owner, || rupg_exec::cluster_order(order, rows, &reader));
+                self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+                rows = sorted?;
             }
             let count = rows.len();
             if let Some(message) = &repack.verbose {
                 notices.push(info(message.clone()));
             }
-            self.rewrite_table(&old, rel, work, (&view, false), rows, &[])?;
+            self.rewrite_table(&old, rel, work, (&view, false, true), rows, &[])?;
             if repack.verbose.is_some() {
                 let mut notice = info(format!(
                     "\"{}\": found 0 removable, {count} nonremovable row versions in {pages} pages",
@@ -327,13 +328,13 @@ impl Connection {
         Ok(())
     }
 
-    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do. When a column has a new type or an expression of `transforms`, the `INSERT` reads the old values with their old types, and the expressions give the new values. With `in_place`, the rows stay and the statement only checks them, as `ATRewriteTable` does with no new file and as `index_build` checks the keys of a new unique index.
+    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do. When a column has a new type or an expression of `transforms`, the `INSERT` reads the old values with their old types, and the expressions give the new values. With `in_place`, the rows stay and the statement only checks them, as `ATRewriteTable` does with no new file and as `index_build` checks the keys of a new unique index. With `repack`, the rows are the rows of `CLUSTER`, `REPACK` or `VACUUM FULL`.
     fn rewrite_table(
         &self,
         old: &Catalog,
         rel: &Relation,
         work: &Arc<Catalog>,
-        (view, in_place): (&View, bool),
+        (view, in_place, repack): (&View, bool, bool),
         rows: Vec<Vec<Value>>,
         transforms: &[Transform],
     ) -> Result<(), Error> {
@@ -525,8 +526,9 @@ impl Connection {
             .iter()
             .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
             .collect();
-        // `index_build`: a new index with an expression or a predicate computes them for each row, so that their errors stop the build.
-        let built = rupg_analyze::built_index_keys(old, work, rel.oid)?;
+        // `index_build`: a new index with an expression or a predicate computes them for each row, so that their errors stop the build. The rewrite of `CLUSTER`, `REPACK` and `VACUUM FULL` computes them once, as the insert of the rows into the new indexes does, since `reindex_relation` builds the indexes from the new file.
+        let built =
+            if repack { Vec::new() } else { rupg_analyze::built_index_keys(old, work, rel.oid)? };
         if !built.is_empty() {
             let reader = self.reader_without_view(Arc::clone(work));
             let keys = self.as_maintenance(rel.owner, || {
