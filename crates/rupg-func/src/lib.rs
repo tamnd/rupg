@@ -573,6 +573,11 @@ pub trait Session {
         let _ = pid;
         Vec::new()
     }
+    /// `GetSafeSnapshotBlockingPids`: the process IDs of the sessions whose serializable transactions the `SERIALIZABLE READ ONLY DEFERRABLE` transaction of the session `pid` waits for, while it waits for a safe snapshot. A session with no server has no waits.
+    fn safe_snapshot_blocking_pids(&self, pid: i32) -> Vec<i32> {
+        let _ = pid;
+        Vec::new()
+    }
     /// `BackendPidGetProc`: the OID of the role of the session with the process ID `pid`, with 0 for a session with no role, or `None` when no session of the server has the process ID. A session with no server has no other sessions.
     fn backend_role(&self, pid: i32) -> Option<u32> {
         let _ = pid;

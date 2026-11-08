@@ -65,6 +65,8 @@ const ADVISORY: (&str, &str) = ("Lock", "advisory");
 const RELATION: (&str, &str) = ("Lock", "relation");
 /// The wait event of a wait for the end of a transaction that changed a row.
 const TRANSACTION_ID: (&str, &str) = ("Lock", "transactionid");
+/// The wait event of a `DEFERRABLE` transaction that waits for a safe snapshot.
+const SAFE_SNAPSHOT: (&str, &str) = ("IPC", "SafeSnapshot");
 
 /// A column of a result.
 #[derive(Clone, Debug)]
@@ -829,6 +831,35 @@ impl<'a> Reader<'a> {
         result
     }
 
+    /// `GetSafeSnapshot`: the wait of the read-only transaction of the record `sxact` until its snapshot is safe (true) or unsafe (false), with the wait event `SafeSnapshot`. A cancel and the end of `statement_timeout` stop the wait.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel or the end of `statement_timeout`.
+    pub(crate) fn wait_safe(&self, sxact: u64) -> Result<bool> {
+        let Some((activity, store)) = self.activity else { return Ok(true) };
+        let heap = store.heap();
+        if let Some(safe) = heap.serializable_safety(sxact) {
+            return Ok(safe);
+        }
+        activity.report_wait(Some(SAFE_SNAPSHOT));
+        let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
+        let result = loop {
+            if let Some(safe) = heap.serializable_safety(sxact) {
+                break Ok(safe);
+            }
+            if let Err(error) = rupg_func::Session::interrupted(self) {
+                break Err(error);
+            }
+            if self.timed_out(now(self.clock)) {
+                break Err(self.timeout_error());
+            }
+            store.nap(slice);
+        };
+        activity.report_wait(None);
+        result
+    }
+
     /// The settings of the session.
     pub(crate) fn settings(&self) -> Ref<'_, Settings> {
         self.settings.borrow()
@@ -1443,6 +1474,11 @@ impl rupg_func::Session for Reader<'_> {
             }
         }
         pids
+    }
+
+    fn safe_snapshot_blocking_pids(&self, pid: i32) -> Vec<i32> {
+        let Some((_, store)) = self.activity else { return Vec::new() };
+        store.heap().safe_snapshot_blockers(pid)
     }
 
     fn clear_backends(&self) {

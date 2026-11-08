@@ -621,6 +621,9 @@ impl Connection {
             return Err(aborted().into());
         }
         self.interrupted()?;
+        if query::is_query(node) {
+            self.safe_snapshot()?;
+        }
         let portal = self.portals.get_mut().get_mut(name)?;
         if portal.failed || matches!(portal.run, Run::Done) {
             return Err(Error::new(

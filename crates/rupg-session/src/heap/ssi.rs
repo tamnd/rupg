@@ -52,6 +52,16 @@ struct Sxact {
     reads: BTreeSet<Target>,
     /// The tables that the transaction wrote.
     writes: BTreeSet<Target>,
+    /// The process ID of the session of the transaction.
+    pid: i32,
+    /// `possibleUnsafeConflicts`: for a transaction declared `READ ONLY`, the writable transactions that ran at its snapshot, and for a writable one, the read-only transactions whose snapshot it ran at.
+    possible_unsafe: BTreeSet<u64>,
+    /// `SXACT_FLAG_RO_SAFE`: the snapshot of the read-only transaction can see no anomaly, so it needs no `SIREAD` locks.
+    ro_safe: bool,
+    /// `SXACT_FLAG_RO_UNSAFE`: a writable transaction of [`Sxact::possible_unsafe`] committed with a conflict out to a transaction that committed before the snapshot.
+    ro_unsafe: bool,
+    /// `SXACT_FLAG_DEFERRABLE_WAITING`: the transaction is `DEFERRABLE` and waits for a safe snapshot.
+    deferrable: bool,
 }
 
 impl Sxact {
@@ -104,12 +114,31 @@ fn failure(reason: &str) -> Error {
 pub(crate) type Concurrent<'a> = &'a dyn Fn(u32) -> bool;
 
 impl Ssi {
-    /// `GetSerializableTransactionSnapshotInt`: the record of a new serializable transaction whose snapshot has `xmin`. The caller takes the snapshot under the lock of this state.
-    pub(crate) fn begin(&mut self, xmin: u32, read_only: bool) -> u64 {
-        self.next_id += 1;
-        let id = self.next_id;
+    /// `GetSerializableTransactionSnapshotInt`: the record of a new serializable transaction of the session `pid` whose snapshot has `xmin`. The caller takes the snapshot under the lock of this state. A transaction declared `READ ONLY` while no writable serializable transaction runs needs no record, and the result is 0. Otherwise it has a possible unsafe conflict with each writable one that runs, and with `deferrable` it waits for a safe snapshot.
+    pub(crate) fn begin(&mut self, xmin: u32, read_only: bool, deferrable: bool, pid: i32) -> u64 {
         if self.last_commit < FIRST_NORMAL_SEQ_NO - 1 {
             self.last_commit = FIRST_NORMAL_SEQ_NO - 1;
+        }
+        let writable: BTreeSet<u64> = if read_only {
+            let writable: BTreeSet<u64> = self
+                .xacts
+                .iter()
+                .filter(|(_, s)| s.active() && !s.doomed && !s.read_only)
+                .map(|(&id, _)| id)
+                .collect();
+            if writable.is_empty() {
+                return 0;
+            }
+            writable
+        } else {
+            BTreeSet::new()
+        };
+        self.next_id += 1;
+        let id = self.next_id;
+        for &other in &writable {
+            if let Some(other) = self.xacts.get_mut(&other) {
+                other.possible_unsafe.insert(id);
+            }
         }
         self.xacts.insert(
             id,
@@ -118,10 +147,71 @@ impl Ssi {
                 last_commit_before_snapshot: self.last_commit,
                 read_only,
                 declared_read_only: read_only,
+                pid,
+                possible_unsafe: writable,
+                deferrable: read_only && deferrable,
                 ..Sxact::default()
             },
         );
         id
+    }
+
+    /// `GetSafeSnapshot`: `Some(true)` when the snapshot of the read-only transaction `id` is safe, `Some(false)` when it is unsafe and the transaction must take a new one, and `None` while a writable transaction of its snapshot runs. A safe transaction needs its record no more, and loses it.
+    pub(crate) fn safety(&mut self, id: u64) -> Option<bool> {
+        let Some(me) = self.get(id) else { return Some(true) };
+        if me.ro_unsafe {
+            return Some(false);
+        }
+        if me.ro_safe || me.possible_unsafe.is_empty() {
+            self.end(id, false, 0);
+            return Some(true);
+        }
+        None
+    }
+
+    /// `GetSafeSnapshotBlockingPids`: the process IDs of the sessions of the writable transactions that the transaction of the session `pid` waits for, while it waits for a safe snapshot.
+    pub(crate) fn safe_snapshot_blockers(&self, pid: i32) -> Vec<i32> {
+        let Some(me) = self.xacts.values().find(|s| s.pid == pid && s.deferrable && s.active())
+        else {
+            return Vec::new();
+        };
+        me.possible_unsafe
+            .iter()
+            .filter_map(|&other| self.get(other))
+            .map(|other| other.pid)
+            .filter(|&pid| pid > 0)
+            .collect()
+    }
+
+    /// `FlagSxactUnsafe`: the snapshot of the read-only transaction `id` can see an anomaly, and its possible unsafe conflicts go.
+    fn flag_unsafe(&mut self, id: u64) {
+        let Some(me) = self.xacts.get_mut(&id) else { return };
+        me.ro_unsafe = true;
+        let others = std::mem::take(&mut me.possible_unsafe);
+        for other in others {
+            if let Some(other) = self.xacts.get_mut(&other) {
+                other.possible_unsafe.remove(&id);
+            }
+        }
+    }
+
+    /// The end of the writable transaction `id` for the read-only transactions of its possible unsafe conflicts, as `ReleasePredicateLocks` checks them: a commit with a write and a conflict out to a transaction that committed before the snapshot of one of them makes it unsafe. Otherwise the conflict goes, and a read-only transaction with no other one is safe.
+    fn check_read_only(&mut self, id: u64, commit: bool) {
+        let Some(me) = self.xacts.get_mut(&id) else { return };
+        let readers = std::mem::take(&mut me.possible_unsafe);
+        let (did_write, conflict_out, earliest) =
+            (me.did_write, me.conflict_out, me.earliest_out_conflict_commit);
+        for reader in readers {
+            let Some(ro) = self.get(reader) else { continue };
+            if commit && did_write && conflict_out && earliest <= ro.last_commit_before_snapshot {
+                self.flag_unsafe(reader);
+            } else if let Some(ro) = self.xacts.get_mut(&reader) {
+                ro.possible_unsafe.remove(&id);
+                if ro.possible_unsafe.is_empty() {
+                    ro.ro_safe = true;
+                }
+            }
+        }
     }
 
     /// The record `id`, which a running transaction has.
@@ -149,6 +239,11 @@ impl Ssi {
         concurrent: Concurrent<'_>,
     ) -> Result<(), Error> {
         let Some(me) = self.xacts.get_mut(&id) else { return Ok(()) };
+        // `SerializationNeededForRead`: a read-only transaction whose snapshot is safe opts out of serializable snapshot isolation.
+        if me.ro_safe {
+            self.end(id, false, 0);
+            return Ok(());
+        }
         if me.reads.insert(target) {
             self.locks.entry(target).or_default().insert(id);
         }
@@ -346,6 +441,9 @@ impl Ssi {
         let my_xmin = me.xmin;
         let declared_read_only = me.declared_read_only;
         if !commit {
+            if !declared_read_only {
+                self.check_read_only(id, false);
+            }
             self.release(id, false);
         } else {
             self.last_commit += 1;
@@ -385,6 +483,9 @@ impl Ssi {
                 me.earliest_out_conflict_commit = earliest;
                 me.conflict_out = conflict_out;
             }
+            if !declared_read_only {
+                self.check_read_only(id, true);
+            }
         }
         if !declared_read_only && !self.xacts.values().any(|s| s.active() && !s.declared_read_only)
         {
@@ -422,6 +523,16 @@ impl Ssi {
         let ins: Vec<u64> = sxact.in_conflicts.iter().copied().collect();
         let outs: Vec<u64> =
             if partial { Vec::new() } else { sxact.out_conflicts.iter().copied().collect() };
+        let unsafe_with: Vec<u64> = if partial {
+            Vec::new()
+        } else {
+            std::mem::take(&mut sxact.possible_unsafe).into_iter().collect()
+        };
+        for other in unsafe_with {
+            if let Some(other) = self.xacts.get_mut(&other) {
+                other.possible_unsafe.remove(&id);
+            }
+        }
         for target in reads {
             if let Some(holders) = self.locks.get_mut(&target) {
                 holders.remove(&id);
@@ -463,8 +574,8 @@ mod tests {
     #[test]
     fn write_skew_fails_at_the_second_commit() {
         let mut ssi = Ssi::default();
-        let a = ssi.begin(10, false);
-        let b = ssi.begin(10, false);
+        let a = ssi.begin(10, false, false, 1);
+        let b = ssi.begin(10, false, false, 1);
         let none = |_: u32| true;
         ssi.read(a, T, &none).unwrap();
         ssi.read(b, U, &none).unwrap();
@@ -484,8 +595,8 @@ mod tests {
     #[test]
     fn one_conflict_commits() {
         let mut ssi = Ssi::default();
-        let a = ssi.begin(10, false);
-        let b = ssi.begin(10, false);
+        let a = ssi.begin(10, false, false, 1);
+        let b = ssi.begin(10, false, false, 1);
         let none = |_: u32| true;
         ssi.read(a, T, &none).unwrap();
         ssi.write(b, 11, T, 10).unwrap();
@@ -494,5 +605,49 @@ mod tests {
         ssi.pre_commit(a).unwrap();
         ssi.end(a, true, 12);
         assert!(ssi.xacts.is_empty() && ssi.locks.is_empty());
+    }
+
+    /// A read-only transaction with no writable one at its snapshot needs no record.
+    #[test]
+    fn read_only_alone_is_safe() {
+        let mut ssi = Ssi::default();
+        assert_eq!(ssi.begin(10, true, true, 1), 0);
+    }
+
+    /// `read-only-anomaly-3`: the snapshot of the deferrable reader is unsafe after a writer commits with a conflict out to a transaction that committed before the snapshot, and the next one is safe.
+    #[test]
+    fn deferrable_waits_for_a_safe_snapshot() {
+        let mut ssi = Ssi::default();
+        let none = |_: u32| true;
+        let s1 = ssi.begin(10, false, false, 1);
+        let s2 = ssi.begin(10, false, false, 2);
+        ssi.read(s2, T, &none).unwrap();
+        ssi.write(s1, 10, U, 10).unwrap();
+        ssi.read(s2, U, &none).unwrap();
+        ssi.pre_commit(s1).unwrap();
+        ssi.end(s1, true, 11);
+        let s3 = ssi.begin(11, true, true, 3);
+        assert_eq!(ssi.safety(s3), None);
+        assert_eq!(ssi.safe_snapshot_blockers(3), vec![2]);
+        ssi.write(s2, 11, T, 10).unwrap();
+        ssi.pre_commit(s2).unwrap();
+        ssi.end(s2, true, 12);
+        assert_eq!(ssi.safety(s3), Some(false));
+        ssi.end(s3, false, 12);
+        assert_eq!(ssi.begin(12, true, true, 3), 0);
+    }
+
+    /// A writer that ends with no conflict out makes the snapshot of the reader safe, and the reader loses its record.
+    #[test]
+    fn deferrable_safe_after_a_clean_writer() {
+        let mut ssi = Ssi::default();
+        let w = ssi.begin(10, false, false, 1);
+        let r = ssi.begin(10, true, true, 2);
+        assert_eq!(ssi.safety(r), None);
+        ssi.write(w, 10, T, 10).unwrap();
+        ssi.pre_commit(w).unwrap();
+        ssi.end(w, true, 11);
+        assert_eq!(ssi.safety(r), Some(true));
+        assert!(ssi.xacts.is_empty());
     }
 }
