@@ -4546,6 +4546,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/heap_groups_tasks.test")));
     }
 
+    /// The tasks of the server find the groups of `ORDER BY` of one count with `LIMIT` with the count alone, and then fold the other aggregates of the groups of the result from their rows: with the rows of PostgreSQL 19 for groups whose rows are in all the vectors and in a later insert, both orders, `OFFSET`, null values, `count` of a column and a filter.
+    #[test]
+    fn late_folds_tasks() {
+        big_stack(|| script_tasks(include_str!("connection/late_folds_tasks.test")));
+    }
+
     /// The tasks of the server find the first groups of a vector scan with `LIMIT` and no sort, whose groups go in the order of a sort of their keys, from the rows whose first key is not more than the first key of the last group of the limit: with `OFFSET`, a filter, a key of an expression, nulls of the first key, fewer values of the first key than the limit, and groups of a hash table or a first key of floats, which read each row.
     #[test]
     fn limit_groups_tasks() {

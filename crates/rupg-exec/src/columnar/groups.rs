@@ -3,6 +3,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use rupg_column::segment::{Kind, ROWS};
 use rupg_column::stored::{self, Stored, VECTOR};
@@ -1139,6 +1140,91 @@ pub(super) fn units_of(rows: usize, segments: usize) -> Vec<(usize, usize)> {
 }
 
 /// The groups of the vectors `units` of the columns `stored`, which have `rows` rows.
+/// Puts into `keys` the packed key of each row `sel` of a vector, from the decoded columns `decoded`. A key whose columns are not decoded keeps its bits at 0.
+fn fill_keys<const W: usize>(
+    plan: &Plan,
+    pack: &Pack,
+    decoded: &[Option<Decoded>],
+    sel: &[usize],
+    keys: &mut Vec<[u64; W]>,
+) {
+    keys.clear();
+    keys.resize(sel.len(), [0; W]);
+    for (k, input) in plan.keys.iter().enumerate() {
+        match *input {
+            Input::Case { ref tests, then, default } => {
+                let Some(d) = decoded[then].as_ref() else { continue };
+                let tested: Vec<&Decoded> =
+                    tests.iter().filter_map(|t| decoded[t.0].as_ref()).collect();
+                if tested.len() < tests.len() {
+                    continue;
+                }
+                for (key, &i) in keys.iter_mut().zip(sel) {
+                    let chosen =
+                        tests.iter().zip(&tested).all(|(t, d)| passes(&t.1, null(d, i), int(d, i)));
+                    match (chosen, default) {
+                        (true, _) if null(d, i) => pack.put_null(key, k),
+                        (true, _) => pack.put(key, k, int(d, i) as u64),
+                        (false, Some(word)) => pack.put(key, k, word),
+                        (false, None) => pack.put_null(key, k),
+                    }
+                }
+            }
+            Input::Column(place) => {
+                let Some(d) = decoded[place].as_ref() else { continue };
+                let Place::Bits(value, flag) = pack.places[k] else { continue };
+                // A vector with no nulls, the most common, puts each value with no test.
+                match (&d.data, &d.nulls) {
+                    (DecodedData::Int(v), None) => {
+                        for (key, &i) in keys.iter_mut().zip(sel) {
+                            value.put(key, v[i] as u64);
+                        }
+                    }
+                    (DecodedData::Code(v), None) => {
+                        for (key, &i) in keys.iter_mut().zip(sel) {
+                            value.put(key, u64::from(v[i]));
+                        }
+                    }
+                    _ => {
+                        for (key, &i) in keys.iter_mut().zip(sel) {
+                            if !null(d, i) {
+                                value.put(key, int(d, i) as u64);
+                            } else if let Some(flag) = flag {
+                                flag.put(key, 1);
+                            }
+                        }
+                    }
+                }
+            }
+            Input::Floor(place, step) => {
+                let Some(d) = decoded[place].as_ref() else { continue };
+                for (key, &i) in keys.iter_mut().zip(sel) {
+                    if null(d, i) {
+                        pack.put_null(key, k);
+                    } else {
+                        let v = int(d, i);
+                        let infinite = v == i64::MIN || v == i64::MAX;
+                        pack.put(key, k, if infinite { v } else { v - v.rem_euclid(step) } as u64);
+                    }
+                }
+            }
+            Input::Part(place, step, span) => {
+                let Some(d) = decoded[place].as_ref() else { continue };
+                for (key, &i) in keys.iter_mut().zip(sel) {
+                    let v = int(d, i);
+                    if null(d, i) || v == i64::MIN || v == i64::MAX {
+                        pack.put_null(key, k);
+                    } else {
+                        pack.put(key, k, v.div_euclid(step).rem_euclid(span) as u64);
+                    }
+                }
+            }
+            // A constant key has no bits in a packed key.
+            Input::Const(_) => {}
+        }
+    }
+}
+
 fn scan_run<const W: usize>(
     stored: &[Arc<Stored>],
     plan: &Plan,
@@ -1183,87 +1269,7 @@ fn scan_run<const W: usize>(
         }
         let base = (segment * ROWS + vector * VECTOR) as u64;
         last = sel.last().map(|&i| base + i as u64);
-        keys.clear();
-        keys.resize(sel.len(), [0; W]);
-        for (k, input) in plan.keys.iter().enumerate() {
-            match *input {
-                Input::Case { ref tests, then, default } => {
-                    let Some(d) = decoded[then].as_ref() else { continue };
-                    let tested: Vec<&Decoded> =
-                        tests.iter().filter_map(|t| decoded[t.0].as_ref()).collect();
-                    if tested.len() < tests.len() {
-                        continue;
-                    }
-                    for (key, &i) in keys.iter_mut().zip(&sel) {
-                        let chosen = tests
-                            .iter()
-                            .zip(&tested)
-                            .all(|(t, d)| passes(&t.1, null(d, i), int(d, i)));
-                        match (chosen, default) {
-                            (true, _) if null(d, i) => pack.put_null(key, k),
-                            (true, _) => pack.put(key, k, int(d, i) as u64),
-                            (false, Some(word)) => pack.put(key, k, word),
-                            (false, None) => pack.put_null(key, k),
-                        }
-                    }
-                }
-                Input::Column(place) => {
-                    let Some(d) = decoded[place].as_ref() else { continue };
-                    let Place::Bits(value, flag) = pack.places[k] else { continue };
-                    // A vector with no nulls, the most common, puts each value with no test.
-                    match (&d.data, &d.nulls) {
-                        (DecodedData::Int(v), None) => {
-                            for (key, &i) in keys.iter_mut().zip(&sel) {
-                                value.put(key, v[i] as u64);
-                            }
-                        }
-                        (DecodedData::Code(v), None) => {
-                            for (key, &i) in keys.iter_mut().zip(&sel) {
-                                value.put(key, u64::from(v[i]));
-                            }
-                        }
-                        _ => {
-                            for (key, &i) in keys.iter_mut().zip(&sel) {
-                                if !null(d, i) {
-                                    value.put(key, int(d, i) as u64);
-                                } else if let Some(flag) = flag {
-                                    flag.put(key, 1);
-                                }
-                            }
-                        }
-                    }
-                }
-                Input::Floor(place, step) => {
-                    let Some(d) = decoded[place].as_ref() else { continue };
-                    for (key, &i) in keys.iter_mut().zip(&sel) {
-                        if null(d, i) {
-                            pack.put_null(key, k);
-                        } else {
-                            let v = int(d, i);
-                            let infinite = v == i64::MIN || v == i64::MAX;
-                            pack.put(
-                                key,
-                                k,
-                                if infinite { v } else { v - v.rem_euclid(step) } as u64,
-                            );
-                        }
-                    }
-                }
-                Input::Part(place, step, span) => {
-                    let Some(d) = decoded[place].as_ref() else { continue };
-                    for (key, &i) in keys.iter_mut().zip(&sel) {
-                        let v = int(d, i);
-                        if null(d, i) || v == i64::MIN || v == i64::MAX {
-                            pack.put_null(key, k);
-                        } else {
-                            pack.put(key, k, v.div_euclid(step).rem_euclid(span) as u64);
-                        }
-                    }
-                }
-                // A constant key has no bits in a packed key.
-                Input::Const(_) => {}
-            }
-        }
+        fill_keys(plan, pack, &decoded, &sel, &mut keys);
         for base_fold in first_base..plan.folds.len() {
             if let Fold::Sum(place) = plan.folds[base_fold]
                 && let Some(d) = decoded[place].as_ref()
@@ -1410,18 +1416,21 @@ fn gather(
     plan: &Plan,
     pack: &Pack,
     chosen: impl Iterator<Item = (u32, u32)>,
-) -> Buf {
+) -> (Buf, Vec<u64>) {
     let mut words = [0_u64; 8];
     let mut out = Buf::new(&plan.folds, plan.keys.len() + 1);
+    let mut packed = Vec::new();
     for (p, g) in chosen {
         let (part, g) = (&parts[p as usize], g as usize);
-        pack.unpack(&part.keys[g * pack.width..(g + 1) * pack.width], &mut words);
+        let key = &part.keys[g * pack.width..(g + 1) * pack.width];
+        packed.extend_from_slice(key);
+        pack.unpack(key, &mut words);
         out.push(&words, part.firsts[g]);
         for (to, from) in out.states.iter_mut().zip(&part.states) {
             to.take(from, g);
         }
     }
-    out
+    (out, packed)
 }
 
 /// The groups of the first `top.bound` counts of the parts `parts`, in the order of their first rows, when the first `top.bound` counts in the order of the sort and the count after them are all different. The bounded heap of the sort then keeps these groups for each order of the groups, as `distinct_top` of the scan finds them. The parts have different keys, so the count of each group is in one part. `None` when two of these counts are equal, for few groups, or when the value of a key of a group is out of `top.ranges`, so that the order of all the groups gives the error of the derived key.
@@ -1432,7 +1441,7 @@ fn top_groups(
     top: &Top,
     last: Option<u64>,
     extremes: &[Option<(i64, i64)>],
-) -> Option<Found> {
+) -> Option<(Found, Vec<u64>)> {
     if !matches!(plan.folds.get(top.fold), Some(Fold::Count | Fold::CountArg(_))) {
         return None;
     }
@@ -1467,17 +1476,18 @@ fn top_groups(
     }
     best.truncate(top.bound);
     best.sort_unstable_by_key(|&(_, p, g)| parts[p as usize].firsts[g as usize]);
-    let out = gather(parts, plan, pack, best.iter().map(|&(_, p, g)| (p, g)));
+    let (out, packed) = gather(parts, plan, pack, best.iter().map(|&(_, p, g)| (p, g)));
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && most != last;
-    Some(Found {
+    let found = Found {
         words: out.keys,
         firsts: out.firsts,
         states: out.states,
         extremes: extremes.to_vec(),
         trailing,
         heap: false,
-    })
+    };
+    Some((found, packed))
 }
 
 /// The groups of the parts `parts` that can change the bounded heap of the sort of `top`, in the order of their first rows, when the order of all the groups is the order of their first rows: for more than `top.spill` groups. The heap takes the first `top.bound` groups of the order, and then keeps a group only when its count comes before the count at its top. That count only moves forward from the last count of the first `top.bound` groups, so a later group whose count does not come before that count changes nothing. `None` for few groups, for another order of the groups, or when the value of a key of a group is out of `top.ranges`, as for [`top_groups`].
@@ -1488,7 +1498,7 @@ fn heap_groups(
     top: &Top,
     last: Option<u64>,
     extremes: &[Option<(i64, i64)>],
-) -> Option<Found> {
+) -> Option<(Found, Vec<u64>)> {
     if !matches!(plan.folds.get(top.fold), Some(Fold::Count | Fold::CountArg(_))) {
         return None;
     }
@@ -1528,17 +1538,18 @@ fn heap_groups(
         most = most.max(part.firsts.iter().max().copied());
     }
     chosen.sort_unstable_by_key(|c| c.0);
-    let out = gather(parts, plan, pack, chosen.into_iter().map(|(_, p, g)| (p, g)));
+    let (out, packed) = gather(parts, plan, pack, chosen.into_iter().map(|(_, p, g)| (p, g)));
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && most != last;
-    Some(Found {
+    let found = Found {
         words: out.keys,
         firsts: out.firsts,
         states: out.states,
         extremes: extremes.to_vec(),
         trailing,
         heap: true,
-    })
+    };
+    Some((found, packed))
 }
 
 /// The groups of the scan of the columns `stored`, which have `rows` rows in `segments` segments, on the tasks `tasks`. With `top`, the groups can be only the groups of the result of the sort, as [`top_groups`] gives them. With `ordered` false, the groups come in the order of the parts, for a query that sorts the groups by their keys: the order of their first rows then costs a map of the rows and a read of each group from one of many parts, and does not change the result.
@@ -1555,6 +1566,234 @@ pub(super) fn run(
     top: Option<&Top>,
     ordered: bool,
 ) -> Result<Found> {
+    // spec/14 section 14.7: for `ORDER BY` of a count, the tasks first find the groups with only the count, so that each group of the many groups keeps fewer bytes. The other folds then run only for the few groups of the result, in a second scan.
+    if let Some(top) = top
+        && let Some(lean) = lean_plan(plan, top)
+        && let Grouped::Top(mut found, packed) =
+            grouped(tasks, stored, &lean, rows, segments, Some(top), ordered, true)?
+    {
+        let pack = Pack::new(stored, plan);
+        let states = match pack.width {
+            1 => fold_chosen::<1>(tasks, stored, plan, &pack, rows, segments, &packed, &found, top),
+            2 => fold_chosen::<2>(tasks, stored, plan, &pack, rows, segments, &packed, &found, top),
+            3 | 4 => {
+                fold_chosen::<4>(tasks, stored, plan, &pack, rows, segments, &packed, &found, top)
+            }
+            _ => fold_chosen::<8>(tasks, stored, plan, &pack, rows, segments, &packed, &found, top),
+        }?;
+        for ((to, state), (&fold, &was)) in
+            found.states.iter_mut().zip(states).zip(plan.folds.iter().zip(&lean.folds))
+        {
+            if matches!(was, Fold::None) && !matches!(fold, Fold::None) {
+                *to = state;
+            }
+        }
+        return Ok(found);
+    }
+    match grouped(tasks, stored, plan, rows, segments, top, ordered, false)? {
+        Grouped::Top(found, _) | Grouped::All(found) => Ok(found),
+        Grouped::Unsure => Err(rupg_common::Error::internal("a scan of groups gave no groups")),
+    }
+}
+
+/// The groups that [`grouped`] gives.
+enum Grouped {
+    /// The groups of the result of the sort of a [`Top`], and the packed key of each group.
+    Top(Found, Vec<u64>),
+    /// All the groups.
+    All(Found),
+    /// No groups, for a lean scan whose groups are not only the groups of the result of the sort.
+    Unsure,
+}
+
+/// The plan of `plan` with no fold other than the count of `top`, or `None` when the plan has no other fold, or has bases, whose extremes need all the rows. The groups and their counts are the same, so the groups of the result of the sort are the same.
+fn lean_plan(plan: &Plan, top: &Top) -> Option<Plan> {
+    if plan.bases > 0
+        || !matches!(plan.folds.get(top.fold), Some(Fold::Count | Fold::CountArg(_)))
+        || plan
+            .folds
+            .iter()
+            .enumerate()
+            .all(|(f, fold)| f == top.fold || matches!(fold, Fold::None))
+    {
+        return None;
+    }
+    Some(Plan {
+        keys: plan.keys.clone(),
+        folds: plan
+            .folds
+            .iter()
+            .enumerate()
+            .map(|(f, &fold)| if f == top.fold { fold } else { Fold::None })
+            .collect(),
+        bases: 0,
+        filters: plan.filters.clone(),
+        maps: plan.maps.clone(),
+    })
+}
+
+/// The states of each fold of `plan` for the groups of `found`, whose packed keys of `pack` are `packed`, from a scan of the rows of these groups. The scan starts at the vector of the first row of the groups. When the count of `top` counts rows, the scan stops when it has folded the counted rows of all the groups.
+#[allow(clippy::too_many_arguments)]
+fn fold_chosen<const W: usize>(
+    tasks: &dyn Tasks,
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    pack: &Pack,
+    rows: usize,
+    segments: usize,
+    packed: &[u64],
+    found: &Found,
+    top: &Top,
+) -> Result<Vec<Folded>> {
+    let groups = found.firsts.len();
+    let mut chosen: FxMap<[u64; W], u32> = FxMap::default();
+    for (g, words) in packed.chunks_exact(pack.width).enumerate() {
+        chosen.insert(std::array::from_fn(|i| words.get(i).copied().unwrap_or(0)), g as u32);
+    }
+    let empty = || -> Vec<Folded> {
+        plan.folds
+            .iter()
+            .map(|&fold| {
+                let mut state = Folded::of(fold);
+                for _ in 0..groups {
+                    state.push();
+                }
+                state
+            })
+            .collect()
+    };
+    // A group has no row before its first row.
+    let start = found.firsts.iter().min().copied().unwrap_or(0);
+    let units: Vec<(usize, usize)> = units_of(rows, segments)
+        .into_iter()
+        .filter(|&(segment, vector)| (segment * ROWS + (vector + 1) * VECTOR) as u64 > start)
+        .collect();
+    if units.is_empty() || groups == 0 {
+        return Ok(empty());
+    }
+    // The rows that the scan has yet to fold, when the count counts each row of a group.
+    let left = match (plan.folds[top.fold], &found.states[top.fold]) {
+        (Fold::Count, Folded::Count(counts)) => Some(AtomicI64::new(counts.iter().sum())),
+        _ => None,
+    };
+    let source = |place: usize| plan.source(stored.len(), place);
+    let mut key_places: Vec<usize> = plan.keys.iter().flat_map(Input::places).map(source).collect();
+    key_places.sort_unstable();
+    key_places.dedup();
+    let mut fold_places: Vec<usize> = plan
+        .folds
+        .iter()
+        .filter_map(|f| match f {
+            Fold::CountArg(p) | Fold::Sum(p) | Fold::Min(p) | Fold::Max(p) => Some(source(*p)),
+            Fold::Count | Fold::None => None,
+        })
+        .filter(|place| !key_places.contains(place))
+        .collect();
+    fold_places.sort_unstable();
+    fold_places.dedup();
+    let mins: Vec<bool> = plan.folds.iter().map(|f| matches!(f, Fold::Min(_))).collect();
+    let jobs = tasks.parallelism().min(units.len() * VECTOR / TASK_ROWS).clamp(1, units.len());
+    let chunk = units.len().div_ceil(jobs);
+    let mut outs: Vec<Option<Result<Vec<Folded>>>> = Vec::new();
+    outs.resize_with(units.len().div_ceil(chunk), || None);
+    let work: Vec<Job<'_>> = units
+        .chunks(chunk)
+        .zip(&mut outs)
+        .map(|(units, out)| {
+            let (chosen, left, key_places, fold_places, mins, empty) =
+                (&chosen, &left, &key_places, &fold_places, &mins, &empty);
+            Box::new(move || {
+                *out = Some((|| {
+                    let mut states = empty();
+                    let mut decoded: Vec<Option<Decoded>> =
+                        (0..stored.len() + plan.maps.len()).map(|_| None).collect();
+                    let mut tests: Vec<&(usize, Test)> = Vec::with_capacity(plan.filters.len());
+                    let mut sel: Vec<usize> = Vec::with_capacity(VECTOR);
+                    let mut keys: Vec<[u64; W]> = Vec::with_capacity(VECTOR);
+                    let (mut ids, mut hits) = (Vec::new(), Vec::new());
+                    for &(segment, vector) in units {
+                        if left.as_ref().is_some_and(|l| l.load(Ordering::Relaxed) <= 0) {
+                            break;
+                        }
+                        if !select(
+                            stored,
+                            plan,
+                            rows,
+                            (segment, vector),
+                            &mut tests,
+                            &mut sel,
+                            &mut decoded,
+                        )? {
+                            continue;
+                        }
+                        let decode_all = |places: &[usize],
+                                          decoded: &mut [Option<Decoded>],
+                                          tests: &[&(usize, Test)]|
+                         -> Result<()> {
+                            for &place in places {
+                                if !tests.iter().any(|t| t.0 == place) {
+                                    decoded[place] = Some(decode(&stored[place], segment, vector)?);
+                                }
+                            }
+                            for (m, map) in plan.maps.iter().enumerate() {
+                                decoded[stored.len() + m] =
+                                    decoded[map.from].as_ref().map(|d| map_vector(map, d));
+                            }
+                            Ok(())
+                        };
+                        decode_all(key_places, &mut decoded, &tests)?;
+                        fill_keys(plan, pack, &decoded, &sel, &mut keys);
+                        ids.clear();
+                        hits.clear();
+                        for (key, &i) in keys.iter().zip(&sel) {
+                            if let Some(&id) = chosen.get(key) {
+                                ids.push(id);
+                                hits.push(i);
+                            }
+                        }
+                        if ids.is_empty() {
+                            continue;
+                        }
+                        decode_all(fold_places, &mut decoded, &tests)?;
+                        for ((state, &fold), &min) in states.iter_mut().zip(&plan.folds).zip(mins) {
+                            if !matches!(fold, Fold::None) {
+                                fold_rows(state, fold, &ids, &hits, &decoded, min);
+                            }
+                        }
+                        if let Some(left) = left {
+                            left.fetch_sub(ids.len() as i64, Ordering::Relaxed);
+                        }
+                    }
+                    Ok(states)
+                })());
+            }) as Job<'_>
+        })
+        .collect();
+    tasks.run_all(work);
+    let mut outs = outs.into_iter().flatten();
+    let mut states = outs.next().transpose()?.unwrap_or_else(empty);
+    for other in outs {
+        let other = other?;
+        for ((to, from), &min) in states.iter_mut().zip(&other).zip(&mins) {
+            for g in 0..groups {
+                to.merge(g, from, g, min);
+            }
+        }
+    }
+    Ok(states)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn grouped(
+    tasks: &dyn Tasks,
+    stored: &[Arc<Stored>],
+    plan: &Plan,
+    rows: usize,
+    segments: usize,
+    top: Option<&Top>,
+    ordered: bool,
+    lean: bool,
+) -> Result<Grouped> {
     let mut places: Vec<usize> = plan
         .keys
         .iter()
@@ -1569,14 +1808,14 @@ pub(super) fn run(
     places.dedup();
     let units = units_of(rows, segments);
     if units.is_empty() {
-        return Ok(Found {
+        return Ok(Grouped::All(Found {
             words: Vec::new(),
             firsts: Vec::new(),
             states: plan.folds.iter().map(|&f| Folded::of(f)).collect(),
             extremes: vec![None; plan.bases],
             trailing: false,
             heap: false,
-        });
+        }));
     }
     let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
     let chunk = units.len().div_ceil(jobs);
@@ -1641,14 +1880,19 @@ pub(super) fn run(
         .collect();
     tasks.run_all(work);
     let parts: Vec<Buf> = parts.into_iter().flatten().collect();
-    if let Some(found) = top.and_then(|top| top_groups(&parts, plan, &pack, top, last, &extremes)) {
-        return Ok(found);
+    if let Some((found, packed)) =
+        top.and_then(|top| top_groups(&parts, plan, &pack, top, last, &extremes))
+    {
+        return Ok(Grouped::Top(found, packed));
     }
     if ordered
-        && let Some(found) =
+        && let Some((found, packed)) =
             top.and_then(|top| heap_groups(&parts, plan, &pack, top, last, &extremes))
     {
-        return Ok(found);
+        return Ok(Grouped::Top(found, packed));
+    }
+    if lean {
+        return Ok(Grouped::Unsure);
     }
     let groups: usize = parts.iter().map(Buf::len).sum();
     let order = if !ordered {
@@ -1744,7 +1988,7 @@ pub(super) fn run(
     tasks.run_all(work);
     // As on one task, the scan ends inside a group when its last row that passes is not the first row of a group.
     let trailing = last.is_some() && firsts.iter().max() != last.as_ref();
-    Ok(Found { words, firsts, states, extremes, trailing, heap: false })
+    Ok(Grouped::All(Found { words, firsts, states, extremes, trailing, heap: false }))
 }
 
 /// The part and the place in the part of each group of `parts`, in the order of their first rows of the `rows` rows of the scan. The place of each group is the number of first rows before its first row, which a map of the first rows gives.
