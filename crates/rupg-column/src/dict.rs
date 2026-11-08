@@ -178,15 +178,91 @@ impl Dictionary {
     /// The place of each code in the order of the bytes of all the strings, at the index of the code. Code [`NONE`] has place 0, and the first string in order has place 1. The dictionary sorts its strings one time, and keeps the places until it gets a new string.
     #[must_use]
     pub fn order(&self) -> &[u32] {
+        self.order_on(1, &|jobs| jobs.into_iter().for_each(|job| job()))
+    }
+
+    /// The places of [`Dictionary::order`], from a sort on `jobs` jobs at the same time, which `run` runs and returns when all of them ended. A sample of the strings gives the bounds of many parts, each job puts the codes of a run of the codes into their parts, and then the jobs sort the parts. The places are the places of [`Dictionary::order`]. A dictionary of few strings, or one job, sorts on the calling task.
+    pub fn order_on(&self, jobs: usize, run: &Run<'_>) -> &[u32] {
         self.order.get_or_init(|| {
-            let mut codes: Vec<u32> = (1..=self.ends.len() as u32).collect();
-            sort_bytes(&mut codes, |c| self.get(c));
+            let codes: Vec<u32> = if jobs < 2 || self.ends.len() < PARALLEL_ORDER {
+                let mut codes: Vec<u32> = (1..=self.ends.len() as u32).collect();
+                sort_bytes(&mut codes, |c| self.get(c));
+                codes
+            } else {
+                self.sort_parts(jobs, run)
+            };
             let mut places = vec![0; self.ends.len() + 1];
             for (place, &code) in codes.iter().enumerate() {
                 places[code as usize] = place as u32 + 1;
             }
             places.into_boxed_slice()
         })
+    }
+
+    /// The codes of all the strings in the order of their bytes, from the sort of [`Dictionary::order_on`] of more than one job.
+    fn sort_parts(&self, jobs: usize, run: &Run<'_>) -> Vec<u32> {
+        let n = self.ends.len();
+        let parts = jobs * PARTS_OF_JOB;
+        // Each part gets about `SAMPLE_OF_PART` strings of the sample, so the sizes of the parts are close.
+        let step = (n / (parts * SAMPLE_OF_PART)).max(1);
+        let mut sample: Vec<u32> = (1..=n as u32).step_by(step).collect();
+        sort_bytes(&mut sample, |c| self.get(c));
+        let bounds: Vec<&[u8]> =
+            (1..parts).map(|i| self.get(sample[i * sample.len() / parts])).collect();
+        // The part of a string is the number of bounds that are not after it.
+        let chunk = n.div_ceil(jobs);
+        let mut found: Vec<Vec<Vec<u32>>> = vec![Vec::new(); n.div_ceil(chunk)];
+        let work: Vec<Job<'_>> = found
+            .iter_mut()
+            .enumerate()
+            .map(|(j, out)| {
+                let bounds = &bounds;
+                Box::new(move || {
+                    *out = vec![Vec::new(); parts];
+                    let from = j * chunk + 1;
+                    for code in from..(from + chunk).min(n + 1) {
+                        let text = self.get(code as u32);
+                        out[bounds.partition_point(|b| *b <= text)].push(code as u32);
+                    }
+                }) as Job<'_>
+            })
+            .collect();
+        run(work);
+        let mut codes = Vec::with_capacity(n);
+        let mut ends = Vec::with_capacity(parts);
+        for part in 0..parts {
+            for job in &found {
+                codes.extend_from_slice(&job[part]);
+            }
+            ends.push(codes.len());
+        }
+        drop(found);
+        // The jobs take the parts one at a time, so a large part does not keep the other jobs waiting.
+        let mut slices = Vec::with_capacity(parts);
+        let mut rest = codes.as_mut_slice();
+        let mut start = 0;
+        for &end in &ends {
+            let (slice, after) = rest.split_at_mut(end - start);
+            slices.push(slice);
+            rest = after;
+            start = end;
+        }
+        let queue = std::sync::Mutex::new(slices);
+        let work: Vec<Job<'_>> = (0..jobs)
+            .map(|_| {
+                let queue = &queue;
+                Box::new(move || {
+                    loop {
+                        let next =
+                            queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop();
+                        let Some(slice) = next else { break };
+                        sort_bytes(slice, |c| self.get(c));
+                    }
+                }) as Job<'_>
+            })
+            .collect();
+        run(work);
+        codes
     }
 
     /// True when the dictionary has the places of [`Dictionary::order`], so that they cost nothing.
@@ -201,6 +277,21 @@ impl Dictionary {
         self.base
     }
 }
+
+/// A job of [`Dictionary::order_on`], which can borrow the data of the caller.
+pub type Job<'a> = Box<dyn FnOnce() + Send + 'a>;
+
+/// Runs the jobs of [`Dictionary::order_on`], and returns when all of them ended.
+pub type Run<'r> = dyn for<'a> Fn(Vec<Job<'a>>) + 'r;
+
+/// The fewest strings of a dictionary whose [`Dictionary::order_on`] sorts on many jobs.
+const PARALLEL_ORDER: usize = 1 << 16;
+
+/// The parts of [`Dictionary::order_on`] for each job.
+const PARTS_OF_JOB: usize = 8;
+
+/// The strings of the sample of [`Dictionary::order_on`] for each part.
+const SAMPLE_OF_PART: usize = 32;
 
 /// A run of codes shorter than this is sorted by a compare of the bytes after the digits that it has in common.
 const SMALL_RUN: usize = 32;
@@ -218,9 +309,12 @@ fn sort_bytes<'a>(codes: &mut [u32], get: impl Fn(u32) -> &'a [u8]) {
         keys.clear();
         keys.extend(run.iter().map(|&c| {
             let rest = &get(c)[depth..];
+            // Eight bytes come in one read. A copy of fewer bytes, of a length that the compiler does not know, would call `memmove`.
             let mut digit = [0_u8; 8];
-            let n = rest.len().min(8);
-            digit[..n].copy_from_slice(&rest[..n]);
+            match rest.first_chunk::<8>() {
+                Some(first) => digit = *first,
+                None => digit.iter_mut().zip(rest).for_each(|(to, &b)| *to = b),
+            }
             // A text that ends in the digit comes before a longer text with the same digit, and one with more bytes after the digit gets 9.
             (u64::from_be_bytes(digit), rest.len().min(9) as u8, c)
         }));
@@ -243,6 +337,36 @@ fn sort_bytes<'a>(codes: &mut [u32], get: impl Fn(u32) -> &'a [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sort of the places on many jobs gives the places of a sort of the bytes, for texts with long common starts, texts that are the start of others, zero bytes and many equal parts of the sample.
+    #[test]
+    fn a_sort_on_many_jobs_is_the_sort_of_the_bytes() {
+        let mut dict = Dictionary::new();
+        let mut seed = 7_u64;
+        for i in 0..(PARALLEL_ORDER as u32 * 2) {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let mut text =
+                format!("http://www.example.com/{}/{}", seed % 3, seed >> 44).into_bytes();
+            text.truncate(12 + (seed >> 20) as usize % 40);
+            if i % 5 == 0 {
+                text.push(0);
+            }
+            dict.intern(&text);
+        }
+        let mut sorted: Vec<u32> = (1..=dict.len() as u32).collect();
+        sorted.sort_by(|&a, &b| dict.get(a).cmp(dict.get(b)));
+        let order = dict.order_on(4, &|jobs| {
+            std::thread::scope(|s| {
+                for job in jobs {
+                    s.spawn(job);
+                }
+            });
+        });
+        assert!(dict.len() > PARALLEL_ORDER);
+        for (place, &code) in sorted.iter().enumerate() {
+            assert_eq!(order[code as usize], place as u32 + 1, "{:?}", dict.get(code));
+        }
+    }
 
     /// The order of the codes is the order of a sort of their bytes, for texts with long common starts, texts that are the start of others, and zero bytes.
     #[test]

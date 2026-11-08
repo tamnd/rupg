@@ -2354,7 +2354,7 @@ fn tasks_top(
             ) => None,
             (oid::TEXT | oid::VARCHAR, Store::Code) if stored.kind == Kind::Text => {
                 let Some(dict) = stored.dict.as_ref() else { return Ok(None) };
-                Some(dict.order())
+                Some(dict_order(dict, Some(tasks)))
             }
             _ => return Ok(None),
         };
@@ -4267,6 +4267,14 @@ enum Mapped {
     Key(usize),
 }
 
+/// The places of [`Dictionary::order`] of `dict`, which the tasks `tasks` sort at the same time.
+fn dict_order<'d>(dict: &'d Dictionary, tasks: Option<&dyn Tasks>) -> &'d [u32] {
+    match tasks {
+        Some(tasks) => dict.order_on(tasks.parallelism(), &|jobs| tasks.run_all(jobs)),
+        None => dict.order(),
+    }
+}
+
 /// The number of the codes for which one task of [`code_map`] finds the values.
 const MAP_CODES: usize = 1 << 14;
 
@@ -4277,7 +4285,7 @@ fn code_map(exec: &Exec<'_>, tasks: &dyn Tasks, from: usize, kind: Mapped) -> Op
     if kind == Mapped::Order && u32::try_from(codes).ok()? >= 1 << 31 {
         return None;
     }
-    let order = (kind == Mapped::Order).then(|| dict.order());
+    let order = (kind == Mapped::Order).then(|| dict_order(dict, Some(tasks)));
     let mut values = vec![0_i64; codes + 1];
     let jobs: Vec<Job<'_>> = values
         .chunks_mut(MAP_CODES)
@@ -4974,7 +4982,7 @@ fn word_order(
                     Dict::Stored(_) => return None,
                 };
                 if dict.has_order() || groups.saturating_mul(4) >= dict.len() {
-                    let order = dict.order();
+                    let order = dict_order(dict, tasks);
                     concat(on_parts(tasks, groups, |range| {
                         range
                             .map(|g| words[g * width + k] as usize)
