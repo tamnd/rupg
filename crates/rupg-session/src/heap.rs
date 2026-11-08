@@ -2194,15 +2194,28 @@ impl Heap {
     }
 
     /// `GetSerializableTransactionSnapshot`: [`Heap::held_snapshot_in`] for the first statement of a transaction in `SERIALIZABLE`, and the record of the transaction, which `read_only` declares `READ ONLY`. The snapshot and the record are under the lock of the serializable transactions, so the commits before the snapshot are the ones that the record counts.
+    ///
+    /// The record of a `DEFERRABLE` transaction of the session `pid` waits for a safe snapshot, which [`Heap::serializable_safety`] tells.
     pub(crate) fn serializable_snapshot_in(
         &self,
         xmin: &AtomicU32,
-        read_only: bool,
+        (read_only, deferrable): (bool, bool),
+        pid: i32,
     ) -> (Snapshot, u64) {
         let mut ssi = self.ssi();
         let snapshot = self.held_snapshot_in(xmin);
-        let id = ssi.begin(snapshot.xmin(), read_only);
+        let id = ssi.begin(snapshot.xmin(), read_only, deferrable, pid);
         (snapshot, id)
+    }
+
+    /// `GetSafeSnapshot`: whether the snapshot of the read-only transaction of the record `sxact` is safe, unsafe, or not known yet (`None`).
+    pub(crate) fn serializable_safety(&self, sxact: u64) -> Option<bool> {
+        self.ssi().safety(sxact)
+    }
+
+    /// `GetSafeSnapshotBlockingPids` of the session `pid`.
+    pub(crate) fn safe_snapshot_blockers(&self, pid: i32) -> Vec<i32> {
+        self.ssi().safe_snapshot_blockers(pid)
     }
 
     /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a read of the table `relation` with the view.

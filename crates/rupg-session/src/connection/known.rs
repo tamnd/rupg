@@ -33,6 +33,8 @@ pub(super) struct Known {
     pub(super) ssi: bool,
     /// `transaction_read_only`.
     pub(super) read_only: bool,
+    /// `transaction_deferrable`.
+    pub(super) deferrable: bool,
     /// True when `default_toast_compression` is `pglz`.
     pub(super) pglz: bool,
 }
@@ -79,6 +81,8 @@ impl Known {
             ssi: settings.get_of(guc::known!("transaction_isolation")).as_deref()
                 == Some("serializable"),
             read_only: settings.get_of(guc::known!("transaction_read_only")).as_deref()
+                == Some("on"),
+            deferrable: settings.get_of(guc::known!("transaction_deferrable")).as_deref()
                 == Some("on"),
             pglz: settings.get_of(guc::known!("default_toast_compression")).as_deref()
                 == Some("pglz"),

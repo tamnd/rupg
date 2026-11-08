@@ -772,7 +772,7 @@ impl Connection {
                 }
                 None if ssi => {
                     let (snapshot, sxact) =
-                        heap.serializable_snapshot_in(&self.xmin_slot(), read_only);
+                        heap.serializable_snapshot_in(&self.xmin_slot(), (read_only, false), self.pid);
                     self.sxact.set(sxact);
                     kept.insert(snapshot).clone()
                 }
@@ -788,6 +788,43 @@ impl Connection {
             command: self.command.get(),
             serializable,
             sxact: self.sxact.get(),
+        }
+    }
+
+    /// `GetSafeSnapshot`: the first snapshot of a transaction in `SERIALIZABLE READ ONLY DEFERRABLE` waits until no writable serializable transaction that ran at the snapshot can make it see an anomaly, and the transaction takes a new snapshot after one that is unsafe. With a safe snapshot the transaction runs with no `SIREAD` locks and no conflicts.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel or the end of `statement_timeout` during the wait.
+    pub(super) fn safe_snapshot(&self) -> Result<(), Error> {
+        let deferred = {
+            let mut known = self.known.borrow_mut();
+            let known = known.of(&self.settings.borrow());
+            known.ssi && known.read_only && known.deferrable
+        };
+        if !deferred || self.snapshot.borrow().is_some() {
+            return Ok(());
+        }
+        let heap = self.store.heap();
+        loop {
+            self.holds_xmin.set(true);
+            let (snapshot, sxact) =
+                heap.serializable_snapshot_in(&self.xmin_slot(), (true, true), self.pid);
+            match self.reader().wait_safe(sxact) {
+                Ok(true) => {
+                    *self.snapshot.borrow_mut() = Some(snapshot);
+                    self.sxact.set(0);
+                    return Ok(());
+                }
+                Ok(false) => {
+                    heap.serializable_end(sxact, false);
+                    self.xmin_slot().store(0, Ordering::Release);
+                }
+                Err(error) => {
+                    heap.serializable_end(sxact, false);
+                    return Err(error);
+                }
+            }
         }
     }
 
@@ -2458,6 +2495,10 @@ impl Connection {
             } else if let Node::ExplainStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 self.explain(stmt, statement, &mut notices)
+            } else if query::is_query(node)
+                && let Err(error) = self.safe_snapshot()
+            {
+                Err(error)
             } else if query::is_query(node) {
                 drop(self.portals.get_mut().close(b""));
                 self.select(node, Some(statement), &mut notices, &mut late, &mut described)

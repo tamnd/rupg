@@ -271,6 +271,10 @@ fn pg_isolation_test_session_is_blocked(call: &Call<'_>, args: &[Value]) -> Resu
         return Err(Error::new(SqlState::NULL_VALUE_NOT_ALLOWED, "array must not contain nulls"));
     }
     let blocking = call.session.blocking_pids(pid);
+    // A wait for a safe snapshot blocks the session whichever sessions it waits for.
+    if !call.session.safe_snapshot_blocking_pids(pid).is_empty() {
+        return Ok(Value::Bool(true));
+    }
     let blocked = interesting
         .values
         .iter()
@@ -663,8 +667,10 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_blocking_pids" => pg_blocking_pids,
         "pg_cancel_backend" => pg_cancel_backend,
         "pg_terminate_backend" => pg_terminate_backend,
-        // No session waits for a safe snapshot, as a `SERIALIZABLE READ ONLY DEFERRABLE` transaction takes its snapshot with no wait.
-        "pg_safe_snapshot_blocking_pids" => |_, _| Ok(pids(Vec::new())),
+        "pg_safe_snapshot_blocking_pids" => |call, args| {
+            let [Value::Int4(pid)] = args else { return Err(bad_value()) };
+            Ok(pids(call.session.safe_snapshot_blocking_pids(*pid)))
+        },
         "pg_isolation_test_session_is_blocked" => pg_isolation_test_session_is_blocked,
         "pg_sleep" => pg_sleep,
         "pg_client_encoding" => pg_client_encoding,
