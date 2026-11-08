@@ -565,6 +565,18 @@ impl Cold {
         Some(Cold { rows: versions.len(), vectors, xmins })
     }
 
+    /// Checks that each vector of headers decodes and that the vectors have all the rows, with the versions of one vector in memory at a time.
+    fn check(&self) -> Result<()> {
+        let mut rows = 0;
+        for vector in &self.vectors {
+            rows += Cold::vector(vector)?.len();
+        }
+        if rows != self.rows {
+            return Err(rupg_common::persist::corrupt("the cold headers do not have their rows"));
+        }
+        Ok(())
+    }
+
     /// The versions of the headers, with no values.
     fn versions(&self) -> Result<Vec<Version>> {
         let mut versions = Vec::with_capacity(self.rows);
@@ -631,8 +643,8 @@ impl Persist for Cold {
             vectors.push([field()?, field()?, field()?, field()?, field()?]);
         }
         let cold = Cold { rows, vectors, xmins: Persist::take(input)? };
-        // A decode checks the bytes, so a bad image does not load.
-        cold.versions()?;
+        // A decode checks the bytes, so a bad image does not load. The check decodes one vector at a time, so that it does not hold the versions of all the rows.
+        cold.check()?;
         Ok(cold)
     }
 }
@@ -4095,6 +4107,50 @@ mod tests {
         let rows = heap.rows(7, view);
         let Some(Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
         tid.cast_unsigned()
+    }
+
+    /// Settled versions with no values, which cold headers keep.
+    fn settled(rows: u64) -> Vec<Version> {
+        (0..rows)
+            .map(|at| Version {
+                tid: at + 1,
+                made: at,
+                xmin: 3 + (at % 2) as u32,
+                cmin: 0,
+                xmax: 0,
+                cmax: 0,
+                aborted: 0,
+                next: 0,
+                len: 32,
+                values: Arc::default(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cold_headers_load_only_when_their_vectors_have_their_rows() {
+        let rows = VECTOR as u64 * 2 + 5;
+        let cold = Cold::of(&settled(rows)).unwrap();
+        let mut image = Vec::new();
+        cold.put(&mut image);
+        let back = Cold::take(&mut Reader::new(&image)).unwrap();
+        let got: Vec<(u64, u64, u32, u16)> =
+            back.versions().unwrap().iter().map(|v| (v.tid, v.made, v.xmin, v.len)).collect();
+        let want: Vec<(u64, u64, u32, u16)> =
+            settled(rows).iter().map(|v| (v.tid, v.made, v.xmin, v.len)).collect();
+        assert_eq!(got, want);
+        // A count of rows that the vectors do not have does not load.
+        let mut wrong =
+            Cold { rows: cold.rows + 1, vectors: cold.vectors.clone(), xmins: cold.xmins.clone() };
+        let mut image = Vec::new();
+        wrong.put(&mut image);
+        assert!(Cold::take(&mut Reader::new(&image)).is_err());
+        // A vector whose bytes do not decode does not load.
+        wrong.rows = cold.rows;
+        wrong.vectors[1][0] = wrong.vectors[1][0][..1].into();
+        let mut image = Vec::new();
+        wrong.put(&mut image);
+        assert!(Cold::take(&mut Reader::new(&image)).is_err());
     }
 
     #[test]

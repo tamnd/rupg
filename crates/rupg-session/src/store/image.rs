@@ -80,6 +80,8 @@ impl Store {
                 file.read_at(0, &mut bytes)?;
                 first = store.load(&bytes)?;
             }
+            // The load freed the memory of its checks, so the allocator gives those pages back to the system.
+            rupg_platform::alloc::trim();
         }
         let mut epoch = first;
         while let Some(records) = log::read(&*io, &path, epoch)? {
