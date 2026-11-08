@@ -35,6 +35,10 @@ pub(crate) struct ImageFile {
     log: Log,
     /// The number of the first log that the last image needs, which a checkpoint removes. The lock lets one checkpoint run at a time.
     first: Mutex<u64>,
+    /// The number of the records of the log that the last image has, or `u64::MAX` when the image does not have the records of the logs that the load read. A timed checkpoint writes no image while the log has no other record.
+    logged: AtomicU64,
+    /// The number of [`Heap::unlogged`] at the last image.
+    unlogged: AtomicU64,
     /// The mappings of the images whose bytes the frozen columns read. A mapping goes when no column reads it.
     maps: Mutex<Vec<Weak<dyn Mapping>>>,
     /// The time of the monotonic clock of the last release at the end of a statement, in milliseconds after 1, or 0 before the first release.
@@ -84,7 +88,9 @@ impl Store {
             rupg_platform::alloc::trim();
         }
         let mut epoch = first;
+        let mut redone = false;
         while let Some(records) = log::read(&*io, &path, epoch)? {
+            redone |= !records.is_empty();
             for record in &records {
                 store.redo(record)?;
             }
@@ -100,6 +106,9 @@ impl Store {
             path,
             log,
             first: Mutex::new(first),
+            // The log of the load is new, so it has no record.
+            logged: AtomicU64::new(if redone { u64::MAX } else { 0 }),
+            unlogged: AtomicU64::new(store.heap.unlogged()),
             maps: Mutex::new(mapped),
             released: AtomicU64::new(0),
         });
@@ -274,10 +283,32 @@ impl Store {
         self.write_image(file, &mut first)
     }
 
+    /// The timed checkpoint of `checkpoint_timeout`, which is [`Store::checkpoint`] when a change came after the last image, and true then. A store with no change since the image writes no image, as `CreateCheckPoint` skips a checkpoint that is not forced when no WAL came after the last one. So an idle server does not write and read again the whole image each time.
+    ///
+    /// # Errors
+    ///
+    /// The error of a write to the file.
+    pub fn timed_checkpoint(&self) -> Result<bool> {
+        let Some(file) = &self.image else {
+            return Ok(false);
+        };
+        let mut first = file.first.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if file.log.added() == file.logged.load(Ordering::Relaxed)
+            && self.heap.unlogged() == file.unlogged.load(Ordering::Relaxed)
+        {
+            return Ok(false);
+        }
+        self.write_image(file, &mut first)?;
+        Ok(true)
+    }
+
     /// The checkpoint of [`Store::checkpoint`], with the lock of the checkpoints and the number of the first log that the last image needs.
     fn write_image(&self, file: &ImageFile, first: &mut u64) -> Result<()> {
+        // The records up to this number are in the heap before the image, so the image has them.
+        let logged = file.log.added();
         let epoch = file.log.next(self.tasks.as_deref())?;
         let (bytes, imaged) = self.image_of(epoch);
+        let unlogged = imaged.unlogged();
         let fresh = file.path.with_extension("rupg-new");
         if file.io.exists(&fresh)? {
             file.io.remove(&fresh)?;
@@ -290,6 +321,8 @@ impl Store {
         file.io.sync_dir(file.path.parent().unwrap_or(Path::new(".")))?;
         file.log.remove(*first, epoch)?;
         *first = epoch;
+        file.logged.store(logged, Ordering::Relaxed);
+        file.unlogged.store(unlogged, Ordering::Relaxed);
         drop(bytes);
         self.map_image(file, imaged);
         Ok(())
