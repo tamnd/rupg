@@ -122,6 +122,8 @@ impl Store {
         };
         if release_due(&file.released, now) {
             self.release_mapped();
+            // The free pages of the heap of this thread and the free blocks of the arenas go back to the system too (spec/19 section 19.3.3).
+            rupg_platform::alloc::trim();
         }
     }
 
