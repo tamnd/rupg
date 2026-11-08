@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The sort of a dictionary by the bytes of its strings, for MIN and MAX of text and for ORDER BY of text, runs on all the tasks as a sample sort, which halves the first run of ClickBench q22, q23 and q31.
 - A correlated `EXISTS` or `NOT EXISTS` that reads one table no longer stops the reduction of the rows of a join to the rows that can join. In such a join the condition runs after the joins, once for each row of the table, as the semi join of the PostgreSQL plan of TPC-H Q21 comes after the joins with `supplier` and `nation`. TPC-H Q21 at scale 0.1 goes from 2.9 s to 0.8 s (#1415).
 - A `GROUP BY` of one key with `count(DISTINCT)` of one column and other aggregates runs on the tasks: they fold the other aggregates and count the pairs of a group and a value. ClickBench q10 went from 165 ms to 41 ms on 2M rows.
 - `ORDER BY count(*) DESC LIMIT n` over a `GROUP BY` of many groups whose hash table spills runs on the tasks, which give only the groups that can change the bounded heap of the sort, also when the counts tie: ClickBench q33 went from 336 ms to 131 ms on 2M rows.
