@@ -184,6 +184,9 @@ pub(crate) type RowStrength = u8;
 /// `LockTupleKeyShare`: the lock of `FOR KEY SHARE`, which a check of a foreign key takes.
 pub(crate) const KEY_SHARE: RowStrength = 1;
 
+/// `LockTupleShare`: the lock of `FOR SHARE`.
+pub(crate) const SHARE: RowStrength = 2;
+
 /// `LockTupleNoKeyExclusive`: the lock of `FOR NO KEY UPDATE`, which an `UPDATE` that changes no key column takes.
 pub(crate) const NO_KEY_UPDATE: RowStrength = 3;
 
@@ -5369,8 +5372,6 @@ mod tests {
         let snapshot = heap.snapshot();
         let tid = first_tid(&heap, &view(snapshot.clone(), 0, 0));
         let (a, b, c) = (heap.begin(2), heap.begin(3), heap.begin(4));
-        // `LockTupleShare`.
-        const SHARE: RowStrength = 2;
         let lock = |xid, strength| {
             heap.lock_row((7, tid), &view(snapshot.clone(), xid, 0), (xid, strength)).unwrap()
         };
