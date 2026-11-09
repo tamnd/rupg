@@ -1,0 +1,59 @@
+> CREATE TABLE ja (a int, b int, t text, s smallint)
+CREATE TABLE
+> INSERT INTO ja SELECT i % 50, CASE WHEN i % 7 = 0 THEN NULL ELSE i % 13 END, 't' || (i % 9), (i % 5)::smallint FROM generate_series(1, 400) i
+INSERT 0 400
+> CREATE TABLE jb (a int, b int, t text, s smallint)
+CREATE TABLE
+> INSERT INTO jb SELECT i % 40, CASE WHEN i % 11 = 0 THEN NULL ELSE i % 13 END, 't' || (i % 6), (i % 4)::smallint FROM generate_series(1, 300) i
+INSERT 0 300
+> ANALYZE ja
+ANALYZE
+> ANALYZE jb
+ANALYZE
+> SELECT count(*), sum(x.b), sum(y.b) FROM ja x JOIN jb y ON x.a = y.a AND x.b = y.b
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 141,834,834
+SELECT 1
+> SELECT count(*) FROM ja x JOIN jb y ON x.a = y.a AND x.t = y.t AND x.s = y.s
+fields count:20:8:-1
+row 55
+SELECT 1
+> SELECT count(*), count(y.a) FROM ja x LEFT JOIN jb y ON x.a = y.a AND x.b = y.b
+fields count:20:8:-1,count:20:8:-1
+row 400,141
+SELECT 1
+> SELECT count(*), count(x.a), count(y.a) FROM ja x FULL JOIN jb y ON x.a = y.a AND x.b = y.b
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 559,400,300
+SELECT 1
+> SELECT x.a, x.b, y.t FROM ja x JOIN jb y ON x.t = y.t AND x.b = y.b WHERE x.a < 3 ORDER BY 1, 2, 3 LIMIT 12
+fields a@ja.1:23:4:-1,b@ja.2:23:4:-1,t@jb.3:25:-1:-1
+row 0,1,t3
+row 0,1,t3
+row 0,1,t3
+row 0,1,t3
+row 0,5,t2
+row 0,5,t2
+row 0,5,t2
+row 0,9,t1
+row 0,9,t1
+row 0,9,t1
+row 0,9,t1
+row 0,10,t4
+SELECT 12
+> SELECT count(*) FROM ja x JOIN jb y ON x.a = y.a AND x.b = y.a
+fields count:20:8:-1
+row 88
+SELECT 1
+> SELECT count(*) FROM ja x JOIN jb y ON x.a = y.a AND x.b = y.b AND x.t <> y.t
+fields count:20:8:-1
+row 116
+SELECT 1
+> SELECT count(*) FROM ja x JOIN jb y ON x.a = y.a AND x.tableoid = y.tableoid
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM ja x JOIN jb y ON x.b = y.b AND x.s = y.s AND x.a + 1 = y.a
+fields count:20:8:-1
+row 22
+SELECT 1

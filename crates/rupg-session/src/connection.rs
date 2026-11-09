@@ -4486,6 +4486,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/index_scan_order.test")));
     }
 
+    /// A join with more than one `=` of columns gives the rows of PostgreSQL 19: a null in a column of an `=` matches no row, an outer join keeps the rows that match none, and an `=` of `text`, `smallint` or a system column tests each pair of rows.
+    #[test]
+    fn join_keys() {
+        big_stack(|| script_tasks(include_str!("connection/join_keys.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
