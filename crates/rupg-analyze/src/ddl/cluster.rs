@@ -340,6 +340,7 @@ impl Definer<'_, '_> {
             if options.analyze {
                 return Err(analyze_multiple());
             }
+            self.an.env.relation_lock(table, super::ACCESS_EXCLUSIVE)?;
             return self.tables_of_partitioned(stmt, &target, command).map(Some);
         }
         let index = match stmt.indexname.as_deref() {

@@ -502,16 +502,38 @@ impl Locks {
 
     /// `DeadLockCheck` for the request of `owner`: a cycle of waits that starts at the owner and comes back to it, or `None`. A request waits for each other owner that holds a mode that conflicts, and for each other owner before it in the queue with a mode that conflicts.
     pub(crate) fn deadlock(&self, owner: i32) -> Option<Vec<Edge>> {
-        let table = self.table();
-        let mut waits: HashMap<i32, (Tag, usize)> = HashMap::new();
-        for (tag, lock) in table.iter() {
-            for (at, wait) in lock.queue.iter().enumerate() {
-                waits.insert(wait.owner, (*tag, at));
+        let mut table = self.table();
+        let mut moved = false;
+        let cycle = loop {
+            let mut waits: HashMap<i32, (Tag, usize)> = HashMap::new();
+            for (tag, lock) in table.iter() {
+                for (at, wait) in lock.queue.iter().enumerate() {
+                    waits.insert(wait.owner, (*tag, at));
+                }
             }
+            let mut path = Vec::new();
+            let mut seen = HashSet::new();
+            if !find_cycle(&table, &waits, owner, owner, &mut path, &mut seen) {
+                break None;
+            }
+            // `DeadLockCheckRecurse` and `RearrangeLockQueue`: a request that no hold blocks waits only for requests before it in the queue, a soft edge of the cycle. The last such request of the cycle moves to the front of its queue, where it gets the lock, and the requests that it passes wait for it. A cycle with no such request is a deadlock.
+            let soft = path.iter().rev().find_map(|edge| {
+                let lock = table.get(&edge.tag)?;
+                let at = lock.waiting(edge.pid)?;
+                (at > 0 && !lock.held_against(edge.pid, lock.queue[at].mode))
+                    .then_some((edge.tag, at))
+            });
+            let Some((tag, at)) = soft else { break Some(path) };
+            let Some(lock) = table.get_mut(&tag) else { break Some(path) };
+            let wait = lock.queue.remove(at);
+            lock.queue.insert(0, wait);
+            moved = true;
+        };
+        drop(table);
+        if moved {
+            self.changed.notify_all();
         }
-        let mut path = Vec::new();
-        let mut seen = HashSet::new();
-        find_cycle(&table, &waits, owner, owner, &mut path, &mut seen).then_some(path)
+        cycle
     }
 
     /// `GetBlockerStatusData` for the request of `owner`: each other owner that holds a mode that conflicts with the mode of the request, and each other owner before it in the queue with a mode that conflicts.
@@ -887,6 +909,20 @@ mod tests {
         assert_eq!(locks.deadlock(2).unwrap()[0].pid, 2);
         locks.leave_queue(tag(2), 1);
         assert_eq!(locks.deadlock(2), None);
+    }
+
+    #[test]
+    fn soft_cycle() {
+        let locks = Locks::default();
+        assert_eq!(locks.request(tag(1), 1, EXCLUSIVE, true, true), Request::Granted);
+        assert_eq!(locks.request(tag(2), 2, ROW_EXCLUSIVE, true, true), Request::Granted);
+        assert_eq!(locks.request(tag(1), 2, SHARE, true, true), Request::Queued);
+        assert_eq!(locks.request(tag(2), 3, EXCLUSIVE, true, true), Request::Queued);
+        // Owner 1 waits only behind the request of owner 3, which waits for owner 2, which waits for owner 1. The request of owner 1 moves to the front and gets the lock.
+        assert_eq!(locks.request(tag(2), 1, ROW_EXCLUSIVE, true, true), Request::Queued);
+        assert_eq!(locks.deadlock(1), None);
+        assert!(locks.wait(tag(2), 1, true, Duration::ZERO, None));
+        assert_eq!(locks.deadlock(3), None);
     }
 
     #[test]
