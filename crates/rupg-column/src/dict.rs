@@ -416,6 +416,26 @@ impl<'a> Strings<'a> {
         let start = if at == 0 { 0 } else { u64::from_le_bytes(self.ends[at - 1]) as usize };
         &self.bytes[start..u64::from_le_bytes(self.ends[at]) as usize]
     }
+
+    /// The bytes of every string, in the order of the codes, so that one search can read many strings.
+    #[must_use]
+    pub fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The place in [`Strings::bytes`] where the string of `code` ends, which is where the string of the next code starts. The code 0 ends at 0.
+    ///
+    /// # Panics
+    ///
+    /// When `code` is not 0 and not a code of the dictionary.
+    #[must_use]
+    #[inline(always)]
+    pub fn end(self, code: u32) -> usize {
+        match code {
+            0 => 0,
+            _ => u64::from_le_bytes(self.ends[code as usize - 1]) as usize,
+        }
+    }
 }
 
 /// A job of [`Dictionary::order_on`], which can borrow the data of the caller.

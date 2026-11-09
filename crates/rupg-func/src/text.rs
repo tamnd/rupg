@@ -2,6 +2,7 @@
 
 use md5::{Digest, Md5};
 use rupg_catalog::names::{NAMEDATALEN, clip};
+use rupg_column::dict::Strings;
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::Category;
 use rupg_types::{Value, oid};
@@ -439,40 +440,16 @@ fn first_len(t: &[u8], utf8: bool) -> usize {
     if utf8 { char_len(t[0]).min(t.len()) } else { 1 }
 }
 
-/// The place of the first byte `b` in `t`. The scan tests 16 bytes at a time, which the compiler can do in one vector instruction.
-fn find_byte(t: &[u8], b: u8) -> Option<usize> {
-    let (chunks, rest) = t.as_chunks::<16>();
-    let mut at = 0;
-    for chunk in chunks {
-        let mut mask = 0_u32;
-        for (j, &c) in chunk.iter().enumerate() {
-            mask |= u32::from(c == b) << j;
-        }
-        if mask != 0 {
-            return Some(at + mask.trailing_zeros() as usize);
-        }
-        at += 16;
-    }
-    rest.iter().position(|&c| c == b).map(|i| at + i)
-}
-
 /// The result of the rest `p` of a pattern after `%` for the text `t`, when `p` is a literal with no `%` after it or with one `%` at the end. The literal is either at the end of the text or anywhere in it, and no later start of the match can give another result, so the result is `True` or `Abort`. A pattern of another form gives `None`.
 fn literal_tail(t: &[u8], p: &[u8]) -> Option<Like> {
     let end = p.iter().position(|&c| matches!(c, b'%' | b'_' | b'\\')).unwrap_or(p.len());
     let (literal, rest) = p.split_at(end);
-    let &first = literal.first()?;
+    if literal.is_empty() {
+        return None;
+    }
     let found = match rest {
         [] => t.ends_with(literal),
-        [b'%'] => {
-            let mut at = 0;
-            loop {
-                let Some(i) = find_byte(&t[at..], first) else { break false };
-                if t[at + i..].starts_with(literal) {
-                    break true;
-                }
-                at += i + 1;
-            }
-        }
+        [b'%'] => memchr::memmem::find(t, literal).is_some(),
         _ => return None,
     };
     Some(if found { Like::True } else { Like::Abort })
@@ -543,6 +520,68 @@ fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
         p = &p[1..];
     }
     Ok(if p.is_empty() { Like::True } else { Like::Abort })
+}
+
+/// The search of `LIKE` for a pattern `%literal%`, where the literal has no `%`, `_` or `\\`, in many texts of a dictionary at one time. A text matches such a pattern when its bytes hold the bytes of the literal, as [`match_text`] finds it. The bytes of the texts of a dictionary are one after the other, so one search of the bytes of many codes finds the matches of all of them, with a vector search for the literal and no call for each text.
+#[derive(Debug)]
+pub struct Infix {
+    /// The search for the literal.
+    finder: memchr::memmem::Finder<'static>,
+    /// True when the search is in the texts in ASCII lower case, for `ILIKE`. The pattern is then in lower case.
+    fold: bool,
+}
+
+impl Infix {
+    /// The search for `pattern`, or `None` when the pattern is not `%literal%` with at least one byte in the literal.
+    #[must_use]
+    pub fn new(pattern: &[u8], fold: bool) -> Option<Self> {
+        let start = pattern.iter().position(|&c| c != b'%')?;
+        let end = pattern.iter().rposition(|&c| c != b'%')? + 1;
+        let literal = &pattern[start..end];
+        if start == 0
+            || end == pattern.len()
+            || literal.iter().any(|&c| matches!(c, b'%' | b'_' | b'\\'))
+        {
+            return None;
+        }
+        Some(Self { finder: memchr::memmem::Finder::new(literal).into_owned(), fold })
+    }
+
+    /// Calls `found` for each code from `first` to `last` whose text matches, in the order of the codes. `first` is 1 or more, and `last` is a code of `strings`.
+    pub fn each(&self, strings: Strings<'_>, first: u32, last: u32, mut found: impl FnMut(u32)) {
+        if first > last {
+            return;
+        }
+        let start = strings.end(first - 1);
+        let stop = strings.end(last);
+        let bytes = &strings.bytes()[start..stop];
+        let folded;
+        let bytes = if self.fold {
+            folded = bytes.to_ascii_lowercase();
+            &folded[..]
+        } else {
+            bytes
+        };
+        let n = self.finder.needle().len();
+        let mut code = first;
+        let mut at = 0;
+        while let Some(i) = self.finder.find(&bytes[at..]) {
+            let hit = start + at + i;
+            while strings.end(code) <= hit {
+                code += 1;
+            }
+            let end = strings.end(code);
+            if hit + n <= end {
+                found(code);
+                // The rest of the text of the code cannot change the result.
+                at = end - start;
+                code += 1;
+            } else {
+                // The literal goes past the end of the text, so the search goes on at the next byte.
+                at += i + 1;
+            }
+        }
+    }
 }
 
 /// True when the `bytea` value matches the pattern of `LIKE`, byte by byte.
@@ -1144,21 +1183,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_a_byte_as_a_scan_of_each_byte() {
-        for len in 0..50 {
-            for at in 0..=len {
-                let mut t: Vec<u8> = (0..len).map(|i| b'a' + (i % 7) as u8).collect();
-                if at < len {
-                    t[at] = b'G';
-                    for later in [at + 3, at + 20] {
-                        if later < len {
-                            t[later] = b'G';
-                        }
-                    }
+    fn infix_finds_the_codes_that_match_text_finds() {
+        // Texts of the letters a, b and G, with every length up to 4, so that a literal can start in one text and end in the next.
+        let mut texts: Vec<Vec<u8>> = vec![Vec::new()];
+        for len in 1..=4 {
+            let mut next = Vec::new();
+            for t in texts.iter().filter(|t| t.len() == len - 1) {
+                for c in *b"abG" {
+                    let mut t = t.clone();
+                    t.push(c);
+                    next.push(t);
                 }
-                let want = t.iter().position(|&c| c == b'G');
-                assert_eq!(find_byte(&t, b'G'), want, "{len} {at}");
             }
+            texts.extend(next);
+        }
+        let bytes: Vec<u8> = texts.concat();
+        let ends: Vec<u64> = texts
+            .iter()
+            .scan(0, |end, t| {
+                *end += t.len() as u64;
+                Some(*end)
+            })
+            .collect();
+        let dict = rupg_column::dict::Dictionary::from_parts(bytes, ends, 0).unwrap();
+        let strings = dict.strings();
+        let last = u32::try_from(texts.len()).unwrap();
+        for pattern in ["%a%", "%ab%", "%%ba%%", "%aa%", "%bGa%", "%aaaa%", "%Ga%", "%g%"] {
+            for fold in [false, true] {
+                let infix = Infix::new(pattern.as_bytes(), fold).unwrap();
+                for (first, end) in [(1, last), (2, last - 1), (40, 41), (7, 7), (9, 8)] {
+                    let mut found = Vec::new();
+                    infix.each(strings, first, end, |code| found.push(code));
+                    let want: Vec<u32> = (first..=end)
+                        .filter(|&code| {
+                            let text = strings.get(code);
+                            let text = if fold { text.to_ascii_lowercase() } else { text.to_vec() };
+                            like_text(&text, pattern.as_bytes()).unwrap()
+                        })
+                        .collect();
+                    assert_eq!(found, want, "{pattern} {fold} {first} {end}");
+                }
+            }
+        }
+        for pattern in ["%", "%%", "a%", "%a", "%a_b%", "%a%b%", "%a\\%%", "ab"] {
+            assert!(Infix::new(pattern.as_bytes(), false).is_none(), "{pattern}");
         }
     }
 }
