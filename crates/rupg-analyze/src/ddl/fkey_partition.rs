@@ -29,6 +29,8 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         for partition in self.partdesc(foreign.table)? {
+            // `addFkRecurseReferenced` opens each partition of the referenced table with `ShareRowExclusiveLock`, so a write of the partition waits.
+            self.an.env.relation_lock(partition, super::SHARE_ROW_EXCLUSIVE)?;
             let index = self.partition_index(partition, con.index)?;
             let keys = self.map_keys(foreign.table, partition, &foreign.keys)?;
             let new = NewForeignKey {
@@ -123,6 +125,11 @@ impl Definer<'_, '_> {
         let oids: Vec<u32> = own.iter().map(|c| c.oid).collect();
         for con in own.iter().filter(|c| !oids.contains(&c.parent)) {
             let Some(foreign) = con.foreign.clone() else { continue };
+            // `CloneFkReferencing` opens the referenced table with `ShareRowExclusiveLock`, and its partitions too, so that a write of a referenced row waits for the new partition and its check.
+            self.an.env.relation_lock(foreign.table, super::SHARE_ROW_EXCLUSIVE)?;
+            for referenced in self.catalog.all_inheritors(foreign.table) {
+                self.an.env.relation_lock(referenced, super::SHARE_ROW_EXCLUSIVE)?;
+            }
             let keys = self.map_keys(parent, partition, &con.keys)?;
             let triggers = self.fk_triggers(con.oid, parent, true);
             if self.try_attach_foreign_key(partition, con, &keys, triggers)? {
