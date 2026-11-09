@@ -288,7 +288,7 @@ enum Dict {
     /// The dictionary of a column of the table.
     Stored(Arc<Stored>),
     /// The dictionary of the text values that an expression gives.
-    Own(Dictionary),
+    Own(Box<Dictionary>),
 }
 
 impl Dict {
@@ -1281,7 +1281,7 @@ impl<'q> Exec<'q> {
             false
         });
         let dict = (kind_of(expr.ty) == Some(Kind::Text)).then(|| {
-            self.dicts.push(Dict::Own(Dictionary::new()));
+            self.dicts.push(Dict::Own(Box::default()));
             self.dicts.len() - 1
         });
         Generic { template, vars, memo: None, null: None, dict }
@@ -3264,7 +3264,7 @@ fn grouped(
         session.interrupted()?;
         // The words of a key from a map are codes of its own dictionary.
         for (k, dict) in dicts {
-            scan.exec.dicts.push(Dict::Own(dict));
+            scan.exec.dicts.push(Dict::Own(Box::new(dict)));
             scan.exec.key_dicts.insert(std::ptr::from_ref(keys[k]), scan.exec.dicts.len() - 1);
         }
         // For `ORDER BY` of a count, the tasks can give only the groups of the result. A hash of the keys that can fail needs all the groups, as below.

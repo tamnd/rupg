@@ -1704,6 +1704,31 @@ impl Table {
         place_of(&self.versions, tid)
     }
 
+    /// The place of the version of each ID of `tids`, which go up, cold or not, or `None` for an ID with no version. A cold table decodes only the IDs of its headers, a vector at a time, and only the vectors up to the last ID.
+    fn places_of(&self, tids: &[u64]) -> Vec<Option<usize>> {
+        let Some(cold) = &self.cold else {
+            return tids.iter().map(|&tid| self.find(tid)).collect();
+        };
+        let mut out = Vec::with_capacity(tids.len());
+        let mut next = tids.iter().copied().peekable();
+        let mut first = 0;
+        for vector in &cold.vectors {
+            if next.peek().is_none() {
+                break;
+            }
+            // The headers decoded when they were made or read, so the decode does not fail.
+            let ids = integer::decode(&vector[0]).unwrap_or_default();
+            let last = ids.last().map_or(0, |&id| id as u64);
+            while let Some(tid) = next.next_if(|&tid| tid <= last) {
+                let at = ids.binary_search(&tid.cast_signed()).ok();
+                out.push(at.map(|at| first + at));
+            }
+            first += ids.len();
+        }
+        out.resize(tids.len(), None);
+        out
+    }
+
     /// `heap_page_prune_opt` for one key: the IDs of the versions that went, and of the versions that are dead to each snapshot, leave the list of the hash `hash` in the map `place`. So a read of a key that changed many times does not test each old version again until `VACUUM`. A version is dead when a transaction before `horizon` that is not in `running` deleted it, as in [`Heap::vacuum`].
     fn prune_key(&mut self, place: usize, hash: u64, (horizon, running): (u32, &BTreeSet<u32>)) {
         let Table { keys, versions, .. } = self;
@@ -2427,7 +2452,7 @@ impl Heap {
         Some((rows, out))
     }
 
-    /// The rows of [`Heap::visible_rows`] with no system columns, for only the versions `tids` of a table, in the order of the list. A version that the view does not see gives no row.
+    /// The rows of [`Heap::visible_rows`] with no system columns, for only the versions `tids` of a table, in the order of the list. A version that the view does not see gives no row. The frozen columns decode only the vectors with these versions and only the columns at `used`, so that a fetch of few rows of a long table does not put the values back into all its versions.
     pub(crate) fn rows_at(
         &self,
         relation: u32,
@@ -2435,17 +2460,44 @@ impl Heap {
         used: Option<&[bool]>,
         tids: &[u64],
     ) -> Vec<Vec<Value>> {
-        let mut guard = self.state();
-        let state = &mut *guard;
-        let Some(table) = state.tables.get(&(view.database, relation)) else {
+        let state = self.state();
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
             return Vec::new();
         };
+        let mut order: Vec<usize> = (0..tids.len()).collect();
+        order.sort_by_key(|&at| tids[at]);
+        let sorted: Vec<u64> = order.iter().map(|&at| tids[at]).collect();
+        // The place of each item of the list, then the places with no repeat, which go up as the IDs do.
+        let mut place = vec![None; tids.len()];
+        for (&at, found) in order.iter().zip(table.places_of(&sorted)) {
+            place[at] = found;
+        }
+        let mut places: Vec<usize> = place.iter().flatten().copied().collect();
+        places.sort_unstable();
+        places.dedup();
         let columns = used_columns(used);
-        tids.iter()
-            .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
-            .filter(|version| visible(version, view))
-            .map(|version| {
-                version_row(version, &version.values, &table.combos, columns.as_deref(), false)
+        let Some(values) = table.rows_at(&places, columns.as_deref()) else {
+            return Vec::new();
+        };
+        let mut values = values.into_iter();
+        let mut rows = Vec::with_capacity(places.len());
+        let decoded = table.versions_at(&places, |version| {
+            let values = values.next().unwrap_or_default();
+            rows.push(
+                visible(version, view)
+                    .then(|| version_row(version, &values, &table.combos, None, false)),
+            );
+        });
+        if decoded.is_none() {
+            return Vec::new();
+        }
+        // A version that the list has once gives its row with no copy.
+        let once = places.len() == place.iter().flatten().count();
+        place
+            .iter()
+            .filter_map(|found| {
+                let row = rows.get_mut(places.binary_search(&(*found)?).ok()?)?;
+                if once { row.take() } else { row.clone() }
             })
             .collect()
     }
@@ -4435,6 +4487,54 @@ mod tests {
         table.chill();
         assert!(table.cold.is_some());
         check(table, true);
+    }
+
+    #[test]
+    fn a_fetch_of_some_versions_of_a_cold_table_does_not_thaw_it() {
+        let heap = Heap::default();
+        let xid = heap.begin(1);
+        let row = |i: usize| {
+            vec![
+                Value::Int8(i as i64),
+                Value::Text(format!("t{}", i % 13)),
+                Value::Int8(i as i64 % 5),
+            ]
+        };
+        let rows = (0..VECTOR * 3 + 7).map(row).collect::<Vec<_>>();
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        heap.commit(xid);
+        let tids = {
+            let mut state = heap.state();
+            let table = state.tables.0.get_mut(&(1, 7)).unwrap();
+            table.freeze(None);
+            table.seal();
+            table.chill();
+            assert!(table.cold.is_some());
+            let mut tids = Vec::new();
+            table.each_version(|version| tids.push(version.tid));
+            tids
+        };
+        let reader = view(heap.snapshot(), heap.begin(1), 0);
+        let used = [true, false, true];
+        let all = heap.visible_rows(7, &reader, false, Some(&used));
+        // The places are not in order, one place is twice in the list, and one ID has no version.
+        let picked = [VECTOR * 2 + 3, 4, VECTOR + 1, 4, VECTOR * 3 + 6];
+        let mut list: Vec<u64> = picked.iter().map(|&at| tids[at]).collect();
+        list.insert(2, tids[tids.len() - 1] + 1000);
+        let want: Vec<Vec<Value>> = picked.iter().map(|&at| all[at].clone()).collect();
+        assert_eq!(heap.rows_at(7, &reader, Some(&used), &list), want);
+        assert_eq!(
+            heap.rows_at(7, &reader, None, &list[..1]),
+            [vec![
+                Value::Int8(picked[0] as i64),
+                Value::Text(format!("t{}", picked[0] % 13)),
+                Value::Int8(picked[0] as i64 % 5),
+                Value::Int8(tids[picked[0]].cast_signed()),
+            ]]
+        );
+        let state = heap.state();
+        let table = &state.tables.0[&(1, 7)];
+        assert!(table.cold.is_some() && table.frozen.is_some() && table.kept.is_none());
     }
 
     #[test]
