@@ -1355,12 +1355,11 @@ fn with_subqueries(
                 // The rows of a part of the query do not go into the cache, because another reader of the query can need all of them.
                 Some(want) => {
                     cache.want.set(Some(want));
-                    Rc::new(run_query(sub, params, session, cache, &frames, false)?)
+                    Rc::new(run_sub(sub, params, session, cache, &frames, false)?)
                 }
                 None => {
-                    let run = || {
-                        cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))
-                    };
+                    let run =
+                        || cache.rows(sub, || run_sub(sub, params, session, cache, &frames, false));
                     // `inline_cte` puts a query of `WITH` into each reference only when it has no volatile function, so each reference can read the rows of the first one.
                     match &relation.cte {
                         Some(cte) => cache.cte_rows(&cte.name, sub, run)?,
@@ -1421,6 +1420,53 @@ fn reads_all(query: &Query) -> bool {
         && !query.has_target_srfs()
         && agg::calls(query).is_empty()
         && window::calls(query).is_empty()
+}
+
+/// [`run_query`] for a subquery of `FROM`, a query of `WITH` or a sublink. A subquery with a locking clause, such as `WITH c AS (SELECT ... FOR UPDATE)`, locks its rows as its `LockRows` node does. When a transaction that committed after the snapshot changed one of them, the subquery runs again with a new snapshot, which reads the last version of the row, as `EvalPlanQual` does.
+fn run_sub(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    outer: &[Frame<'_>],
+    exists: bool,
+) -> Result<Vec<Vec<Value>>> {
+    if query.row_marks.is_empty() || query.write.is_some() {
+        return run_query(query, params, session, cache, outer, exists);
+    }
+    let plan = Plan {
+        query: Arc::new(query.clone()),
+        written: Arc::clone(&cache.written),
+        marks: Vec::new(),
+        run: None,
+        row_security: None,
+        reads: Arc::default(),
+    };
+    let Some(locking) = plan.locking() else {
+        return run_query(query, params, session, cache, outer, exists);
+    };
+    let width = query.targets.iter().filter(|t| !t.junk).count();
+    let mut attempt = |session: &dyn Session| -> Result<Option<Vec<Vec<Value>>>> {
+        // The queries of the plan of the locks are new, so the rows that the cache keeps by the address of a query stay out of it.
+        let fresh =
+            Cache { written: Arc::clone(&cache.written), depth: cache.depth, ..Cache::default() };
+        let limits = match &locking.limits {
+            Some(plan) => {
+                limit_values(&run_query(&plan.query, params, session, &fresh, outer, false)?)?
+            }
+            None => (0, None),
+        };
+        let rows = run_query(&locking.plan.query, params, session, &fresh, outer, false)?;
+        session.lock_subquery_rows((locking.plan.marks(), &locking.locks), rows, (width, limits))
+    };
+    let rows = match attempt(session)? {
+        Some(rows) => rows,
+        None => session
+            .with_new_snapshot(&mut attempt)?
+            .ok_or_else(|| Error::internal("a locked row changed in a session with no snapshot"))?,
+    };
+    // `EXISTS` needs one row.
+    Ok(if exists { rows.into_iter().take(1).map(|_| Vec::new()).collect() } else { rows })
 }
 
 /// Runs a query or a subquery and gives its rows, with no junk columns. `outer` has the rows of the queries outside a subquery, with the query just outside it last. With `exists`, the query runs as `simplify_EXISTS_query` makes it when it can, and gives one empty row when it has a row.
@@ -1540,7 +1586,7 @@ fn run_query(
             let Some(sub) = &relation.subquery else { return Ok(Vec::new()) };
             let mut frames = outer.to_vec();
             frames.push(Frame { tables, tuple, group: None });
-            run_query(sub, params, session, cache, &frames, false)
+            run_sub(sub, params, session, cache, &frames, false)
         };
         // A join and an index scan give their rows in the order of the plan, which a query with no `ORDER BY` shows. One table that gave at most one row has no order, so the planner does not run for it.
         let one = matches!(
@@ -3320,7 +3366,7 @@ impl<'a> Eval<'a> {
                         ) {
                             self.cache.want.set(Some(2));
                         }
-                        run_query(query, self.params, self.session, self.cache, &frames, exists)
+                        run_sub(query, self.params, self.session, self.cache, &frames, exists)
                     })?,
                 };
                 if let SubLinkKind::Multi { id, .. } = sub.kind {
@@ -4651,7 +4697,7 @@ mod agg;
 mod analyze;
 mod columnar;
 mod cursor;
-pub use cursor::Locking;
+pub use cursor::{Locking, limit_values};
 mod fold;
 mod hashed;
 mod insert;
