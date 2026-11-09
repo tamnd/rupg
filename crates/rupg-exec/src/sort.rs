@@ -336,6 +336,14 @@ impl<'a> Keys<'a> {
         }
     }
 
+    /// For one key whose sort function has an integer comparator: the kind of its integers, which [`memtuples`] needs.
+    pub(crate) fn one_radix(&self) -> Option<Radix> {
+        match self.keys.as_slice() {
+            [key] if key.sort.is_some() => key.radix.map(|(radix, _)| radix),
+            _ => None,
+        }
+    }
+
     /// For the first key with a sort function, when the function compares integers or bytes with no call: its column, true for a descending order, and true for nulls first.
     pub(crate) fn lead(&self) -> Option<(usize, bool, bool)> {
         let key = self.keys.iter().find(|key| key.sort.is_some())?;

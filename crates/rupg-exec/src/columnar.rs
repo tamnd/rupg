@@ -2739,6 +2739,44 @@ fn top_key(
     Some((std::ptr::from_ref(&**agg), descending, bound))
 }
 
+/// For `ORDER BY` of one key of `GROUP BY` with `LIMIT`, when the sort compares the key as integers with the radix sort of [`sort::memtuples`]: the place of the key in `GROUP BY`, true for a descending order, the kind of the integers, and the bound of the sort. The rules of [`top_key`] apply. Then the keys of the groups give the groups of the rows, as the counts do for [`top_key`], and the scan reads the first rows of only these groups.
+fn key_top(
+    query: &Query,
+    session: &dyn Session,
+    offset: usize,
+    count: Option<usize>,
+) -> Option<(usize, bool, sort::Radix, usize)> {
+    let count = count?;
+    if !crate::set_levels(&query.targets).is_empty()
+        || !query.distinct.is_empty()
+        || query.having.is_some()
+        || !top_safe(query)
+    {
+        return None;
+    }
+    let [key] = query.sort.as_slice() else { return None };
+    let place = query.group.iter().position(|g| g.target == key.target)?;
+    let bound = offset
+        .checked_add(count)
+        .filter(|b| *b > 0 && *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX))?;
+    let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+    let keys = sort::Keys::new(&query.sort, &types, session).ok()?;
+    Some((place, keys.one_native()?, keys.one_radix()?, bound))
+}
+
+/// The value of the key `k` of each group from the words of [`KeyWords`], or `None` when the key is not a word of integers or a group has a null key.
+fn key_ints(keys: &GroupKeys<'_>, k: usize) -> Option<Vec<i64>> {
+    let GroupKeys::Words { words, shapes, .. } = keys else { return None };
+    if !matches!(shapes.get(k), Some(Shape::Int(_))) {
+        return None;
+    }
+    let width = shapes.len() + 1;
+    words
+        .chunks(width)
+        .map(|group| (group[shapes.len()] >> k & 1 == 0).then_some(group[k].cast_signed()))
+        .collect()
+}
+
 /// The number of groups at the start of the order of the groups that make the rows of a query with `LIMIT` and no sort, which [`project`] reads before it stops: `OFFSET` and `LIMIT` together. `None` when a group can make no row or many rows, with `HAVING` or a set-returning function, and with `DISTINCT` or `ORDER BY`, which read each group.
 fn first_groups(query: &Query, offset: usize, count: Option<usize>) -> Option<usize> {
     (query.sort.is_empty()
@@ -2754,19 +2792,18 @@ fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i
     results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
 }
 
-/// The groups of the rows of `ORDER BY` of one count with `LIMIT`, after `OFFSET`, from [`top_key`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the counts as integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. With `heap`, `order` has only the groups that can change the bounded heap of the sort of more than `2 * bound` groups, and the sort is that heap. The sort gives one order for each list of counts, so the rows of the groups are not read. `None` for a call that is not a count, or when the plan has a scan in the order of an index.
+/// The integers of the groups by which `ORDER BY` with `LIMIT` sorts them: the count of [`top_key`] or the key of [`key_top`] of each group, true for a descending order, the kind of the integers, and the bound of the sort.
+type Ranked<'a> = (&'a [i64], bool, sort::Radix, usize);
+
+/// The groups of the rows of `ORDER BY` of one count or one key with `LIMIT`, after `OFFSET`, from [`Ranked`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. With `heap`, `order` has only the groups that can change the bounded heap of the sort of more than `2 * bound` groups, and the sort is that heap. The sort gives one order for each list of integers, so the rows of the groups are not read. `None` when the plan has a scan in the order of an index.
 fn count_top(
     query: &Query,
     session: &dyn Session,
-    results: &Results<'_>,
+    (counts, descending, radix, bound): Ranked<'_>,
     order: &[usize],
-    (agg, descending, bound): (*const Aggref, bool, usize),
     offset: usize,
     heap: bool,
 ) -> Result<Option<Vec<usize>>> {
-    let Some(counts) = top_counts(results, agg) else {
-        return Ok(None);
-    };
     // A plan with no `Sort` under the sort of the counts gives the rows in the order of its scans, which the sort keeps for equal counts, so the rows of the groups give the order.
     if session.join_order(query).is_some_and(|o| o.iter().any(|s| !s.keys.is_empty())) {
         return Ok(None);
@@ -2785,26 +2822,22 @@ fn count_top(
     // The count of each group and its place in `order`.
     let mut items: Vec<(i64, usize)> =
         order.iter().enumerate().map(|(n, &g)| (counts[g], n)).collect();
-    // The counts are `bigint`, whose comparator is `ssup_datum_signed_cmp`, so 40 or more groups take the radix sort.
+    // The comparator of the integers is `ssup_datum_signed_cmp` or `ssup_datum_int32_cmp`, so 40 or more groups take the radix sort.
     let datums: Vec<Option<u64>> =
-        items.iter().map(|&(c, _)| sort::Radix::Signed.normalize(c, descending)).collect();
+        items.iter().map(|&(c, _)| radix.normalize(c, descending)).collect();
     sort::memtuples(&mut items, &datums, false, false, &mut cmp)?;
     Ok(Some(items.into_iter().take(bound).skip(offset).map(|(_, n)| order[n]).collect()))
 }
 
-/// The groups of [`count_top`] from the counts alone, with no order of the groups. When the first `bound` counts in the order of the sort and the count after them are all different, the bounded heap of the sort keeps the same groups and gives them in the order of their counts for each order in which the groups come. `None` when two of these counts are equal, or for few groups.
+/// The groups of [`count_top`] from the integers alone, with no order of the groups. When the first `bound` counts in the order of the sort and the count after them are all different, the bounded heap of the sort keeps the same groups and gives them in the order of their counts for each order in which the groups come. `None` when two of these counts are equal, or for few groups.
 fn distinct_top(
     session: &dyn Session,
-    results: &Results<'_>,
-    (agg, descending, bound): (*const Aggref, bool, usize),
+    (counts, descending, _, bound): Ranked<'_>,
     offset: usize,
 ) -> Result<Option<Vec<usize>>> {
-    if results.groups <= bound.saturating_mul(4) {
+    if counts.len() <= bound.saturating_mul(4) {
         return Ok(None);
     }
-    let Some(counts) = top_counts(results, agg) else {
-        return Ok(None);
-    };
     // The first `bound + 1` counts in the order of the sort, with the last of them at the top of the heap. A larger rank is first in the sort.
     let rank = |c: i64| if descending { i128::from(c) } else { -i128::from(c) };
     let mut best: std::collections::BinaryHeap<std::cmp::Reverse<(i128, usize)>> =
@@ -3190,7 +3223,13 @@ fn grouped(
     // With `HAVING` of only aggregates, the scan also keeps the place of the first row of each group, and reads the values only for the groups that pass.
     let having_first =
         !keys.is_empty() && top.is_none() && first_groups.is_none() && having_first(query);
-    let lazy = top.is_some() || first_groups.is_some() || having_first;
+    // For `ORDER BY` of one key with `LIMIT`, the keys of the groups give the groups of the result, as the counts do for `top`.
+    let key_top = if keys.is_empty() || top.is_some() {
+        None
+    } else {
+        key_top(query, scan.exec.session, offset, count)
+    };
+    let lazy = top.is_some() || key_top.is_some() || first_groups.is_some() || having_first;
     let mut spots: Vec<[u32; 3]> = Vec::new();
     // The places and the types of the keys of the hash table of the plan. The scan finds the hash of each group from its first row, and keeps no values of the keys.
     let mut hashing = plan_keys(scan.exec.session, query);
@@ -3523,26 +3562,22 @@ fn grouped(
                     if new {
                         groups += 1;
                         new_rows.push(row_at);
-                        if let Some(places) = &hashing {
-                            if hash_error.is_none() {
-                                match key_hash(places, &cols, i, &exec.dicts) {
-                                    Ok(h) => hashes.push(h),
-                                    // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
-                                    Err(_) if hashes.is_empty() => {
-                                        hashing = None;
-                                        key_words.keep(
-                                            word,
-                                            batch_shapes.as_deref(),
-                                            &cols,
-                                            i,
-                                            &exec.dicts,
-                                            &mut key_values,
-                                        );
-                                    }
-                                    Err(error) => hash_error = Some(error),
+                        // The keys of the groups go into the words with no hash, and also with a hash for `key_top`, which reads them.
+                        let mut keep = hashing.is_none() || key_top.is_some();
+                        if let Some(places) = &hashing
+                            && hash_error.is_none()
+                        {
+                            match key_hash(places, &cols, i, &exec.dicts) {
+                                Ok(h) => hashes.push(h),
+                                // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                                Err(_) if hashes.is_empty() => {
+                                    hashing = None;
+                                    keep = true;
                                 }
+                                Err(error) => hash_error = Some(error),
                             }
-                        } else {
+                        }
+                        if keep {
                             key_words.keep(
                                 word,
                                 batch_shapes.as_deref(),
@@ -3905,9 +3940,19 @@ fn grouped(
         }
         _ => GroupKeys::Values(&key_values),
     };
+    let key_values = key_top.and_then(|(k, ..)| key_ints(&keys_of_groups, k));
+    let ranked: Option<Ranked<'_>> = match (top, key_top, &key_values) {
+        (Some((agg, descending, bound)), ..) => {
+            top_counts(&results, agg).map(|counts| (counts, descending, sort::Radix::Signed, bound))
+        }
+        (None, Some((_, descending, radix, bound)), Some(values)) => {
+            Some((values.as_slice(), descending, radix, bound))
+        }
+        _ => None,
+    };
     // The groups of `ORDER BY` of a count come from the counts alone when the counts of the result are all different, and then the scan needs no order of the groups.
-    let quick = match top {
-        Some(key) if !heap => distinct_top(session, &results, key, offset)?,
+    let quick = match ranked {
+        Some(ranked) if !heap => distinct_top(session, ranked, offset)?,
         _ => None,
     };
     let mut order = if quick.is_some() {
@@ -3917,13 +3962,9 @@ fn grouped(
         (0..groups).collect()
     } else {
         // With `ORDER BY` of a count, the order has only the groups that change the heap of [`count_top`], which keeps the same groups as with the full order.
-        let want = match (top, first_groups) {
-            (Some((agg, descending, bound)), _) if groups > bound.saturating_mul(4) => {
-                top_counts(&results, agg).map_or(Want::All, |counts| Want::Top {
-                    counts,
-                    descending,
-                    bound,
-                })
+        let want = match (ranked, first_groups) {
+            (Some((counts, descending, _, bound)), _) if groups > bound.saturating_mul(4) => {
+                Want::Top { counts, descending, bound }
             }
             (_, Some(first)) => Want::First(first),
             _ => Want::All,
@@ -3937,10 +3978,11 @@ fn grouped(
     };
     let mut chosen = None;
     let mut first_rows = Firsts::All(firsts.len());
-    if let Some(key) = top {
-        chosen = match quick {
-            Some(quick) => Some(quick),
-            None => count_top(query, session, &results, &order, key, offset, heap)?,
+    if top.is_some() || key_top.is_some() {
+        chosen = match (quick, ranked) {
+            (Some(quick), _) => Some(quick),
+            (None, Some(ranked)) => count_top(query, session, ranked, &order, offset, heap)?,
+            (None, None) => None,
         };
         // The groups of the result read their first rows, and the other groups read none.
         let mut wanted: Vec<usize> = match &chosen {
