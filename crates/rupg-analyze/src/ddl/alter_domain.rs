@@ -256,6 +256,7 @@ impl Definer<'_, '_> {
         let mut tables = Vec::new();
         self.rels_with_domain(domain, &origin, &mut tables, 0)?;
         for (table, columns) in tables {
+            self.an.env.relation_lock(table, super::SHARE)?;
             self.scans.push(table);
             self.domain_checks.push(DomainCheck { table, columns, check: check.clone() });
         }
