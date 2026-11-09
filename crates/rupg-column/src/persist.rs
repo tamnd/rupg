@@ -227,7 +227,7 @@ mod tests {
         }
     }
 
-    /// A dictionary that a read takes from a mapping keeps its strings in the mapping, finds each string, writes the same bytes, and copies its strings when it gets a new one.
+    /// A dictionary that a read takes from a mapping keeps its strings in the mapping, finds each string with no memory of its own, writes the same bytes, and copies its strings when it gets a new one.
     #[test]
     fn a_mapped_dictionary_owns_no_strings_until_it_grows() {
         let mut dict = Dictionary::new();
@@ -245,7 +245,7 @@ mod tests {
             assert_eq!(read.find(word.as_bytes()), code as u32 + 1);
         }
         assert_eq!(read.find(b"http://example.com/x"), crate::dict::MISSING);
-        assert!(read.footprint() > 0 && read.footprint() < 3000 * 16);
+        assert_eq!(read.footprint(), 0);
         assert_eq!(to_bytes(&read), bytes);
         assert_eq!(read.intern(b"new"), 3001);
         assert_eq!(read.intern(words[7].as_bytes()), 8);
