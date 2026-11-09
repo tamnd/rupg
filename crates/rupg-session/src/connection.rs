@@ -4560,6 +4560,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/distinct_mixed_tasks.test")));
     }
 
+    /// The scan counts `count(DISTINCT ROW(...))` by the words of the fields of each row, with a null field as a value of its own and `-0` as `0`: with a filter, `count(*)`, a key with a null group, a row of one field, the fields in two orders and `count(DISTINCT)` of a column in the same query. `connection/distinct_rows.test` has the rows of PostgreSQL 19 for the same queries.
+    #[test]
+    fn distinct_rows() {
+        big_stack(|| script_tasks(include_str!("connection/distinct_rows.test")));
+    }
+
     /// The tasks of the server give only the groups that can change the bounded heap of `ORDER BY` of one count with `LIMIT`, when the hash table of the plan spills and its groups go in the order of their first rows, and the counts at the end of the heap are equal: in both orders, with `OFFSET`, a filter, other aggregates and `count` of a column. The rows are the rows of the scan with no tasks, which reads all the groups.
     #[test]
     fn heap_groups_tasks() {
