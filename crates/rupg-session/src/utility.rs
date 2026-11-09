@@ -343,6 +343,14 @@ pub(crate) fn check_ts_config(
     })
 }
 
+/// Whether the `SET` `node` has a check hook that reads the catalog: `default_text_search_config`, `default_table_access_method` and `default_tablespace`. Only such a `SET` takes a snapshot, as `PlannedStmtRequiresSnapshot` takes none for a `SET`.
+pub(crate) fn checks_catalog(node: &Node) -> bool {
+    let Node::VariableSetStmt(stmt) = node else { return false };
+    let name = stmt.name.as_deref().unwrap_or("");
+    stmt.kind == VariableSetKind::VAR_SET_VALUE
+        && (is_ts_config(name) || is_table_am(name) || is_default_tablespace(name))
+}
+
 /// The check hook of `default_text_search_config` for a `SET` statement, which needs the catalog and runs before [`run`]. `None` for another statement.
 ///
 /// # Errors
@@ -352,15 +360,12 @@ pub(crate) fn ts_config(
     node: &Node,
     session: &dyn rupg_func::Session,
 ) -> Result<Option<String>, Error> {
+    if !checks_catalog(node) {
+        return Ok(None);
+    }
     let Node::VariableSetStmt(stmt) = node else { return Ok(None) };
     let name = stmt.name.as_deref().unwrap_or("");
-    if stmt.kind != VariableSetKind::VAR_SET_VALUE {
-        return Ok(None);
-    }
     let ts_config = is_ts_config(name);
-    if !ts_config && !is_table_am(name) && !is_default_tablespace(name) {
-        return Ok(None);
-    }
     match flatten(name, &stmt.args) {
         Ok(Some(value)) if ts_config => check_ts_config(&value, session).map(Some),
         Ok(Some(value)) => {

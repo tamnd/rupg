@@ -220,6 +220,7 @@ impl Heap {
                 cmax: 0,
                 aborted: 0,
                 next: 0,
+                key_kept: false,
                 len,
                 values: Arc::default(),
             };
