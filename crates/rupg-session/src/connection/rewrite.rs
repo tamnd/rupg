@@ -439,6 +439,11 @@ impl Connection {
             .iter()
             .map(|&i| !reshaped.is_empty() && holds_row_type(old, rel.columns[i].ty, &reshaped, 0))
             .collect();
+        // `ExecutorStart` checks the plan once for the statement. A plan that takes the values of the old row as its new row does not run, as the values of the row are its values already.
+        let passes = plan.passes_params();
+        if !rows.is_empty() {
+            plan.start(&reader)?;
+        }
         let mut new_rows = Vec::with_capacity(rows.len());
         for row in rows {
             // A row from before an `ADD COLUMN` has no value for the new columns, which are null, and the ID of the version is at the end of the row.
@@ -456,7 +461,8 @@ impl Connection {
                     }
                 })
                 .collect();
-            for mut values in plan.run_unchecked(&row, &reader)? {
+            let made = if passes { vec![row] } else { plan.run_started(&row, &reader)? };
+            for mut values in made {
                 for (column, value) in now.columns.iter().zip(&values) {
                     // `ATRewriteTable` checks only the valid not-null constraints.
                     if column.not_null && !column.not_null_invalid && value.is_null() {

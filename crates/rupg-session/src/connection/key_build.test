@@ -1,0 +1,104 @@
+> CREATE TABLE ku (a int NOT NULL, b numeric(10,2), c char(5), d text, e int)
+CREATE TABLE
+> INSERT INTO ku SELECT g, g, 'k' || g, 't' || g, CASE WHEN g = 20 THEN 10 ELSE g END FROM generate_series(1, 3000) g
+INSERT 0 3000
+> CREATE UNIQUE INDEX ku_a ON ku (a)
+CREATE INDEX
+> CREATE UNIQUE INDEX ku_e ON ku (e)
+ERROR 23505 could not create unique index "ku_e"
+> ALTER TABLE ku ADD PRIMARY KEY (a, e)
+ALTER TABLE
+> INSERT INTO ku VALUES (1, 1, 'x', 'x', 7)
+ERROR 23505 duplicate key value violates unique constraint "ku_a"
+> DROP INDEX ku_a
+DROP INDEX
+> INSERT INTO ku VALUES (1, 1, 'x', 'x', 7)
+INSERT 0 1
+> ALTER TABLE ku DROP CONSTRAINT ku_pkey
+ALTER TABLE
+> CREATE UNIQUE INDEX ku_ab ON ku (a, b)
+ERROR 23505 could not create unique index "ku_ab"
+> DELETE FROM ku WHERE a = 1 AND e = 7
+DELETE 1
+> CREATE UNIQUE INDEX ku_ab ON ku (a, b)
+CREATE INDEX
+> CREATE TABLE kn (a numeric, c char(5), v varchar(10), n int)
+CREATE TABLE
+> INSERT INTO kn VALUES (1.0, 'ab', 'x', NULL), (2, 'ab  ', 'y', NULL), (1.00, 'cd', 'z', 1)
+INSERT 0 3
+> CREATE UNIQUE INDEX kn_a ON kn (a)
+ERROR 23505 could not create unique index "kn_a"
+> CREATE UNIQUE INDEX kn_c ON kn (c)
+ERROR 23505 could not create unique index "kn_c"
+> CREATE UNIQUE INDEX kn_n ON kn (n)
+CREATE INDEX
+> CREATE UNIQUE INDEX kn_nd ON kn (n) NULLS NOT DISTINCT
+ERROR 23505 could not create unique index "kn_nd"
+> CREATE UNIQUE INDEX kn_v ON kn (v)
+CREATE INDEX
+> INSERT INTO kn VALUES (5, 'ef', 'x', 2)
+ERROR 23505 duplicate key value violates unique constraint "kn_v"
+> SELECT count(*) FROM kn
+fields count:20:8:-1
+row 3
+SELECT 1
+> CREATE TABLE kp (k int PRIMARY KEY, t text)
+CREATE TABLE
+> INSERT INTO kp SELECT g, 'p' || g FROM generate_series(1, 100) g
+INSERT 0 100
+> CREATE TABLE kf (id int, k int, q numeric(8,2) NOT NULL, s text)
+CREATE TABLE
+> INSERT INTO kf SELECT g, g % 100 + 1, g * 1.5, 's' || g FROM generate_series(1, 2000) g
+INSERT 0 2000
+> ALTER TABLE kf ADD FOREIGN KEY (k) REFERENCES kp
+ALTER TABLE
+> ALTER TABLE kf ADD CONSTRAINT kf_q CHECK (q > 0)
+ALTER TABLE
+> ALTER TABLE kf ADD CONSTRAINT kf_q2 CHECK (q > 10)
+ERROR 23514 check constraint "kf_q2" of relation "kf" is violated by some row
+> ALTER TABLE kf ALTER id SET NOT NULL
+ALTER TABLE
+> INSERT INTO kf VALUES (NULL, 1, 1, 'n')
+ERROR 23502 null value in column "id" of relation "kf" violates not-null constraint
+> ALTER TABLE kf ADD PRIMARY KEY (id)
+ALTER TABLE
+> INSERT INTO kf VALUES (1, 1, 1, 'n')
+ERROR 23505 duplicate key value violates unique constraint "kf_pkey"
+> ALTER TABLE kf ADD COLUMN z int DEFAULT 7
+ALTER TABLE
+> SELECT count(*), sum(z), min(id), max(id) FROM kf
+fields count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1
+row 2000,14000,1,2000
+SELECT 1
+> UPDATE kp SET k = 1000 WHERE k = 5
+ERROR 23503 update or delete on table "kp" violates foreign key constraint "kf_k_fkey" on table "kf"
+> INSERT INTO kf VALUES (9999, 500, 2, 'bad')
+ERROR 23503 insert or update on table "kf" violates foreign key constraint "kf_k_fkey"
+> ALTER TABLE kf DROP CONSTRAINT kf_k_fkey
+ALTER TABLE
+> INSERT INTO kf VALUES (9999, 500, 2, 'bad')
+INSERT 0 1
+> ALTER TABLE kf ADD CONSTRAINT kf_k_fkey FOREIGN KEY (k) REFERENCES kp
+ERROR 23503 insert or update on table "kf" violates foreign key constraint "kf_k_fkey"
+> ALTER TABLE kf ADD CONSTRAINT kf_k_fkey FOREIGN KEY (k) REFERENCES kp NOT VALID
+ALTER TABLE
+> ALTER TABLE kf VALIDATE CONSTRAINT kf_k_fkey
+ERROR 23503 insert or update on table "kf" violates foreign key constraint "kf_k_fkey"
+> DELETE FROM kf WHERE k = 500
+DELETE 1
+> ALTER TABLE kf VALIDATE CONSTRAINT kf_k_fkey
+ALTER TABLE
+> INSERT INTO ku VALUES (2, 2, 'y', 'y', 2)
+ERROR 23505 duplicate key value violates unique constraint "ku_ab"
+> CREATE UNIQUE INDEX ku_a2 ON ku (a)
+CREATE INDEX
+> INSERT INTO ku VALUES (3001, 2, 'y', 'y', 2)
+INSERT 0 1
+> CREATE UNIQUE INDEX ku_a2 ON ku (a)
+ERROR 42P07 relation "ku_a2" already exists
+> INSERT INTO ku VALUES (3001, 2, 'y', 'y', 2)
+ERROR 23505 duplicate key value violates unique constraint "ku_ab"
+> SELECT count(*) FROM ku
+fields count:20:8:-1
+row 3001
+SELECT 1

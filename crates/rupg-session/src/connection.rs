@@ -4609,6 +4609,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/scalar_join.test")));
     }
 
+    /// The build of a unique index, a primary key, a foreign key and a check constraint on the rows of a table, as after a load, gives the errors of PostgreSQL 19: a duplicate key, also of `numeric` and `char` values that are equal with other forms, two nulls with `NULLS NOT DISTINCT`, a row that a delete took away, a check that fails and a key that the referenced table does not have.
+    #[test]
+    fn key_build() {
+        big_stack(|| script_tasks(include_str!("connection/key_build.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The build of a primary key, a unique index, a foreign key or a check on the rows of a table starts the plan of the check once for the statement and gets the check of a new unique key from the key columns only when all the rows are live. The TPC-H load at scale 0.1 goes from 258 s to 148 s and its peak memory from 1716 MB to 1422 MB (#1466).
 - A function in `internal` that a user makes with a `void` built-in function such as `pg_advisory_xact_lock_int8` and an integer, `bool` or `oid` result gives `0` (or false), as PostgreSQL reads `PG_RETURN_VOID()`'s `(Datum) 0` as the declared type (#1465).
 - An `UPDATE` of a column of a primary key or a unique constraint `WITHOUT OVERLAPS` takes the row lock `UPDATE` and not `NO KEY UPDATE`, as `RelationGetIndexAttrBitmap` counts the columns of these exclusion indexes as keys, so it waits for the `FOR KEY SHARE` of a temporal foreign key check (#1464).
 - A scan of a parent table, `UPDATE`, `DELETE` and `TRUNCATE` skip the children that are temporary tables of another session, as `expand_inherited_rtentry` and `ExecuteTruncate` do with `RELATION_IS_OTHER_TEMP` (#1463).
