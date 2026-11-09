@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An aggregate without `GROUP BY` and without grouping sets in a columnar scan does not run the cost-based planner to find the hash table of its groups, because its plan has no such table. A fully pruned `SELECT count(*) ... WHERE` uses 0.72M instructions in place of 0.97M, and ClickBench q3 uses 0.17M in place of 0.41M.
 - `pg_get_multixact_stats()` gives the number of the multixacts, of their members, the bytes of the members and the oldest multixact. A row lock of a version that another transaction or subtransaction locks too makes a new multixact of all the lockers, as `MultiXactIdExpand` does, and the numbers only grow, as rupg never truncates them (#1456).
 - A filter of a columnar scan tests a dictionary vector of integers on its dictionary, each value once, and a packed vector of at most 8 bits on each offset of its width once, and then a row looks up its code or its offset (spec/09 section 9.6). A vector where no value or every value passes is not unpacked.
 - `nextval`, `currval`, `setval` and `pg_sequence_last_value` hold `RowExclusiveLock` on the sequence, as `lock_and_open_sequence` does, and read the facts of the sequence after the lock, so they wait for an `ALTER SEQUENCE` in progress and then use its new `MAXVALUE` or `RESTART`. `ALTER SEQUENCE` holds `ShareRowExclusiveLock` on the sequence, so it waits for a transaction that called `nextval` (#1454).
