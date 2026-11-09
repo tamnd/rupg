@@ -105,8 +105,9 @@ pub(super) fn top(
     bound: usize,
 ) -> Result<Vec<Entry>> {
     assert!(!keys.is_empty() && keys.len() <= KEYS && bound > 0, "a top has 1 to 4 keys");
+    // The keys of the plan are the columns that the top reads, so that a filter knows the columns that the scan decodes.
     let plan = Plan {
-        keys: Vec::new(),
+        keys: keys.iter().map(|k| groups::Input::Column(k.place)).collect(),
         folds: Vec::new(),
         bases: 0,
         filters: filters.to_vec(),

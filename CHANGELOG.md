@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A filter of a columnar scan on a column that the scan also reads for a key, an aggregate or a map does not test a dictionary vector or a narrow packed vector by a lookup for each row when only some of its values pass. The scan decodes the column once and tests the decoded values, in place of unpacking the codes for the filter and again for the scan. ClickBench q14 uses 167M instructions in place of 183M, q12 141M in place of 158M, and q25 82M in place of 99M.
 - A scan of a parent table checks the columns of each child against the parent after it locks the children, as `make_inh_translation_list` does, so a child whose column type a concurrent `ALTER TABLE` changed raises `attribute "a" of relation "c1" does not match parent's type` (#1461).
 - `pg_notification_queue_usage()` gives the part of the pages of the queue of the notifications in use, from the page of the first notification that a listener did not read to the page of the head of the queue, as `asyncQueueUsage` does with entries that `asyncQueueAddEntries` aligns and keeps within a page (#1460).
 - The order of the groups for a top of counts in a columnar `GROUP BY` sorts all the keys of only a first part of the groups when many groups have the same first key, and reads the places of integer keys and of text keys with a dictionary order from the words of the keys, one key at a time. ClickBench q40 (354,662 groups, 75% of them with the same first key) uses 862M instructions in place of 1107M.

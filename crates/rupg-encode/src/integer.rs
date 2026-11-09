@@ -367,7 +367,7 @@ pub fn fold(bytes: &[u8], mut emit: impl FnMut(i64, u64) -> Result<()>) -> Resul
     Ok(count)
 }
 
-/// Keeps the positions of `sel` whose values in the chunk `bytes` pass `test`, from the encoded form and with no decode of the rows (spec/09 section 9.6). With `every`, `sel` is empty and stands for every position of the chunk, and the positions that pass are written into it, so that the work follows the runs and the exceptions and not the rows. A chunk of one value tests the value once. A run length chunk tests each run once. A chunk of one dominant value with exceptions tests the dominant value once and each exception once. A dictionary chunk tests each value of its dictionary once, and a packed chunk of one unit of at most eight bits tests each offset that its width holds once; a row then looks up its code or its offset. `sel` holds positions of the chunk in increasing order. For the other kinds, for a wider packed chunk, and for a sparse chunk whose exceptions are not in increasing order, it leaves `sel` as it was and gives false, and the caller decodes the chunk.
+/// Keeps the positions of `sel` whose values in the chunk `bytes` pass `test`, from the encoded form and with no decode of the rows (spec/09 section 9.6). With `every`, `sel` is empty and stands for every position of the chunk, and the positions that pass are written into it, so that the work follows the runs and the exceptions and not the rows. A chunk of one value tests the value once. A run length chunk tests each run once. A chunk of one dominant value with exceptions tests the dominant value once and each exception once. A dictionary chunk tests each value of its dictionary once, and a packed chunk of one unit of at most eight bits tests each offset that its width holds once; a row then looks up its code or its offset. This lookup is work for each row, so without `per_row` such a chunk where some values pass and some do not gives false: a caller that decodes the chunk anyway tests the decoded values, and does not unpack the codes two times. `sel` holds positions of the chunk in increasing order. For the other kinds, for a wider packed chunk, and for a sparse chunk whose exceptions are not in increasing order, it leaves `sel` as it was and gives false, and the caller decodes the chunk.
 ///
 /// # Errors
 ///
@@ -377,6 +377,7 @@ pub fn keep(
     test: impl Fn(i64) -> bool,
     sel: &mut Vec<usize>,
     every: bool,
+    per_row: bool,
 ) -> Result<bool> {
     let mut reader = Reader::new(bytes);
     let kind = Kind::from_tag(reader.u8()?)?;
@@ -488,6 +489,9 @@ pub fn keep(
                 check_count(skip_chunk(&mut reader)?, count)?;
                 return fill(&reader, pass.contains(&true), count, sel, every);
             }
+            if !per_row {
+                return Ok(false);
+            }
             let codes = decode_chunk_as::<u32>(&mut reader)?;
             check_count(codes.len(), count)?;
             if codes.iter().any(|&code| code as usize >= pass.len()) {
@@ -511,6 +515,9 @@ pub fn keep(
             };
             if !pass.contains(&true) || !pass.contains(&false) {
                 return fill(&reader, pass.contains(&true), count, sel, every);
+            }
+            if !per_row {
+                return Ok(false);
             }
             let mut offsets = [0_u32; VALUES];
             let offsets = &mut offsets[..count];
@@ -1972,6 +1979,7 @@ mod tests {
         let tests: [&dyn Fn(i64) -> bool; 5] =
             [&|x| x != 0, &|x| x == 0, &|x| x > 1, &|x| x == 7, &|x| x % 3 == 1];
         let mut tested = Vec::new();
+        let mut whole_dict = false;
         for values in &shapes {
             for kind in [Kind::Constant, Kind::Rle, Kind::Sparse, Kind::Packed, Kind::Dict] {
                 let Some(bytes) = encode_only(kind, values).unwrap() else { continue };
@@ -1984,18 +1992,30 @@ mod tests {
                     (vec![0, 5, 999], false),
                     (vec![], false),
                 ] {
-                    for test in tests {
+                    for (test, per_row) in tests.into_iter().flat_map(|t| [(t, true), (t, false)]) {
                         let want: Vec<usize> =
                             sel.iter().copied().filter(|&i| test(values[i])).collect();
                         let mut got = if all { Vec::new() } else { sel.clone() };
                         let before = got.clone();
                         let wide = describe(&bytes).unwrap().contains("BITPACK[17]");
-                        if keep(&bytes, test, &mut got, all).unwrap() {
+                        let by_row = matches!(kind, Kind::Dict | Kind::Packed);
+                        let mixed =
+                            values.iter().any(|&x| test(x)) && !values.iter().all(|&x| test(x));
+                        if keep(&bytes, test, &mut got, all, per_row).unwrap() {
                             assert_eq!(got, want, "{kind:?} {all} {}", describe(&bytes).unwrap());
+                            // Without `per_row`, a dictionary chunk where some values pass and some do not is left to the caller.
+                            assert!(per_row || kind != Kind::Dict || !mixed, "{kind:?} {all}");
                             tested.push((kind, true));
+                            whole_dict |= kind == Kind::Dict && !per_row;
                         } else {
                             assert_eq!(got, before);
-                            assert!(kind == Kind::Packed && wide, "{}", describe(&bytes).unwrap());
+                            // Without `per_row`, a dictionary chunk gives false only when some of its values pass and some do not.
+                            assert!(
+                                (kind == Kind::Packed && wide)
+                                    || (!per_row && by_row && (kind == Kind::Packed || mixed)),
+                                "{kind:?} {per_row} {}",
+                                describe(&bytes).unwrap()
+                            );
                             tested.push((kind, false));
                         }
                     }
@@ -2006,8 +2026,10 @@ mod tests {
             assert!(tested.contains(&(kind, true)), "{kind:?}");
         }
         assert!(tested.contains(&(Kind::Packed, false)));
+        // Without `per_row`, a dictionary chunk where no value passes, or where each value passes, is still tested from its dictionary.
+        assert!(whole_dict);
         let bytes = encode_only(Kind::Constant, &[1; 10]).unwrap().unwrap();
-        assert!(keep(&bytes, |_| true, &mut vec![10], false).is_err());
+        assert!(keep(&bytes, |_| true, &mut vec![10], false, true).is_err());
     }
 
     fn round_trip(values: &[i64]) -> Vec<u8> {
