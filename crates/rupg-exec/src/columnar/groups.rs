@@ -53,6 +53,15 @@ pub(super) enum Input {
 }
 
 impl Input {
+    /// True when the key reads the column at `place`.
+    fn reads(&self, place: usize) -> bool {
+        match self {
+            Input::Column(p) | Input::Floor(p, _) | Input::Part(p, ..) => *p == place,
+            Input::Case { tests, then, .. } => *then == place || tests.iter().any(|t| t.0 == place),
+            Input::Const(_) => false,
+        }
+    }
+
     /// The places of the columns that the key reads.
     fn places(&self) -> Vec<usize> {
         match self {
@@ -208,6 +217,16 @@ pub(super) struct Map {
 }
 
 impl Plan {
+    /// True when a key, a fold or a map of the scan reads the stored column at `place`, so that the scan decodes the column of each vector that passes the filters.
+    fn reads(&self, place: usize) -> bool {
+        self.keys.iter().any(|k| k.reads(place))
+            || self.maps.iter().any(|m| m.from == place)
+            || self.folds.iter().any(|f| match *f {
+                Fold::CountArg(p) | Fold::Sum(p) | Fold::Min(p) | Fold::Max(p) => p == place,
+                Fold::Count | Fold::None => false,
+            })
+    }
+
     /// The place of the stored column that the scan decodes for the column at `place`: the column of codes of a map, or else the column.
     fn source(&self, stored: usize, place: usize) -> usize {
         place.checked_sub(stored).and_then(|m| self.maps.get(m)).map_or(place, |m| m.from)
@@ -699,7 +718,7 @@ pub(super) fn select<'p>(
             Verdict::Some => tests.push(filter),
         }
     }
-    // spec/09 section 9.6: a test of a vector of one value, of runs or of one value with exceptions reads the encoded values. Its column is then not decoded and the test leaves `tests`, so that the scan decodes the column when it reads it. A later test of a column that an earlier test decoded reads the decoded values. Until a test selects rows, `sel` is empty and stands for every row, so that the first test writes only the rows that pass.
+    // spec/09 section 9.6: a test of a vector of one value, of runs or of one value with exceptions reads the encoded values. Its column is then not decoded and the test leaves `tests`, so that the scan decodes the column when it reads it. A test whose work is a lookup for each row is not taken from the encoded values of a column that the scan reads, since the scan decodes the column anyway and the test then reads the decoded values. A later test of a column that an earlier test decoded reads the decoded values. Until a test selects rows, `sel` is empty and stands for every row, so that the first test writes only the rows that pass.
     sel.clear();
     let mut every = true;
     let mut t = 0;
@@ -712,6 +731,7 @@ pub(super) fn select<'p>(
                 |x| passes(test, false, x),
                 sel,
                 every,
+                !plan.reads(place),
             )?
         {
             every = false;
