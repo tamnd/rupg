@@ -146,6 +146,8 @@ impl Definer<'_, '_> {
         if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(owner_word(kind), relname(&rv)));
         }
+        // `AlterSequence` holds `ShareRowExclusiveLock` on the sequence, so it waits for the transactions that called `nextval`, and they wait for it.
+        self.lock(found, super::SHARE_ROW_EXCLUSIVE)?;
         let sequence = match found {
             Found::User(oid) => self.catalog.relation(oid),
             Found::Builtin(_) => None,

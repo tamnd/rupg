@@ -69,21 +69,26 @@ fn local(session: &dyn Session) -> Result<&std::cell::RefCell<Sequences>> {
 }
 
 /// `sequence_open`: the name and the `pg_sequence` row of a sequence. A relation of another kind is `42809`.
-fn open(relid: u32, session: &dyn Session) -> Result<(&str, &SequenceInfo)> {
+fn open(relid: u32, session: &dyn Session) -> Result<(&str, SequenceInfo)> {
     let Some((name, _)) = reg::class_name(relid, session) else {
         return Err(Error::internal(format!("could not open relation with OID {relid}")));
     };
-    let info = session
-        .catalog()
-        .and_then(|c| c.relation(relid))
-        .filter(|r| r.kind == RelKind::Sequence)
-        .and_then(|r| r.sequence.as_ref());
-    match info {
-        Some(info) => Ok((name, info)),
-        None => {
-            Err(Error::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not a sequence")))
-        }
-    }
+    let facts = |catalog: &rupg_catalog::Catalog| {
+        catalog
+            .relation(relid)
+            .filter(|r| r.kind == RelKind::Sequence)
+            .and_then(|r| r.sequence.clone())
+    };
+    let Some(info) = session.catalog().and_then(facts) else {
+        return Err(Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("\"{name}\" is not a sequence"),
+        ));
+    };
+    // `lock_and_open_sequence`: the transaction holds `RowExclusiveLock` on the sequence, so it waits for an `ALTER SEQUENCE` in progress, and then reads the facts that the `ALTER SEQUENCE` committed, as `AcceptInvalidationMessages` does.
+    session.lock_relations(&[], 0, Some(relid))?;
+    let latest = session.latest_catalog().and_then(|catalog| facts(&catalog));
+    Ok((name, latest.unwrap_or(info)))
 }
 
 /// The row of the file of a sequence: the row that the sessions changed, or the row of the file when it was made.
@@ -304,7 +309,7 @@ pub(crate) fn last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     if !crate::acl::sequence_allowed(relid, crate::acl::SELECT_USAGE, session)? {
         return Ok(Value::Null);
     }
-    let seq = row(info, session);
+    let seq = row(&info, session);
     Ok(if seq.is_called { Value::Int8(seq.last_value) } else { Value::Null })
 }
 
