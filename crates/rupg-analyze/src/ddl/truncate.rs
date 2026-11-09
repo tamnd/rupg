@@ -23,7 +23,12 @@ impl Definer<'_, '_> {
                 // `find_all_inheritors`: the partitions and the children of `INHERITS`, level by level. The parent checks the privileges for them.
                 let mut at = tables.len() - 1;
                 while at < tables.len() {
+                    let own = self.an.env.temp_number();
                     for child in self.catalog.children(tables[at]) {
+                        // `ExecuteTruncate` skips a temporary table of another session.
+                        if self.catalog.is_other_temp(child.oid, own) {
+                            continue;
+                        }
                         if !tables.contains(&child.oid) {
                             self.truncate_check_rel(Found::User(child.oid), &child.name)?;
                             self.check_not_in_use(child.oid, "TRUNCATE")?;
