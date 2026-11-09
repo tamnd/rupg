@@ -234,6 +234,25 @@ impl Column {
         Ok(())
     }
 
+    /// Keeps the rows of `sel` of the vector `at` of an integer or code column whose values pass `test`, from the encoded values with no decode, as [`integer::keep`]. With `every`, `sel` is empty and stands for every row of the vector. A null row holds a value, so a vector with null rows gives false, as a vector of an encoding that `integer::keep` cannot test, and leaves `sel` as it was.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not a vector or a row of `sel` is not in it.
+    pub fn keep(
+        &self,
+        at: usize,
+        test: impl Fn(i64) -> bool,
+        sel: &mut Vec<usize>,
+        every: bool,
+    ) -> Result<bool> {
+        let vector = &self.vectors[at];
+        if vector.nulls != Nulls::None || self.kind.store() == Store::Float {
+            return Ok(false);
+        }
+        integer::keep(&vector.data, test, sel, every)
+    }
+
     /// Decodes the vector `at` of a code column into `out`, which it clears first.
     ///
     /// # Errors
