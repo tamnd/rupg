@@ -1,0 +1,33 @@
+> CREATE TABLE tr (g int, a int, b text, c float8)
+CREATE TABLE
+> INSERT INTO tr SELECT CASE WHEN i % 97 = 0 THEN NULL ELSE i % 7 END, CASE WHEN i % 11 = 0 THEN NULL ELSE (i / 7) % 300 END, CASE WHEN i % 13 = 0 THEN NULL ELSE 't' || (i % 40) END, CASE WHEN i % 17 = 0 THEN -0.0 ELSE (i % 5)::float8 / 2 END FROM generate_series(1, 150000) i
+INSERT 0 150000
+> ANALYZE tr
+ANALYZE
+> SELECT count(*), count(DISTINCT (a, b)) FROM tr WHERE c > 0.5
+fields count:20:8:-1,count:20:8:-1
+row 84706,2845
+SELECT 1
+> SELECT count(DISTINCT (a, b, c)), count(DISTINCT ROW(a)), count(DISTINCT a) FROM tr
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 9095,301,300
+SELECT 1
+> SELECT g, count(DISTINCT (a, b)) AS d, count(*), max(a) FROM tr GROUP BY g ORDER BY g
+fields g@tr.1:23:4:-1,d:20:8:-1,count:20:8:-1,max:23:4:-1
+row 0,941,21208,299
+row 1,941,21208,299
+row 2,941,21208,299
+row 3,941,21208,299
+row 4,941,21208,299
+row 5,941,21207,299
+row 6,941,21207,299
+row NULL,1420,1546,299
+SELECT 8
+> SELECT count(DISTINCT (b, c)), count(DISTINCT (c, b)) FROM tr WHERE a IS NULL
+fields count:20:8:-1,count:20:8:-1
+row 77,77
+SELECT 1
+> SELECT count(DISTINCT (c)), count(DISTINCT c) FROM tr
+fields count:20:8:-1,count:20:8:-1
+row 5,5
+SELECT 1

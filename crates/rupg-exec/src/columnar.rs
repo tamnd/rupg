@@ -1611,6 +1611,8 @@ struct Call<'q> {
     states: States,
     /// For `min` and `max` of the row engine, the codes of a column of codes that each group saw. Each code goes into the state once, after the scan, as the result does not depend on the order or the number of the values.
     codes: Option<Codes>,
+    /// For `count(DISTINCT ROW(...))`, the number of each row of words that the scan saw, which goes into the sets of the groups in place of the row. A row has the word of each field, with 0 for a null, then a word with a bit for each null field, so that two rows have the same words when `record_eq` gives true.
+    tuples: FxMap<Box<[u64]>, u64>,
 }
 
 /// The states of the aggregate calls of all the groups after the scan, which give the results of the calls of a group.
@@ -3159,7 +3161,17 @@ fn grouped(
             .map(|p| p.name == "max");
         let codes =
             codes.then(|| Codes { seen: Vec::new(), best: Vec::new(), dict: usize::MAX, max });
-        aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes });
+        // The fields of a row go into the sets of `count(DISTINCT)` by their words. A `bpchar` does not compare the spaces at its end, so its words are not its equality.
+        if matches!(method, Method::Distinct)
+            && let Some(ExprKind::Row(fields, _)) = agg.args.first().map(|arg| &arg.kind)
+            && (fields.is_empty()
+                || fields.len() >= 64
+                || fields.iter().any(|f| f.ty == oid::BPCHAR || kind_of(f.ty).is_none()))
+        {
+            return Ok(None);
+        }
+        let tuples = FxMap::default();
+        aggs.push(Call { agg, key: std::ptr::from_ref(agg), method, states, codes, tuples });
     }
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
     // The map starts with room for the groups of a few batches at most. The estimate of the plan can be many times the real number of groups, and a map that is larger than the cache makes each row a miss. After each batch the map grows to the rate of new groups that the scan sees.
@@ -3620,12 +3632,62 @@ fn grouped(
                     Method::Count => None,
                     _ => call.agg.args.first(),
                 };
+                let fields = match arg.map(|arg| &arg.kind) {
+                    Some(ExprKind::Row(fields, _)) if matches!(call.method, Method::Distinct) => {
+                        Some(fields)
+                    }
+                    _ => None,
+                };
                 let col = match arg {
-                    Some(arg) if !matches!(call.method, Method::Row(_)) => {
+                    Some(arg) if !matches!(call.method, Method::Row(_)) && fields.is_none() => {
                         Some(exec.eval(arg, batch, sel)?)
                     }
                     _ => None,
                 };
+                if let (Some(fields), States::Distinct(states)) = (fields, &mut call.states) {
+                    let cols = fields
+                        .iter()
+                        .map(|f| exec.eval(f, batch, sel))
+                        .collect::<Result<Vec<_>>>()?;
+                    // A row is never null, so a row with null fields is counted too.
+                    let mut row = Vec::with_capacity(cols.len() + 1);
+                    let mut last: Option<(u32, u64)> = None;
+                    let mut last_row = Vec::with_capacity(cols.len() + 1);
+                    for (i, &id) in ids.iter().enumerate() {
+                        row.clear();
+                        let mut mask = 0_u64;
+                        for (k, col) in cols.iter().enumerate() {
+                            if col.null(i) {
+                                mask |= 1 << k;
+                                row.push(0);
+                            } else {
+                                let Some(w) = col.word(i) else {
+                                    bail = true;
+                                    return Ok(false);
+                                };
+                                row.push(w);
+                            }
+                        }
+                        row.push(mask);
+                        let tuple = match last {
+                            Some((_, tuple)) if row == last_row => tuple,
+                            _ => match call.tuples.get(&row[..]) {
+                                Some(&tuple) => tuple,
+                                None => {
+                                    let tuple = call.tuples.len() as u64;
+                                    call.tuples.insert(row.clone().into_boxed_slice(), tuple);
+                                    tuple
+                                }
+                            },
+                        };
+                        if last != Some((id, tuple)) {
+                            states[id as usize].insert(tuple);
+                            last = Some((id, tuple));
+                            last_row.clone_from(&row);
+                        }
+                    }
+                    continue;
+                }
                 match (&call.method, &mut call.states) {
                     (Method::Count, States::Count(states)) => {
                         for &id in &ids {
