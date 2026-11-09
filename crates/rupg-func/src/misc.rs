@@ -661,8 +661,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
                 .map(|(_, reason)| Value::Int4(reason))
         },
         "pg_notify" => pg_notify,
-        // The queue of the notifications has no pages, so no part of it is in use.
-        "pg_notification_queue_usage" => |_, _| Ok(Value::Float8(0.0)),
+        "pg_notification_queue_usage" => {
+            |call, _| Ok(Value::Float8(call.session.notification_queue_usage()))
+        }
         "pg_trigger_depth" => pg_trigger_depth,
         "pg_blocking_pids" => pg_blocking_pids,
         "pg_cancel_backend" => pg_cancel_backend,

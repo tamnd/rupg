@@ -9,6 +9,12 @@ use rupg_common::{Error, Result, SqlState};
 const NAME_LIMIT: usize = 64;
 /// `NOTIFY_PAYLOAD_MAX_LENGTH`: a payload has fewer bytes.
 const PAYLOAD_LIMIT: usize = 8000;
+/// `BLCKSZ`: the bytes of a page of the queue.
+const PAGE: u64 = 8192;
+/// `AsyncQueueEntryEmptySize`: the bytes of an entry of the queue with an empty channel name and an empty payload, the header and two terminating zeros.
+const ENTRY: u64 = 18;
+/// The default of `max_notify_queue_pages`: the pages that the queue can have.
+const QUEUE_PAGES: u64 = 1_048_576;
 
 /// A notification: the process ID of the session that sent it, the channel and the payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,28 +79,41 @@ impl Pending {
     }
 }
 
-/// A session that listens: its database, its channels and the notifications that it did not send yet.
+/// A session that listens: its database, its channels, the notifications that it did not send yet, and the place in the queue of the first of them, as `QUEUE_BACKEND_POS` keeps the place that the session read up to.
 #[derive(Debug)]
 struct Listener {
     database: u32,
     channels: BTreeSet<String>,
     queue: VecDeque<Notification>,
+    from: Option<u64>,
 }
 
-/// The listeners of a server, by the process ID of the session.
+/// The listeners of a server, by the process ID of the session, and `QUEUE_HEAD`: the place in bytes after the last entry of the queue.
 #[derive(Debug, Default)]
 pub(crate) struct Listeners {
-    table: Mutex<BTreeMap<i32, Listener>>,
+    table: Mutex<(BTreeMap<i32, Listener>, u64)>,
 }
 
 impl Listeners {
-    fn table(&self) -> MutexGuard<'_, BTreeMap<i32, Listener>> {
+    fn table(&self) -> MutexGuard<'_, (BTreeMap<i32, Listener>, u64)> {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `asyncQueueUsage`: the part of the pages of the queue that the notifications use, from the page of `QUEUE_TAIL`, the first notification that a listener did not read, to the page of `QUEUE_HEAD`.
+    pub(crate) fn usage(&self) -> f64 {
+        let guard = self.table();
+        let (table, head) = &*guard;
+        let tail = table.values().filter_map(|l| l.from).min().unwrap_or(*head);
+        let occupied = head / PAGE - tail / PAGE;
+        #[expect(clippy::cast_precision_loss, reason = "the pages of the queue fit in 53 bits")]
+        let usage = occupied as f64 / QUEUE_PAGES as f64;
+        usage
     }
 
     /// `AtCommit_Notify` and `SignalBackends`: the actions of the transaction of the session `pid` of the database `database` change its channels, then each notification goes to each session of the database that listens, the session itself too.
     pub(crate) fn commit(&self, pid: i32, database: u32, pending: Pending) {
-        let mut table = self.table();
+        let mut guard = self.table();
+        let (table, head) = &mut *guard;
         for action in pending.actions {
             match action {
                 Action::Listen(channel) => {
@@ -104,6 +123,7 @@ impl Listeners {
                             database,
                             channels: BTreeSet::new(),
                             queue: VecDeque::new(),
+                            from: None,
                         })
                         .channels
                         .insert(channel);
@@ -124,8 +144,16 @@ impl Listeners {
             table.remove(&pid);
         }
         for (channel, payload) in pending.notifies {
+            // `asyncQueueAddEntries`: an entry has its length aligned to 8 bytes, and an entry that does not fit in the rest of a page goes at the start of the next page.
+            let size = (ENTRY + (channel.len() + payload.len()) as u64).next_multiple_of(8);
+            if *head % PAGE + size > PAGE {
+                *head = head.next_multiple_of(PAGE);
+            }
+            let at = *head;
+            *head += size;
             for listener in table.values_mut().filter(|l| l.database == database) {
                 if listener.channels.contains(&channel) {
+                    listener.from.get_or_insert(at);
                     listener.queue.push_back(Notification {
                         pid,
                         channel: channel.clone(),
@@ -138,8 +166,10 @@ impl Listeners {
 
     /// `asyncQueueReadAllNotifications`: takes the notifications of the queue of the session `pid` on the channels that it listens on now.
     pub(crate) fn take(&self, pid: i32) -> Vec<Notification> {
-        let mut table = self.table();
+        let mut guard = self.table();
+        let table = &mut guard.0;
         let Some(listener) = table.get_mut(&pid) else { return Vec::new() };
+        listener.from = None;
         let queue = std::mem::take(&mut listener.queue);
         let notifications =
             queue.into_iter().filter(|n| listener.channels.contains(&n.channel)).collect();
@@ -151,12 +181,12 @@ impl Listeners {
 
     /// `pg_listening_channels`: the channels that the session `pid` listens on.
     pub(crate) fn channels(&self, pid: i32) -> Vec<String> {
-        self.table().get(&pid).map(|l| l.channels.iter().cloned().collect()).unwrap_or_default()
+        self.table().0.get(&pid).map(|l| l.channels.iter().cloned().collect()).unwrap_or_default()
     }
 
     /// `Async_UnlistenOnExit`: the session `pid` ends.
     pub(crate) fn leave(&self, pid: i32) {
-        self.table().remove(&pid);
+        self.table().0.remove(&pid);
     }
 }
 
@@ -189,5 +219,21 @@ mod tests {
         assert!(listeners.channels(1).is_empty());
         listeners.leave(2);
         assert!(listeners.channels(2).is_empty());
+    }
+
+    #[test]
+    fn the_usage_counts_the_pages_that_a_listener_did_not_read() {
+        let listeners = Listeners::default();
+        let mut pending = Pending::default();
+        pending.listen("c1");
+        listeners.commit(1, 5, pending);
+        let mut pending = Pending::default();
+        for n in 0..1000 {
+            pending.notify("c1", &n.to_string()).unwrap();
+        }
+        listeners.commit(2, 5, pending);
+        assert!(listeners.usage() > 0.0);
+        assert_eq!(listeners.take(1).len(), 1000);
+        assert!(listeners.usage() == 0.0);
     }
 }
