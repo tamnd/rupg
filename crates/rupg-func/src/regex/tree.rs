@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::hash::BuildHasherDefault;
 
-use super::exec::{FxMap, Program};
+use super::exec::{FxMap, Program, char_at, count, starts};
 use super::parse::{DUPINF, Node, Parsed, to_lower};
 use super::{Code, flags};
 
@@ -318,12 +318,12 @@ impl Tree {
     }
 
     /// `cfindloop`: the leftmost match from `from` for a pattern with back references. The search finds the first end of a match of the program of the root, then tries each start up to that end. When no start gives a match, the search goes on after the end, but only while that position is before the end of the text, so a match that starts at the end of the text is found only by the first search.
-    pub(super) fn cfind(&self, s: &[u32], from: usize) -> Option<Groups> {
+    pub(super) fn cfind(&self, s: &[u8], from: usize) -> Option<Groups> {
         let mut d = Dissect::new(self, s, Vec::new());
         let mut close = from;
         loop {
             let mut first: Option<usize> = None;
-            for begin in close..=s.len() {
+            for begin in (close..=s.len()).filter(|&begin| starts(s, begin)) {
                 if first.is_some_and(|end| begin > end) {
                     break;
                 }
@@ -333,10 +333,13 @@ impl Tree {
                 }
             }
             let end = first?;
-            if let Some(groups) = (close..=end).find_map(|begin| self.find(s, begin)) {
+            if let Some(groups) = (close..=end)
+                .filter(|&begin| starts(s, begin))
+                .find_map(|begin| self.find(s, begin))
+            {
                 return Some(groups);
             }
-            close = end + 1;
+            close = if end < s.len() { end + char_at(s, end).1 } else { end + 1 };
             if close >= s.len() {
                 return None;
             }
@@ -344,7 +347,7 @@ impl Tree {
     }
 
     /// `cfindloop`: the positions of the leftmost match that starts at `begin`, the longest or the shortest as the root prefers.
-    pub(super) fn find(&self, s: &[u32], begin: usize) -> Option<Groups> {
+    pub(super) fn find(&self, s: &[u8], begin: usize) -> Option<Groups> {
         let (mut ends, mut arena) = std::mem::take(&mut *self.scratch.borrow_mut());
         ends.clear();
         arena.clear();
@@ -391,7 +394,8 @@ impl Tree {
 /// The state of the dissection of one match.
 struct Dissect<'a> {
     tree: &'a Tree,
-    s: &'a [u32],
+    /// The text in UTF-8. A position is the byte where a character starts.
+    s: &'a [u8],
     /// The ends of the matches of each program from each start.
     ends: FxMap<(usize, usize), usize>,
     /// The ends of each program and start in [`Dissect::ends`], one bit for each position of the text, from the word that the map gives.
@@ -400,10 +404,15 @@ struct Dissect<'a> {
 }
 
 impl<'a> Dissect<'a> {
-    fn new(tree: &'a Tree, s: &'a [u32], pmatch: Groups) -> Self {
+    fn new(tree: &'a Tree, s: &'a [u8], pmatch: Groups) -> Self {
         let ends = FxMap::with_capacity_and_hasher(8, BuildHasherDefault::default());
         let arena = Vec::with_capacity(8 * words(s.len()));
         Dissect { tree, s, ends, arena, pmatch }
+    }
+
+    /// The number of characters from the position `from` up to the position `to`.
+    fn dist(&self, from: usize, to: usize) -> usize {
+        count(&self.s[from..to])
     }
 
     /// The ends of the matches of a node from a start, one bit for each position.
@@ -548,32 +557,62 @@ impl<'a> Dissect<'a> {
     /// `cbrdissect`: the text is `min` to `max` copies of the text of the group.
     fn backref(&self, number: usize, (min, max): (u32, u32), begin: usize, end: usize) -> bool {
         let Some((so, eo)) = self.pmatch.get(number).copied().flatten() else { return false };
-        let len = eo - so;
-        if len == 0 {
-            return begin == end;
+        if self.tree.icase {
+            // The copies of a group without the case can have other bytes than the group, so the check counts characters. With the case, the copies have the bytes of the group.
+            let group = chars(&self.s[so..eo]);
+            let text = chars(&self.s[begin..end]);
+            return copies(&group, &text, (min, max), self.tree.icase, self.tree.unicode);
         }
-        if begin == end {
-            return min == 0;
-        }
-        let total = end - begin;
-        if !total.is_multiple_of(len) {
-            return false;
-        }
-        let reps = total / len;
-        if reps < min as usize || (max != DUPINF && reps > max as usize) {
-            return false;
-        }
-        let group = &self.s[so..eo];
-        self.s[begin..end].chunks(len).all(|copy| {
-            if self.tree.icase {
-                let unicode = self.tree.unicode;
-                copy.iter().zip(group).all(|(&a, &b)| to_lower(a, unicode) == to_lower(b, unicode))
-            } else {
-                copy == group
-            }
-        })
+        copies(&self.s[so..eo], &self.s[begin..end], (min, max), self.tree.icase, self.tree.unicode)
     }
+}
 
+/// The characters of the UTF-8 text `s`.
+fn chars(s: &[u8]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut at = 0;
+    while at < s.len() {
+        let (c, width) = char_at(s, at);
+        out.push(c);
+        at += width;
+    }
+    out
+}
+
+/// `cbrdissect`: true when the characters `text` are `min` to `max` copies of the characters `group`, without the case with `icase`.
+fn copies<T: Copy + Into<u32> + PartialEq>(
+    group: &[T],
+    text: &[T],
+    (min, max): (u32, u32),
+    icase: bool,
+    unicode: bool,
+) -> bool {
+    let len = group.len();
+    if len == 0 {
+        return text.is_empty();
+    }
+    if text.is_empty() {
+        return min == 0;
+    }
+    if !text.len().is_multiple_of(len) {
+        return false;
+    }
+    let reps = text.len() / len;
+    if reps < min as usize || (max != DUPINF && reps > max as usize) {
+        return false;
+    }
+    text.chunks(len).all(|copy| {
+        if icase {
+            copy.iter()
+                .zip(group)
+                .all(|(&a, &b)| to_lower(a.into(), unicode) == to_lower(b.into(), unicode))
+        } else {
+            copy == group
+        }
+    })
+}
+
+impl<'a> Dissect<'a> {
     /// The check of the matches of an iteration from `first` to `last` with the ends in `endpts`. The return value is the number of the first match that fails, or `None` when all hold.
     fn verify(
         &mut self,
@@ -594,7 +633,7 @@ impl<'a> Dissect<'a> {
     /// `citerdissect`: the longest matches of the child first.
     fn iter(&mut self, child: &'a Sub, (min, max): (u32, u32), begin: usize, end: usize) -> bool {
         let min_matches = (min as usize).max(1);
-        let max_matches = bounded(end - begin, max).max(min_matches);
+        let max_matches = bounded(self.dist(begin, end), max).max(min_matches);
         let mut endpts = vec![begin; max_matches + 1];
         let mut nverified = 0;
         let mut k = 1;
@@ -607,7 +646,7 @@ impl<'a> Dissect<'a> {
                     if k >= max_matches {
                         k -= 1;
                     } else if !(p == endpts[k - 1]
-                        && (k >= min_matches || min_matches - k < end - p))
+                        && (k >= min_matches || min_matches - k < self.dist(p, end)))
                     {
                         k += 1;
                         limit = end;
@@ -629,7 +668,9 @@ impl<'a> Dissect<'a> {
                 let prev_end = endpts[k - 1];
                 if endpts[k] > prev_end {
                     limit = endpts[k] - 1;
-                    if limit > prev_end || (k < min_matches && min_matches - k >= end - prev_end) {
+                    if limit > prev_end
+                        || (k < min_matches && min_matches - k >= self.dist(prev_end, end))
+                    {
                         break;
                     }
                 }
@@ -651,7 +692,7 @@ impl<'a> Dissect<'a> {
             return true;
         }
         let min_matches = (min as usize).max(1);
-        let max_matches = bounded(end - begin, max).max(min_matches);
+        let max_matches = bounded(self.dist(begin, end), max).max(min_matches);
         let mut endpts = vec![begin; max_matches + 1];
         let mut nverified = 0;
         let mut k = 1;
@@ -659,9 +700,9 @@ impl<'a> Dissect<'a> {
         while k > 0 {
             if limit == endpts[k - 1]
                 && limit != end
-                && (k >= min_matches || min_matches - k < end - limit)
+                && (k >= min_matches || min_matches - k < self.dist(limit, end))
             {
-                limit += 1;
+                limit += char_at(self.s, limit).1;
             }
             if k >= max_matches {
                 limit = end;
@@ -691,7 +732,7 @@ impl<'a> Dissect<'a> {
             }
             while k > 0 {
                 if endpts[k] < end {
-                    limit = endpts[k] + 1;
+                    limit = endpts[k] + char_at(self.s, endpts[k]).1;
                     break;
                 }
                 k -= 1;
@@ -701,7 +742,7 @@ impl<'a> Dissect<'a> {
     }
 }
 
-/// The number of words of a set of bits with a bit for each position of a text of `len` characters, from 0 to `len`.
+/// The number of words of a set of bits with a bit for each position of a text of `len` bytes, from 0 to `len`.
 pub(super) fn words(len: usize) -> usize {
     len / 64 + 1
 }
