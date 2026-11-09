@@ -651,11 +651,15 @@ impl Analyzer<'_> {
         })
     }
 
-    /// The body of the statements `stmts`: a body of one `SELECT` is its query, as [`Analyzer::result_columns`] checks it, and the session runs the statements of another body one after the other.
+    /// The body of the statements `stmts`: a body of one `SELECT` with no locking clause is its query, as [`Analyzer::result_columns`] checks it, and the session runs the statements of another body one after the other.
     fn list_body(&mut self, stmts: &[&Node], rettype: u32, columns: &[u32]) -> Result<Body> {
         let [Node::SelectStmt(select)] = stmts else {
             return Ok(Body::Statements(columns.to_vec()));
         };
+        // A `SELECT` with a locking clause runs as a statement that locks its rows, as `inline_function` does not inline a query with row marks.
+        if !select.lockingClause.is_empty() {
+            return Ok(Body::Statements(columns.to_vec()));
+        }
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
         self.result_columns(&mut query, rettype, columns)?;
