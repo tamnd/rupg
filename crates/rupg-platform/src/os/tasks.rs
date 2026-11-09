@@ -26,6 +26,19 @@ const MAX_IDLE: usize = 64;
 /// The threads that wait for a task.
 static IDLE: Mutex<Vec<Arc<Worker>>> = Mutex::new(Vec::new());
 
+/// The threads that ended, which the thread [`reap`] joins.
+static ENDED: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Wakes the thread [`reap`] when a thread ended.
+static REAP: Condvar = Condvar::new();
+
+/// The threads that [`reap`] joined and whose memory it gave back.
+#[cfg(test)]
+static REAPED: Mutex<Vec<thread::ThreadId>> = Mutex::new(Vec::new());
+
+/// The stack of the thread [`reap`]. It only joins threads and calls the allocator.
+const REAP_STACK: usize = 256 << 10;
+
 /// Runs each task on a thread of the operating system with a stack of [`STACK_SIZE`] bytes. A task gets a thread that waits for a task with the same name, or a new thread.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsTasks;
@@ -35,6 +48,8 @@ struct Worker {
     name: String,
     next: Mutex<Option<(Task, Arc<Done>)>>,
     wake: Condvar,
+    /// The handle of the thread, which [`end`] gives to [`reap`].
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 /// The end of one task: `Some(true)` when it panicked.
@@ -63,6 +78,47 @@ fn run_slot(slot: &Mutex<Option<Job<'_>>>) {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Gives the handle of the thread of `worker` to the thread [`reap`], which starts at the first call. The thread calls it last.
+fn end(worker: &Worker) {
+    static REAPER: OnceLock<bool> = OnceLock::new();
+    let Some(handle) = lock(&worker.thread).take() else { return };
+    let started = *REAPER.get_or_init(|| {
+        thread::Builder::new()
+            .name("rupg reap".to_string())
+            .stack_size(REAP_STACK)
+            .spawn(reap)
+            .is_ok()
+    });
+    if started {
+        lock(&ENDED).push(handle);
+        REAP.notify_one();
+    }
+}
+
+/// The loop of the thread that joins each thread that ended, and then gives the free memory of the allocator back to the system.
+///
+/// A thread frees the values of its storage and its heap in the allocator after its function returns, and mimalloc only marks the pages of that heap for a purge after a delay. Only a later call to mimalloc does the purge. When the threads of a query end after [`KEEP_IDLE`], a server with no queries does no such call, so it kept these pages. On ClickBench Q29 with 2M rows they were 17 MB. The join waits for the end of the thread, so the trim comes after all its frees.
+fn reap() {
+    loop {
+        let ended = {
+            let mut ended = lock(&ENDED);
+            while ended.is_empty() {
+                ended = REAP.wait(ended).unwrap_or_else(PoisonError::into_inner);
+            }
+            std::mem::take(&mut *ended)
+        };
+        #[cfg(test)]
+        let ids: Vec<_> = ended.iter().map(|handle| handle.thread().id()).collect();
+        for handle in ended {
+            // The function of a thread catches the panic of its task, so the join gives no error.
+            drop(handle.join());
+        }
+        crate::alloc::trim();
+        #[cfg(test)]
+        lock(&REAPED).extend(ids);
+    }
 }
 
 /// The loop of a thread: the task, then the wait for the next one.
@@ -151,17 +207,24 @@ impl Tasks for OsTasks {
                 name: name.to_string(),
                 next: Mutex::new(Some(job)),
                 wake: Condvar::new(),
+                thread: Mutex::new(None),
             });
-            thread::Builder::new()
+            let own = Arc::clone(&worker);
+            let handle = thread::Builder::new()
                 .name(name.to_string())
                 .stack_size(STACK_SIZE)
-                .spawn(move || work(&worker))
+                .spawn(move || {
+                    work(&own);
+                    end(&own);
+                })
                 .map_err(|e| {
                     Error::new(
                         SqlState::INSUFFICIENT_RESOURCES,
                         format!("could not start the thread \"{name}\": {e}"),
                     )
                 })?;
+            // A thread ends after a wait of [`KEEP_IDLE`] at the least, so it is still there for its handle.
+            *lock(&worker.thread) = Some(handle);
         }
         Ok(TaskHandle::new(Box::new(OsJoin { name: name.to_string(), done })))
     }
@@ -345,6 +408,7 @@ mod stack {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
 
     use super::*;
@@ -377,6 +441,46 @@ mod tests {
         let first = id_of("rupg-trim");
         thread::sleep(TRIM_IDLE + Duration::from_millis(300));
         assert_eq!(id_of("rupg-trim"), first);
+    }
+
+    /// The thread [`reap`] joins a thread that ended, and gives the memory back after the values of its storage were freed.
+    #[test]
+    fn the_reaper_joins_a_thread_after_its_storage_is_freed() {
+        static FREED: AtomicUsize = AtomicUsize::new(0);
+        struct Slow;
+        impl Drop for Slow {
+            fn drop(&mut self) {
+                thread::sleep(Duration::from_millis(200));
+                FREED.fetch_add(1, Ordering::Release);
+            }
+        }
+        thread_local! {
+            static SLOW: Slow = const { Slow };
+        }
+        let worker = Arc::new(Worker {
+            name: "rupg-reaped".to_string(),
+            next: Mutex::new(None),
+            wake: Condvar::new(),
+            thread: Mutex::new(None),
+        });
+        let own = Arc::clone(&worker);
+        let go = Arc::new(Mutex::new(()));
+        let wait = lock(&go);
+        let start = Arc::clone(&go);
+        let handle = thread::Builder::new()
+            .spawn(move || {
+                SLOW.with(|_| ());
+                drop(lock(&start));
+                end(&own);
+            })
+            .unwrap();
+        let id = handle.thread().id();
+        *lock(&worker.thread) = Some(handle);
+        drop(wait);
+        while !lock(&REAPED).contains(&id) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(FREED.load(Ordering::Acquire), 1);
     }
 
     #[test]
@@ -422,7 +526,7 @@ mod tests {
     #[test]
     fn a_job_that_panicked_panics_the_caller_after_all_the_jobs_ended() {
         let _one = lock(&RUN_ALL);
-        let ran = std::sync::atomic::AtomicUsize::new(0);
+        let ran = AtomicUsize::new(0);
         let ran = &ran;
         let jobs: Vec<Job<'_>> = (0..4)
             .map(|at| {
@@ -431,13 +535,13 @@ mod tests {
                         panic!("a test panic");
                     }
                     thread::sleep(Duration::from_millis(20));
-                    ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ran.fetch_add(1, Ordering::SeqCst);
                 }) as Job<'_>
             })
             .collect();
         let result = panic::catch_unwind(AssertUnwindSafe(|| OsTasks.run_all(jobs)));
         assert!(result.is_err());
-        assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(ran.load(Ordering::SeqCst), 3);
     }
 
     #[test]
