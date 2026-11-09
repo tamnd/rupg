@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function in `internal` that a user makes with a `void` built-in function such as `pg_advisory_xact_lock_int8` and an integer, `bool` or `oid` result gives `0` (or false), as PostgreSQL reads `PG_RETURN_VOID()`'s `(Datum) 0` as the declared type (#1465).
 - An `UPDATE` of a column of a primary key or a unique constraint `WITHOUT OVERLAPS` takes the row lock `UPDATE` and not `NO KEY UPDATE`, as `RelationGetIndexAttrBitmap` counts the columns of these exclusion indexes as keys, so it waits for the `FOR KEY SHARE` of a temporal foreign key check (#1464).
 - A scan of a parent table, `UPDATE`, `DELETE` and `TRUNCATE` skip the children that are temporary tables of another session, as `expand_inherited_rtentry` and `ExecuteTruncate` do with `RELATION_IS_OTHER_TEMP` (#1463).
 - A filter of a columnar scan on a column that the scan also reads for a key, an aggregate or a map does not test a dictionary vector or a narrow packed vector by a lookup for each row when only some of its values pass. The scan decodes the column once and tests the decoded values, in place of unpacking the codes for the filter and again for the scan. ClickBench q14 uses 167M instructions in place of 183M, q12 141M in place of 158M, and q25 82M in place of 99M.

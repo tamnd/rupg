@@ -872,6 +872,19 @@ impl std::fmt::Debug for Call<'_> {
 /// The code of a function. It gets the values of the arguments. A strict function does not get a null value, because the executor gives null without the call.
 pub type Kernel = fn(&Call<'_>, &[Value]) -> Result<Value>;
 
+/// `PG_RETURN_VOID`: the result `(Datum) 0` of a function that gives `void`. A function in `internal` that a user makes with the same `prosrc` and another result type reads the zero as a value of that type, such as `0` for `int`. A type that is not by value reads it as `void`.
+#[must_use]
+pub fn void_result(call: &Call<'_>) -> Value {
+    match call.ret {
+        rupg_types::oid::INT2 => Value::Int2(0),
+        rupg_types::oid::INT4 => Value::Int4(0),
+        rupg_types::oid::INT8 => Value::Int8(0),
+        rupg_types::oid::BOOL => Value::Bool(false),
+        rupg_types::oid::OID => Value::Oid(0),
+        _ => Value::Text(String::new()),
+    }
+}
+
 /// The error of a type function as the session sends it.
 pub fn type_error(error: TypeError) -> Error {
     let mut out = Error::new(error.sqlstate, error.message);
