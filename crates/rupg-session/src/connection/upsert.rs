@@ -354,13 +354,14 @@ impl Connection {
         let oid = routing.oid(at);
         let heap = self.store.heap();
         let (mut kept, mut applied) = (Vec::new(), Vec::new());
+        let periods = self.period_keys(oid);
         loop {
             let change = vec![(tid, Some(checked.clone()))];
             match heap.change(
                 oid,
                 view,
                 change,
-                (&leaf.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                (&leaf.unique, &periods, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                 &kept,
                 &mut applied,
             )? {
@@ -472,13 +473,14 @@ impl Connection {
         let heap = self.store.heap();
         let mut kept = Vec::new();
         let mut applied = Vec::new();
+        let periods = self.period_keys(info.table);
         loop {
             let change = vec![(tid, Some(new.clone()))];
             match heap.change(
                 info.table,
                 view,
                 change,
-                (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                (&info.unique, &periods, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                 &kept,
                 &mut applied,
             )? {

@@ -717,12 +717,13 @@ impl Connection {
                 items.iter().map(|item| (item.tid, item.new.clone())).collect();
             self.heap_layout(leaf.oid);
             let (mut kept, mut made) = (Vec::new(), Vec::new());
+            let periods = self.period_keys(leaf.oid);
             loop {
                 let changed = heap.change(
                     leaf.oid,
                     view,
                     changes.clone(),
-                    (&leaf_info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                    (&leaf_info.unique, &periods, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                     &kept,
                     &mut made,
                 )?;

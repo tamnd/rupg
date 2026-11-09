@@ -312,12 +312,13 @@ fn inserted(table: ssi::Table) -> [ssi::Target; 2] {
     [ssi::Target::Relation(table), ssi::Target::Index(table)]
 }
 
-/// `HeapDetermineColumnsInfo` for the key columns: true when the new values `new` change a column of a unique index of `unique` with no expression and no predicate, which a foreign key can reference.
-fn changes_key(unique: &[Unique], old: &[Value], new: &[Value]) -> bool {
+/// `HeapDetermineColumnsInfo` for the key columns: true when the new values `new` change a column of a unique index of `unique` with no expression and no predicate, or a column of a constraint `WITHOUT OVERLAPS` of `periods`, which a foreign key can reference.
+fn changes_key(unique: &[Unique], periods: &[usize], old: &[Value], new: &[Value]) -> bool {
     unique
         .iter()
         .filter(|index| index.derived.is_none())
         .flat_map(|index| &index.columns)
+        .chain(periods)
         .any(|&column| old.get(column) != new.get(column))
 }
 
@@ -3189,7 +3190,7 @@ impl Heap {
         relation: u32,
         view: &View,
         changes: Vec<Change>,
-        keys: (&[Unique], Derive<'_>),
+        keys: (&[Unique], &[usize], Derive<'_>),
         kept: &[u64],
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
@@ -3207,7 +3208,7 @@ impl Heap {
         relation: u32,
         view: &View,
         changes: Vec<Change>,
-        (unique, derive): (&[Unique], Derive<'_>),
+        (unique, periods, derive): (&[Unique], &[usize], Derive<'_>),
         kept: &[u64],
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
@@ -3244,8 +3245,9 @@ impl Heap {
             };
             let version = &table.versions[at];
             // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
-            let key_kept =
-                values.as_ref().is_some_and(|new| !changes_key(unique, &version.values, new));
+            let key_kept = values
+                .as_ref()
+                .is_some_and(|new| !changes_key(unique, periods, &version.values, new));
             let strength = if key_kept { NO_KEY_UPDATE } else { UPDATE };
             let row = (view.database, relation, tid);
             match version.xmax {
@@ -4615,6 +4617,15 @@ mod tests {
     }
 
     #[test]
+    fn an_update_of_a_column_without_overlaps_changes_the_key() {
+        let old = [Value::Int4(1), Value::Int4(2)];
+        let new = [Value::Int4(1), Value::Int4(3)];
+        assert!(changes_key(&[], &[1], &old, &new));
+        assert!(!changes_key(&[], &[0], &old, &new));
+        assert!(!changes_key(&[], &[], &old, &new));
+    }
+
+    #[test]
     fn cold_headers_load_only_when_their_vectors_have_their_rows() {
         let rows = VECTOR as u64 * 2 + 5;
         let cold = Cold::of(&settled(rows)).unwrap();
@@ -5048,7 +5059,14 @@ mod tests {
         let tid = first_tid(&heap, &view(heap.snapshot(), a, 0));
         let change = || vec![(tid, Some(vec![Value::Int4(2)]))];
         let done = heap
-            .change(7, &view(heap.snapshot(), a, 0), change(), (&[], &none), &[], &mut Vec::new())
+            .change(
+                7,
+                &view(heap.snapshot(), a, 0),
+                change(),
+                (&[], &[], &none),
+                &[],
+                &mut Vec::new(),
+            )
             .unwrap();
         assert_eq!(done, Changed::Done(1));
         let wait = Changed::Wait { holder: a, tid };
@@ -5057,7 +5075,7 @@ mod tests {
                 7,
                 &view(heap.snapshot(), b, 0),
                 change(),
-                (&[], &none),
+                (&[], &[], &none),
                 &[],
                 &mut Vec::new()
             )
@@ -5074,7 +5092,14 @@ mod tests {
         heap.waited(a);
         heap.abort(a);
         let done = heap
-            .change(7, &view(heap.snapshot(), b, 0), change(), (&[], &none), &[], &mut Vec::new())
+            .change(
+                7,
+                &view(heap.snapshot(), b, 0),
+                change(),
+                (&[], &[], &none),
+                &[],
+                &mut Vec::new(),
+            )
             .unwrap();
         assert_eq!(done, Changed::Done(1));
         heap.commit(b);
@@ -5112,7 +5137,7 @@ mod tests {
                 7,
                 &view(heap.snapshot(), xid, 0),
                 change,
-                (&[], &none),
+                (&[], &[], &none),
                 &[],
                 &mut Vec::new(),
             )
@@ -5157,7 +5182,7 @@ mod tests {
                 7,
                 &view(heap.snapshot(), xid, 0),
                 change,
-                (&[], &none),
+                (&[], &[], &none),
                 &[],
                 &mut Vec::new(),
             )
@@ -5234,7 +5259,7 @@ mod tests {
             .collect();
         let changes = tids.iter().map(|&tid| (tid, None)).collect();
         assert_eq!(
-            heap.change(7, &view_c, changes, (unique, &none), &[], &mut Vec::new()).unwrap(),
+            heap.change(7, &view_c, changes, (unique, &[], &none), &[], &mut Vec::new()).unwrap(),
             Changed::Done(2)
         );
         let view_c = view(heap.snapshot(), c, 1);
@@ -5264,7 +5289,7 @@ mod tests {
             7,
             &view(heap.snapshot(), a, 0),
             vec![(tid, None)],
-            (&[], &none),
+            (&[], &[], &none),
             &[],
             &mut Vec::new(),
         )
@@ -5277,7 +5302,7 @@ mod tests {
                 7,
                 &view(old.clone(), b, 0),
                 change.clone(),
-                (&[], &none),
+                (&[], &[], &none),
                 &[],
                 &mut Vec::new()
             )
@@ -5285,8 +5310,9 @@ mod tests {
             Changed::Again
         );
         let serializable = View { serializable: true, ..view(old, b, 0) };
-        let error =
-            heap.change(7, &serializable, change, (&[], &none), &[], &mut Vec::new()).unwrap_err();
+        let error = heap
+            .change(7, &serializable, change, (&[], &[], &none), &[], &mut Vec::new())
+            .unwrap_err();
         assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
         assert_eq!(error.message(), "could not serialize access due to concurrent delete");
         assert_eq!(tid_text(1), "(0,1)");
@@ -5321,7 +5347,7 @@ mod tests {
                 7,
                 &view(heap.snapshot(), b, command),
                 vec![(tid, Some(values))],
-                (unique, &none),
+                (unique, &[], &none),
                 &[],
                 &mut Vec::new(),
             )

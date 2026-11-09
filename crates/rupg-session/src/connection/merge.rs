@@ -82,13 +82,14 @@ impl Connection {
                 .collect();
             let mut kept = Vec::new();
             let mut applied = Vec::new();
+            let periods = self.period_keys(info.table);
             let again = !changes.is_empty()
                 && loop {
                     let changed = heap.change(
                         info.table,
                         &view,
                         changes.clone(),
-                        (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                        (&info.unique, &periods, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                         &kept,
                         &mut applied,
                     )?;
