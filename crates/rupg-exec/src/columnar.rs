@@ -4971,8 +4971,16 @@ fn grow(
     Ok(())
 }
 
+/// True when the plan of `query` has no hash table for its groups because the query has no `GROUP BY` and no grouping sets, as `make_group_input_target` makes a plain `Agg` for it. The cost-based planner then does not run only to find that there is no table: for `SELECT count(*) FROM hits WHERE ...` it was about a third of the work of the connection.
+fn no_group_table(query: &Query) -> bool {
+    query.group.is_empty() && query.grouping_sets.is_empty()
+}
+
 /// The number of groups that the hash table of the plan expects, or 0 when the plan has no hash table for the groups.
 fn session_groups(session: &dyn Session, query: &Query) -> usize {
+    if no_group_table(query) {
+        return 0;
+    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     session
         .hash_tables(query)
@@ -4982,6 +4990,9 @@ fn session_groups(session: &dyn Session, query: &Query) -> usize {
 
 /// The rows that the hash table of the groups of the plan reads by the estimate of the plan, or `usize::MAX` when the plan has no such table.
 fn session_input(session: &dyn Session, query: &Query) -> usize {
+    if no_group_table(query) {
+        return usize::MAX;
+    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     session
         .hash_tables(query)
