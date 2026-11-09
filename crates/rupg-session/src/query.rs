@@ -777,6 +777,9 @@ impl<'a> Reader<'a> {
                                 .map(|r| r.name.clone())
                                 .unwrap_or_default();
                             let wait = LockWaitPolicy(wait);
+                            if wait != LockWaitPolicy::LockWaitBlock {
+                                heap.unqueue_rows(xid);
+                            }
                             if wait == LockWaitPolicy::LockWaitSkip {
                                 continue 'rows;
                             }
@@ -814,6 +817,21 @@ impl<'a> Reader<'a> {
     /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
     pub(crate) fn wait_xact(&self, xid: u32, holder: u32, context: &str) -> Result<()> {
         self.wait_xact_while(xid, holder, context, |_| true)
+    }
+
+    /// [`Reader::wait_xact`] for a lock with `strength` or a change of the version `row`, which ends too when `holder` no longer blocks the row: a rollback to a savepoint of `holder` took away its change or its lock, or `holder` left the queue of the row with no lock.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Reader::wait_xact`].
+    pub(crate) fn wait_row(
+        &self,
+        (xid, holder): (u32, u32),
+        context: &str,
+        row: (u32, u32, u64),
+        strength: crate::heap::RowStrength,
+    ) -> Result<()> {
+        self.wait_xact_while(xid, holder, context, |heap| heap.row_blocked(row, (holder, strength)))
     }
 
     /// [`Reader::wait_xact`] that ends too when `still` gives false, as for a row lock that a rollback to a savepoint of `holder` takes away, which ends the wait for the subtransaction in `XactLockTableWait`.

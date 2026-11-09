@@ -736,7 +736,9 @@ impl Connection {
                             tid_text(tid),
                             leaf.name
                         );
-                        self.reader().wait_xact(view.xid, holder, &context)?;
+                        let row = (view.database, leaf.oid, tid);
+                        let held = (view.xid, holder);
+                        self.reader().wait_row(held, &context, row, crate::heap::UPDATE)?;
                     }
                     Changed::Again => return Ok(true),
                     conflict => kept = self.key_conflict(leaf_info, view, conflict)?,
