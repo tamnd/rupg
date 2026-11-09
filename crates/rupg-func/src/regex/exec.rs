@@ -20,6 +20,44 @@ const MAX_VISITED: usize = 1 << 26;
 /// The most states that the DFA of a program keeps. It drops all its states when it has more.
 const MAX_STATES: usize = 4096;
 
+/// The character that starts at the byte `pos` of the UTF-8 text `s`, and its number of bytes.
+#[inline]
+pub(super) fn char_at(s: &[u8], pos: usize) -> (u32, usize) {
+    let lead = u32::from(s[pos]);
+    if lead < 0x80 {
+        return (lead, 1);
+    }
+    let tail = |k: usize| u32::from(s[pos + k] & 0x3f);
+    if lead < 0xe0 {
+        ((lead & 0x1f) << 6 | tail(1), 2)
+    } else if lead < 0xf0 {
+        ((lead & 0x0f) << 12 | tail(1) << 6 | tail(2), 3)
+    } else {
+        ((lead & 0x07) << 18 | tail(1) << 12 | tail(2) << 6 | tail(3), 4)
+    }
+}
+
+/// The byte where the character before the byte `pos` of `s` starts. `pos` is after the start.
+#[inline]
+pub(super) fn before(s: &[u8], pos: usize) -> usize {
+    let mut at = pos - 1;
+    while s[at] & 0xc0 == 0x80 {
+        at -= 1;
+    }
+    at
+}
+
+/// True when a character starts at the byte `pos` of `s`, or `pos` is the end of `s`.
+#[inline]
+pub(super) fn starts(s: &[u8], pos: usize) -> bool {
+    s.get(pos).is_none_or(|&b| b & 0xc0 != 0x80)
+}
+
+/// The number of characters of the UTF-8 text `s`.
+pub(super) fn count(s: &[u8]) -> usize {
+    s.iter().filter(|&&b| b & 0xc0 != 0x80).count()
+}
+
 /// The constraints, in the order of their bits in the mask of the constraints that hold at a position.
 const ASSERTS: [Assert; 8] = [
     Assert::Bol,
@@ -99,8 +137,8 @@ struct Dfa {
     restart: bool,
 }
 
-/// The number of characters at the start of `s` that keep a state: an ASCII character with its bit in `loops`, or, when `wide` is true, a character that is not ASCII.
-fn skip(loops: u128, wide: bool, s: &[u32]) -> usize {
+/// The number of bytes at the start of `s` whose characters keep a state: an ASCII character with its bit in `loops`, or, when `wide` is true, a character that is not ASCII. Each byte of a character that is not ASCII is 128 or more, so the count stops at the start of a character.
+fn skip(loops: u128, wide: bool, s: &[u8]) -> usize {
     let halves = [loops as u64, (loops >> 64) as u64];
     s.iter()
         .position(|&c| if c < 128 { halves[(c >> 6) as usize] >> (c & 63) & 1 == 0 } else { !wide })
@@ -330,7 +368,8 @@ enum Job {
 /// The state of one search in one program.
 struct Search<'a> {
     program: &'a Program,
-    s: &'a [u32],
+    /// The text in UTF-8. A position is the byte where a character starts.
+    s: &'a [u8],
     /// The results of the lookarounds by program and position: 0 for not known, 1 for false, 2 for true.
     looks: Vec<Vec<u8>>,
 }
@@ -373,7 +412,7 @@ impl Program {
     }
 
     /// [`Program::ends`] with the DFA. The threads of the backtracking machine reach the same pairs of instruction and position, so the ends are the same.
-    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u32], start: usize, ends: &mut [u64]) {
+    fn dfa_ends(&self, dfa: &mut Dfa, s: &[u8], start: usize, ends: &mut [u64]) {
         self.walk(dfa, s, start, |pos| {
             ends[pos / 64] |= 1 << (pos % 64);
             false
@@ -384,7 +423,7 @@ impl Program {
     fn walk(
         &self,
         dfa: &mut Dfa,
-        s: &[u32],
+        s: &[u8],
         start: usize,
         mut hit: impl FnMut(usize) -> bool,
     ) -> Option<usize> {
@@ -409,8 +448,8 @@ impl Program {
         while pos < s.len() {
             if ends_only {
                 // The steps that the DFA knows for ASCII characters before the last character, with no other work. A step that keeps a state goes to the full loop when the state still learns or when each character keeps it, so that the walk can skip the characters.
-                let last = s.len() - 1;
-                while pos < last && (state != dead || dfa.restart) {
+                // An ASCII character is the last character when it is the last byte.
+                while pos + 1 < s.len() && (state != dead || dfa.restart) {
                     let c = s[pos];
                     if c >= 128 {
                         break;
@@ -449,12 +488,17 @@ impl Program {
             let (loops, wide_loop) = (dfa.loops[at], dfa.same[at] == 3);
             if loops == u128::MAX && wide_loop && ends_only {
                 // Each character keeps the state.
-                pos = s.len() - 1;
-            } else if (loops != 0 || wide_loop) && ends_only {
+                pos = before(s, s.len());
+            } else if (loops != 0 || wide_loop) && ends_only && pos + 1 < s.len() {
                 pos += skip(loops, wide_loop, &s[pos..s.len() - 1]);
+                // The skip can stop in the bytes of the last character when it is not ASCII.
+                while !starts(s, pos) {
+                    pos -= 1;
+                }
             }
-            let c = s[pos];
-            let mask = if ends_only && pos + 1 < s.len() { 0 } else { self.mask(s, pos + 1) };
+            let (c, width) = char_at(s, pos);
+            let next = pos + width;
+            let mask = if ends_only && next < s.len() { 0 } else { self.mask(s, next) };
             let key = if c >= 128 && self.wide_same(dfa, state) { WIDE } else { c };
             let known = match c {
                 0..128 if mask != 0 && ends_only => dfa.last[state as usize * 128 + c as usize],
@@ -480,10 +524,10 @@ impl Program {
                 state = known & !MATCHED;
                 known & MATCHED != 0
             };
-            if matched && hit(pos + 1) {
-                return Some(pos + 1);
+            if matched && hit(next) {
+                return Some(next);
             }
-            pos += 1;
+            pos = next;
         }
         None
     }
@@ -562,19 +606,19 @@ impl Program {
     }
 
     /// The mask of the constraints of the main program that hold at a position, with the bits of [`ASSERTS`].
-    fn mask(&self, s: &[u32], pos: usize) -> u8 {
+    fn mask(&self, s: &[u8], pos: usize) -> u8 {
         if self.asserts == 0 {
             return 0;
         }
-        let newline = u32::from(b'\n');
         let bos = pos == 0;
         let eos = pos == s.len();
-        let bol = bos || (self.nlanch && s[pos - 1] == newline);
-        let eol = eos || (self.nlanch && s[pos] == newline);
+        // A byte of a character that is not ASCII is not a newline.
+        let bol = bos || (self.nlanch && s[pos - 1] == b'\n');
+        let eol = eos || (self.nlanch && s[pos] == b'\n');
         let mut mask = u8::from(bol) | u8::from(eol) << 1 | u8::from(bos) << 2 | u8::from(eos) << 3;
         if self.asserts & 0xf0 != 0 {
-            let before = !bos && is_word(s[pos - 1], self.unicode);
-            let after = !eos && is_word(s[pos], self.unicode);
+            let before = !bos && is_word(char_at(s, before(s, pos)).0, self.unicode);
+            let after = !eos && is_word(char_at(s, pos).0, self.unicode);
             mask |= u8::from(!before && after) << 4
                 | u8::from(before && !after) << 5
                 | u8::from(before != after) << 6
@@ -626,7 +670,7 @@ impl Program {
     }
 
     /// The start of the leftmost match in `s` that starts at `from` or after it.
-    pub(super) fn first(&self, s: &[u32], from: usize) -> Option<usize> {
+    pub(super) fn first(&self, s: &[u8], from: usize) -> Option<usize> {
         if let (Some(dfa), Some(scan)) = (&self.dfa, &self.scan) {
             // A match that ends first starts at the end or before it, so the leftmost start is not after it.
             let end = if self.anchored {
@@ -638,16 +682,20 @@ impl Program {
                 self.walk(&mut scan.borrow_mut(), s, from, |_| true)?
             };
             let dfa = &mut dfa.borrow_mut();
-            return (from..=end).find(|&start| self.walk(dfa, s, start, |_| true).is_some());
+            return (from..=end)
+                .filter(|&start| starts(s, start))
+                .find(|&start| self.walk(dfa, s, start, |_| true).is_some());
         }
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
         let last = if self.anchored { 0 } else { s.len() };
-        (from..=last).find(|&start| search.run(0, start, None, visited.as_mut(), None))
+        (from..=last)
+            .filter(|&start| starts(s, start))
+            .find(|&start| search.run(0, start, None, visited.as_mut(), None))
     }
 
     /// The ends of the matches from `start` into `ends`, which has a bit for each position and no bit set: the bit of a position becomes set when a match ends there.
-    pub(super) fn ends(&self, s: &[u32], start: usize, ends: &mut [u64]) {
+    pub(super) fn ends(&self, s: &[u8], start: usize, ends: &mut [u64]) {
         if let Some(dfa) = &self.dfa {
             return self.dfa_ends(&mut dfa.borrow_mut(), s, start, ends);
         }
@@ -657,7 +705,7 @@ impl Program {
     }
 
     /// [`Program::ends`] with the backtracking machine.
-    fn track_ends(&self, s: &[u32], start: usize) -> Vec<bool> {
+    fn track_ends(&self, s: &[u8], start: usize) -> Vec<bool> {
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
         let mut ends = vec![false; s.len() + 1];
@@ -676,13 +724,12 @@ impl Search<'_> {
     /// True when the constraint holds at the position.
     fn holds(&self, assert: Assert, pos: usize) -> bool {
         let s = self.s;
-        let newline = u32::from(b'\n');
         let unicode = self.program.unicode;
-        let word_before = pos > 0 && is_word(s[pos - 1], unicode);
-        let word_after = pos < s.len() && is_word(s[pos], unicode);
+        let word_before = pos > 0 && is_word(char_at(s, before(s, pos)).0, unicode);
+        let word_after = pos < s.len() && is_word(char_at(s, pos).0, unicode);
         match assert {
-            Assert::Bol => pos == 0 || (self.program.nlanch && s[pos - 1] == newline),
-            Assert::Eol => pos == s.len() || (self.program.nlanch && s[pos] == newline),
+            Assert::Bol => pos == 0 || (self.program.nlanch && s[pos - 1] == b'\n'),
+            Assert::Eol => pos == s.len() || (self.program.nlanch && s[pos] == b'\n'),
             Assert::Bos => pos == 0,
             Assert::Eos => pos == s.len(),
             Assert::WordStart => !word_before && word_after,
@@ -708,8 +755,10 @@ impl Search<'_> {
                 }
                 Look::Behind | Look::NotBehind => {
                     let mut visited = self.visited(prog);
+                    let s = self.s;
                     (0..=pos)
                         .rev()
+                        .filter(|&start| starts(s, start))
                         .any(|start| self.run(prog, start, Some(pos), visited.as_mut(), None))
                 }
             };
@@ -724,20 +773,28 @@ impl Search<'_> {
         Some((slots.get(2 * number).copied()??, slots.get(2 * number + 1).copied()??))
     }
 
-    /// True when the text at the position is the same as the text of the group.
+    /// The end of the text at the position when it is the same as the text of the group. Without the case, each character compares as its lower case, so the two texts can have a different number of bytes.
     fn backref(&self, slots: &[Option<usize>], number: usize, pos: usize) -> Option<usize> {
         let (start, end) = Self::group(slots, number)?;
-        let len = end.checked_sub(start)?;
-        let here = self.s.get(pos..pos + len)?;
-        let same = if self.program.icase {
-            let unicode = self.program.unicode;
-            here.iter()
-                .zip(&self.s[start..end])
-                .all(|(&a, &b)| to_lower(a, unicode) == to_lower(b, unicode))
-        } else {
-            here == &self.s[start..end]
-        };
-        same.then_some(pos + len)
+        let s = self.s;
+        if !self.program.icase {
+            let len = end.checked_sub(start)?;
+            return (s.get(pos..pos + len)? == &s[start..end]).then_some(pos + len);
+        }
+        let unicode = self.program.unicode;
+        let (mut from, mut at) = (start, pos);
+        while from < end {
+            if at >= s.len() {
+                return None;
+            }
+            let ((a, wa), (b, wb)) = (char_at(s, from), char_at(s, at));
+            if to_lower(a, unicode) != to_lower(b, unicode) {
+                return None;
+            }
+            from += wa;
+            at += wb;
+        }
+        Some(at)
     }
 
     /// The search in a program from a start position. With an end, a match must end there. With a list of ends, the search does not stop at a match: it tries all the paths and marks the end of each match in the list.
@@ -777,12 +834,15 @@ impl Search<'_> {
                 }
                 match insts[pc] {
                     Inst::Set(id) => {
-                        if pos < self.s.len() && program.sets[id].contains(self.s[pos]) {
-                            pc += 1;
-                            pos += 1;
-                        } else {
+                        if pos >= self.s.len() {
                             break;
                         }
+                        let (c, width) = char_at(self.s, pos);
+                        if !program.sets[id].contains(c) {
+                            break;
+                        }
+                        pc += 1;
+                        pos += width;
                     }
                     Inst::Assert(assert) => {
                         if !self.holds(assert, pos) {
@@ -873,6 +933,9 @@ mod tests {
             "a\nb",
             "xxxyy",
             "abab ab",
+            "http://жж.рф/é",
+            "жa\nб жab",
+            "é😀x",
         ];
         for pattern in patterns {
             let chars: Vec<u32> = pattern.chars().map(u32::from).collect();
@@ -881,27 +944,28 @@ mod tests {
                 let program = Program::new(&parsed.node, parsed.groups, parsed.cflags).unwrap();
                 let dfa = program.dfa.as_ref().unwrap_or_else(|| panic!("{pattern} has no DFA"));
                 for string in strings {
-                    let s: Vec<u32> = string.chars().map(u32::from).collect();
+                    let s = string.as_bytes();
                     let mut search = Search {
                         program: &program,
-                        s: &s,
+                        s,
                         looks: vec![Vec::new(); program.progs.len()],
                     };
-                    for from in 0..=s.len() {
+                    for from in (0..=s.len()).filter(|&from| starts(s, from)) {
                         let mut visited = search.visited(0);
                         let last = if program.anchored { 0 } else { s.len() };
                         let want = (from..=last)
+                            .filter(|&start| starts(s, start))
                             .find(|&start| search.run(0, start, None, visited.as_mut(), None));
                         assert_eq!(
-                            program.first(&s, from),
+                            program.first(s, from),
                             want,
                             "{pattern} on {string:?} after {from}"
                         );
                     }
-                    for start in 0..=s.len() {
-                        let want = program.track_ends(&s, start);
+                    for start in (0..=s.len()).filter(|&start| starts(s, start)) {
+                        let want = program.track_ends(s, start);
                         let mut bits = vec![0; super::super::tree::words(s.len())];
-                        program.dfa_ends(&mut dfa.borrow_mut(), &s, start, &mut bits);
+                        program.dfa_ends(&mut dfa.borrow_mut(), s, start, &mut bits);
                         let got: Vec<bool> = (0..=s.len())
                             .map(|pos| bits[pos / 64] >> (pos % 64) & 1 != 0)
                             .collect();

@@ -110,11 +110,10 @@ impl Regex {
 
     /// True when the pattern matches a part of `s`.
     pub(crate) fn is_match(&self, s: &str) -> bool {
-        let chars: Vec<u32> = points(s);
         if self.prog.has_backrefs() {
-            return matches!(self.search(&chars, 0), Ok(Some(_)));
+            return matches!(self.search(s.as_bytes(), 0), Ok(Some(_)));
         }
-        self.prog.first(&chars, 0).is_some()
+        self.prog.first(s.as_bytes(), 0).is_some()
     }
 
     /// `re_nsub`: the number of the groups that capture.
@@ -122,45 +121,40 @@ impl Regex {
         self.parsed.groups
     }
 
-    /// `pg_regexec`: the positions in characters of the leftmost match in `s`, first the whole match and then each group, or `None` when the pattern does not match.
+    /// `pg_regexec`: the positions in bytes of the leftmost match in `s`, first the whole match and then each group, or `None` when the pattern does not match.
     ///
     /// # Errors
     ///
     /// `2201B` for a pattern that is too complex.
     pub(crate) fn find(&self, s: &str) -> Result<Option<tree::Groups>> {
-        let chars: Vec<u32> = points(s);
-        self.find_chars(&chars, 0)
+        self.find_at(s, 0)
     }
 
-    /// [`Regex::find`] in the characters `chars` from the character `from`. The constraints see all the characters, also the characters before `from`.
+    /// [`Regex::find`] in `s` from the byte `from`, where a character starts. The constraints see all the characters, also the characters before `from`.
     ///
     /// # Errors
     ///
     /// `2201B` for a pattern that is too complex.
-    pub(crate) fn find_chars(&self, chars: &[u32], from: usize) -> Result<Option<tree::Groups>> {
-        self.search(chars, from).map_err(Code::error)
+    pub(crate) fn find_at(&self, s: &str, from: usize) -> Result<Option<tree::Groups>> {
+        self.search(s.as_bytes(), from).map_err(Code::error)
     }
 
-    /// [`Regex::find_chars`] with the code of `regerror` for the error.
-    fn search(
-        &self,
-        chars: &[u32],
-        from: usize,
-    ) -> std::result::Result<Option<tree::Groups>, Code> {
+    /// [`Regex::find_at`] in the bytes of a text, with the code of `regerror` for the error. The engine reads the characters of the text in UTF-8 where they are, and each position is the byte where a character starts.
+    fn search(&self, s: &[u8], from: usize) -> std::result::Result<Option<tree::Groups>, Code> {
         let tree = self.tree.get_or_init(|| tree::Tree::new(&self.parsed));
         let tree = tree.as_ref().map_err(|code| *code)?;
         if self.prog.has_backrefs() {
-            return Ok(tree.cfind(chars, from));
+            return Ok(tree.cfind(s, from));
         }
         if self.prog.anchored() {
-            return Ok(if from == 0 { tree.find(chars, 0) } else { None });
+            return Ok(if from == 0 { tree.find(s, 0) } else { None });
         }
         let mut from = from;
-        while let Some(begin) = self.prog.first(chars, from) {
-            if let Some(groups) = tree.find(chars, begin) {
+        while let Some(begin) = self.prog.first(s, from) {
+            if let Some(groups) = tree.find(s, begin) {
                 return Ok(Some(groups));
             }
-            from = begin + 1;
+            from = after(s, begin);
         }
         Ok(None)
     }
@@ -228,9 +222,10 @@ pub(crate) fn validate(pattern: &str, cflags: u32) -> std::result::Result<(), St
 /// The message of `pg_regerror` for a pattern that is not valid or that is too complex.
 pub fn auth_search(pattern: &str, s: &str) -> std::result::Result<Option<AuthMatch>, &'static str> {
     let regex = Regex::compile(pattern, flags::ADVANCED).map_err(Code::message)?;
-    let points = points(s);
-    let Some(groups) = regex.search(&points, 0).map_err(Code::message)? else { return Ok(None) };
-    let group = groups.get(1).copied().flatten().map(|span| chars(s, span));
+    let Some(groups) = regex.search(s.as_bytes(), 0).map_err(Code::message)? else {
+        return Ok(None);
+    };
+    let group = groups.get(1).copied().flatten().map(|span| text(s, span));
     Ok(Some(AuthMatch { group }))
 }
 
@@ -274,16 +269,21 @@ fn icregexne(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(!matches(args, flags::ADVANCED | flags::ICASE | in_collation(call))?))
 }
 
-/// The text of `s` from the character `so` up to the character `eo`.
-fn chars(s: &str, (so, eo): (usize, usize)) -> String {
-    s.chars().skip(so).take(eo - so).collect()
+/// The text of `s` from the byte `so` up to the byte `eo`.
+fn text(s: &str, (so, eo): (usize, usize)) -> String {
+    s[so..eo].to_owned()
+}
+
+/// The byte after the character that starts at the byte `pos` of `s`, or `pos + 1` at the end of `s`.
+fn after(s: &[u8], pos: usize) -> usize {
+    if pos < s.len() { pos + exec::char_at(s, pos).1 } else { pos + 1 }
 }
 
 /// `textregexsubstr` for a compiled pattern: the text of the first group, or of the whole match when the pattern has no group.
 fn substring(s: &str, re: &Regex) -> Result<Value> {
     let Some(groups) = re.find(s)? else { return Ok(Value::Null) };
     let at = usize::from(re.groups() > 0);
-    Ok(groups[at].map_or(Value::Null, |span| Value::Text(chars(s, span))))
+    Ok(groups[at].map_or(Value::Null, |span| Value::Text(text(s, span))))
 }
 
 /// `textregexsubstr`: `substring(string FROM pattern)`.
@@ -486,7 +486,7 @@ fn regexp_match(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
     let Some(groups) = re.find(s)? else { return Ok(Value::Null) };
     let spans = if re.groups() > 0 { &groups[1..] } else { &groups[..1] };
-    let values = spans.iter().map(|span| span.map(|span| Value::Text(chars(s, span))));
+    let values = spans.iter().map(|span| span.map(|span| Value::Text(text(s, span))));
     Ok(Value::Array(Box::new(Array::one(values.collect()))))
 }
 
@@ -499,23 +499,9 @@ fn regexp_like(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(compile(arg(args, 1)?, cflags | in_collation(call))?.is_match(arg(args, 0)?)))
 }
 
-/// The text of the characters `chars` from `so` up to `eo`.
-fn text(chars: &[u32], (so, eo): (usize, usize)) -> String {
-    chars[so..eo].iter().filter_map(|&c| char::from_u32(c)).collect()
-}
-
-/// [`text`] at the end of `out`, for the characters `chars` of `s`. When `s` has one byte for each character, the text is the bytes of `s`.
-fn push_text(out: &mut String, s: &str, chars: &[u32], (so, eo): (usize, usize)) {
-    if s.len() == chars.len() {
-        out.push_str(&s[so..eo]);
-        return;
-    }
-    out.extend(chars[so..eo].iter().filter_map(|&c| char::from_u32(c)));
-}
-
 /// The position after a match that starts at `so` and ends at `eo`, where the next search starts. The search after an empty match starts one character later, or it finds the same match again.
-fn next_search((so, eo): (usize, usize)) -> usize {
-    if so == eo { eo + 1 } else { eo }
+fn next_search(s: &str, (so, eo): (usize, usize)) -> usize {
+    if so == eo { after(s.as_bytes(), eo) } else { eo }
 }
 
 /// The span of the whole match.
@@ -523,9 +509,9 @@ fn whole(groups: &tree::Groups) -> Result<(usize, usize)> {
     groups.first().copied().flatten().ok_or_else(|| Error::internal("a match without a span"))
 }
 
-/// `setup_regexp_matches`: the spans of each match from the character `start`, or of the first match only when `glob` is false. With `subpatterns`, a match has the span of each group when the pattern has groups. Else it has the span of the whole match. With `ignore_degenerate`, an empty match at the end of the string or just after a match does not count.
+/// `setup_regexp_matches`: the spans in bytes of each match from the byte `start`, where a character starts, or of the first match only when `glob` is false. With `subpatterns`, a match has the span of each group when the pattern has groups. Else it has the span of the whole match. With `ignore_degenerate`, an empty match at the end of the string or just after a match does not count.
 fn setup_matches(
-    chars: &[u32],
+    s: &str,
     re: &Regex,
     start: usize,
     glob: bool,
@@ -536,17 +522,17 @@ fn setup_matches(
     let mut out = Vec::new();
     let mut search = start;
     let mut prev_end = 0;
-    while search <= chars.len() {
-        let Some(groups) = re.find_chars(chars, search)? else { break };
+    while search <= s.len() {
+        let Some(groups) = re.find_at(s, search)? else { break };
         let (so, eo) = whole(&groups)?;
-        if !ignore_degenerate || (so < chars.len() && eo > prev_end) {
+        if !ignore_degenerate || (so < s.len() && eo > prev_end) {
             out.push(if subpatterns { groups[1..].to_vec() } else { groups[..1].to_vec() });
         }
         prev_end = eo;
         if !glob {
             break;
         }
-        search = next_search((so, eo));
+        search = next_search(s, (so, eo));
     }
     Ok(out)
 }
@@ -578,13 +564,21 @@ fn start_at(start: i64) -> usize {
     usize::try_from(start - 1).unwrap_or(0)
 }
 
+/// The byte of `s` where the character `n` starts: the length of `s` for the character after the last one, and a byte after the end when `s` has fewer characters, where no search starts.
+fn byte_of(s: &str, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    s.char_indices().map(|(at, _)| at).chain([s.len()]).nth(n).unwrap_or(s.len() + 1)
+}
+
+/// The number of characters of `s` before the byte `at`.
+fn char_of(s: &str, at: usize) -> usize {
+    exec::count(&s.as_bytes()[..at])
+}
+
 /// `appendStringInfoRegexpSubstr`: the replacement with `\1` to `\9` as the text of each group, `\&` as the text of the match and `\\` as one backslash. A backslash before another character stays.
-fn substitute(
-    out: &mut String,
-    replacement: &str,
-    groups: &tree::Groups,
-    (s, chars): (&str, &[u32]),
-) {
+fn substitute(out: &mut String, replacement: &str, groups: &tree::Groups, s: &str) {
     let mut it = replacement.chars().peekable();
     while let Some(c) = it.next() {
         if c != '\\' {
@@ -606,7 +600,7 @@ fn substitute(
         };
         it.next();
         if let Some(span) = span {
-            push_text(out, s, chars, span);
+            out.push_str(&s[span.0..span.1]);
         }
     }
 }
@@ -626,27 +620,26 @@ fn replace_into(
     (start, n): (usize, i64),
     out: &mut String,
 ) -> Result<()> {
-    let chars: Vec<u32> = points(s);
     let mut done = 0;
-    let mut search = start;
+    let mut search = byte_of(s, start);
     let mut count = 0;
-    while search <= chars.len() {
-        let Some(groups) = re.find_chars(&chars, search)? else { break };
+    while search <= s.len() {
+        let Some(groups) = re.find_at(s, search)? else { break };
         let span = whole(&groups)?;
         count += 1;
         if n > 0 && count != n {
-            search = next_search(span);
+            search = next_search(s, span);
             continue;
         }
-        push_text(out, s, &chars, (done, span.0));
-        substitute(out, replacement, &groups, (s, &chars));
+        out.push_str(&s[done..span.0]);
+        substitute(out, replacement, &groups, s);
         done = span.1;
         if n > 0 {
             break;
         }
-        search = next_search(span);
+        search = next_search(s, span);
     }
-    push_text(out, s, &chars, (done, chars.len()));
+    out.push_str(&s[done..]);
     Ok(())
 }
 
@@ -763,20 +756,20 @@ fn regexp_count(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let start = param(args, (2, "start"), 1, |v| v > 0)?;
     let cflags = all_flags(args, 3, "regexp_count()")?;
     let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    let chars: Vec<u32> = points(arg(args, 0)?);
-    let found = setup_matches(&chars, &re, start_at(start), true, false, false)?;
+    let s = arg(args, 0)?;
+    let found = setup_matches(s, &re, byte_of(s, start_at(start)), true, false, false)?;
     Ok(Value::Int4(i32::try_from(found.len()).unwrap_or(i32::MAX)))
 }
 
 /// The span of the group `subexpr` of the match number `n` from the character `start` for `regexp_instr` and `regexp_substr`, or of the whole match when `subexpr` is 0. `None` when the string has fewer matches or the pattern fewer groups.
 fn nth_span(
-    chars: &[u32],
+    s: &str,
     re: &Regex,
     start: i64,
     n: i64,
     subexpr: i64,
 ) -> Result<Option<(usize, usize)>> {
-    let found = setup_matches(chars, re, start_at(start), true, subexpr > 0, false)?;
+    let found = setup_matches(s, re, byte_of(s, start_at(start)), true, subexpr > 0, false)?;
     let npatterns = if subexpr > 0 && re.groups() > 0 { re.groups() } else { 1 };
     let (Ok(n), Ok(subexpr)) = (usize::try_from(n), usize::try_from(subexpr)) else {
         return Ok(None);
@@ -795,9 +788,9 @@ fn regexp_instr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let subexpr = param(args, (6, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 5, "regexp_instr()")?;
     let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    let chars: Vec<u32> = points(arg(args, 0)?);
-    let pos = nth_span(&chars, &re, start, n, subexpr)?
-        .map_or(0, |(so, eo)| if endoption == 1 { eo + 1 } else { so + 1 });
+    let s = arg(args, 0)?;
+    let pos = nth_span(s, &re, start, n, subexpr)?
+        .map_or(0, |(so, eo)| char_of(s, if endoption == 1 { eo } else { so }) + 1);
     Ok(Value::Int4(i32::try_from(pos).unwrap_or(i32::MAX)))
 }
 
@@ -808,21 +801,20 @@ fn regexp_substr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let subexpr = param(args, (5, "subexpr"), 0, |v| v >= 0)?;
     let cflags = all_flags(args, 4, "regexp_substr()")?;
     let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    let chars: Vec<u32> = points(arg(args, 0)?);
-    Ok(nth_span(&chars, &re, start, n, subexpr)?
-        .map_or(Value::Null, |span| Value::Text(text(&chars, span))))
+    let s = arg(args, 0)?;
+    Ok(nth_span(s, &re, start, n, subexpr)?.map_or(Value::Null, |span| Value::Text(text(s, span))))
 }
 
 /// `regexp_matches(string, pattern [, flags])`: one row for each match, or for the first match without the option `g`. Each row is an array with the text of each group, or of the match when the pattern has no group.
 pub(crate) fn regexp_matches(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let (cflags, glob) = options(args)?;
     let re = compile(arg(args, 1)?, cflags | in_collation(call))?;
-    let chars: Vec<u32> = points(arg(args, 0)?);
-    let found = setup_matches(&chars, &re, 0, glob, true, false)?;
+    let s = arg(args, 0)?;
+    let found = setup_matches(s, &re, 0, glob, true, false)?;
     Ok(found
         .iter()
         .map(|spans| {
-            let values = spans.iter().map(|span| span.map(|span| Value::Text(text(&chars, span))));
+            let values = spans.iter().map(|span| span.map(|span| Value::Text(text(s, span))));
             vec![Value::Array(Box::new(Array::one(values.collect())))]
         })
         .collect())
@@ -832,16 +824,16 @@ pub(crate) fn regexp_matches(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<
 fn split(call: &Call<'_>, args: &[Value], function: &str) -> Result<Vec<String>> {
     let cflags = all_flags(args, 2, function)? | in_collation(call);
     let re = compile(arg(args, 1)?, cflags)?;
-    let chars: Vec<u32> = points(arg(args, 0)?);
-    let found = setup_matches(&chars, &re, 0, true, false, true)?;
+    let s = arg(args, 0)?;
+    let found = setup_matches(s, &re, 0, true, false, true)?;
     let mut parts = Vec::with_capacity(found.len() + 1);
     let mut from = 0;
     for groups in &found {
         let (so, eo) = whole(groups)?;
-        parts.push(text(&chars, (from, so)));
+        parts.push(text(s, (from, so)));
         from = eo;
     }
-    parts.push(text(&chars, (from, chars.len())));
+    parts.push(text(s, (from, s.len())));
     Ok(parts)
 }
 
@@ -917,6 +909,41 @@ mod tests {
             Ok(Value::Text(t)) => t,
             other => panic!("{pattern}: {other:?}"),
         }
+    }
+
+    #[test]
+    fn counts_characters_of_utf8_in_place() {
+        let re = |pattern: &str| compile(pattern, flags::ADVANCED).unwrap();
+        let replace = |s: &str, pattern: &str, with: &str, at: (usize, i64)| {
+            let mut out = String::new();
+            replace_into(s, &re(pattern), with, at, &mut out).unwrap();
+            out
+        };
+        // `regexp_instr('жжabc', 'b')` is 4, and 5 with `endoption` 1.
+        let s = "жжabc";
+        let span = nth_span(s, &re("b"), 1, 1, 0).unwrap().unwrap();
+        assert_eq!((char_of(s, span.0) + 1, char_of(s, span.1) + 1), (4, 5));
+        // An empty match goes on by one character, not one byte.
+        assert_eq!(replace("жé", "x*", "-", (0, 0)), "-ж-é-");
+        // `regexp_replace('жaжa', 'a', 'X', 3)` starts at the third character.
+        assert_eq!(replace("жaжa", "a", "X", (2, 1)), "жaжX");
+        assert_eq!(replace("жa", "a", "X", (4, 1)), "жa");
+        assert_eq!(replace("жa", "$", "X", (2, 1)), "жaX");
+        // `regexp_count('жжж', 'ж', 2)` is 2.
+        let s = "жжж";
+        assert_eq!(setup_matches(s, &re("ж"), byte_of(s, 1), true, false, false).unwrap().len(), 2);
+        // `regexp_split_to_array('жé', '')` is `{ж,é}`.
+        let found = setup_matches("жé", &re(""), 0, true, false, true).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(whole(&found[0]).unwrap(), (2, 2));
+        // Back references compare characters, also without the case.
+        assert!(is(r"^(жж)\1$", "жжжж"));
+        assert!(!is(r"^(жж)\1$", "жжж"));
+        let icase = compile(r"(ab)\1", flags::ADVANCED | flags::ICASE).unwrap();
+        let groups = icase.find("жAbab").unwrap().unwrap();
+        assert_eq!(groups[1].map(|span| text("жAbab", span)), Some("Ab".to_owned()));
+        assert_eq!(replace("aжbжc", "ж(.)ж", r"[\1]", (0, 1)), "a[b]c");
+        assert_eq!(replace("ж😀é", "(.)$", r"<\1>", (0, 1)), "ж😀<é>");
     }
 
     #[test]
