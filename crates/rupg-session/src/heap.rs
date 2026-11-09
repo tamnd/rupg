@@ -176,6 +176,8 @@ struct State {
     row_locks: RowLocks,
     /// The tuple locks of `heap_acquire_tuplock`: the transactions that wait for a row lock or a change of each version, in the order of their waits, with the strength that each wants.
     row_queues: RowQueues,
+    /// `nextMXact` and `nextOffset` from `FirstMultiXactId`: the number of the multixacts that the row locks made, and the sum of their members. A lock of a version that another transaction or subtransaction locks too makes a new multixact with all the lockers, as `MultiXactIdExpand` does. rupg keeps no multixacts after their lockers end, and never truncates, so the numbers only grow.
+    multixacts: (u64, u64),
 }
 
 /// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
@@ -210,7 +212,10 @@ fn row_conflict(held: RowStrength, wanted: RowStrength) -> bool {
 }
 
 /// The row locks of [`State::row_locks`] by the version: the transaction, the strength and the command that took the lock. A subtransaction has no transaction ID of its own, as `MultiXactIdCreate` gives the lock of a subtransaction, so the command tells the locks that a rollback to a savepoint takes away.
-type RowLocks = HashMap<(u32, u32, u64), Vec<(u32, RowStrength, u32)>>;
+type RowLocks = HashMap<(u32, u32, u64), Lockers>;
+
+/// The lockers of a version: the transaction, the strength and the command that took the lock.
+type Lockers = Vec<(u32, RowStrength, u32)>;
 
 /// The waits of [`State::row_queues`] by the version: the transaction and the strength that it wants.
 type RowQueues = HashMap<(u32, u32, u64), Vec<(u32, RowStrength)>>;
@@ -253,9 +258,9 @@ fn unqueue_rows(queues: &mut RowQueues, xid: u32, kept: Option<(u32, u32, u64)>)
     });
 }
 
-/// A lock of the transaction `xid` in the command `command`: no new entry when the transaction holds the strength or a stronger one already, and a stronger strength for an entry of the same command.
+/// A lock of the transaction `xid` in the command `command`: no new entry when the transaction holds the strength or a stronger one already, and a stronger strength for an entry of the same command. A new lock of a version with more than one locker makes a multixact of all the lockers, which `multixacts` counts.
 fn add_row_lock(
-    lockers: &mut Vec<(u32, RowStrength, u32)>,
+    (lockers, multixacts): (&mut Lockers, &mut (u64, u64)),
     (xid, strength, command): (u32, RowStrength, u32),
 ) {
     if lockers.iter().any(|&(locker, held, _)| locker == xid && held >= strength) {
@@ -264,6 +269,10 @@ fn add_row_lock(
     match lockers.iter_mut().find(|(locker, _, at)| *locker == xid && *at == command) {
         Some((_, held, _)) => *held = strength,
         None => lockers.push((xid, strength, command)),
+    }
+    if lockers.len() > 1 {
+        multixacts.0 += 1;
+        multixacts.1 += lockers.len() as u64;
     }
 }
 
@@ -2154,6 +2163,11 @@ impl Heap {
         self.state.write().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// `GetMultiXactInfo`: the number of the multixacts that the row locks made and the sum of their members.
+    pub(crate) fn multixacts(&self) -> (u64, u64) {
+        self.state_read().multixacts
+    }
+
     /// A read lock of the state, for a read that does not change it.
     fn state_read(&self) -> RwLockReadGuard<'_, State> {
         self.state.read().unwrap_or_else(PoisonError::into_inner)
@@ -3087,7 +3101,7 @@ impl Heap {
         view: &View,
         (xid, strength): (u32, RowStrength),
     ) -> Result<RowLocked> {
-        let State { tables, running, row_locks, .. } = state;
+        let State { tables, running, row_locks, multixacts, .. } = state;
         let key = (view.database, relation);
         // A foreign table has no versions in the heap, and its rows take no lock.
         let Some(table) = tables.get_mut(&key) else { return Ok(RowLocked::Done) };
@@ -3124,7 +3138,7 @@ impl Heap {
             }
             for tid in chain {
                 let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
-                add_row_lock(lockers, (xid, strength, view.command));
+                add_row_lock((lockers, &mut *multixacts), (xid, strength, view.command));
             }
             return Ok(RowLocked::Done);
         }
@@ -3146,7 +3160,7 @@ impl Heap {
             return Ok(RowLocked::Wait(holder));
         }
         let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
-        add_row_lock(lockers, (xid, strength, view.command));
+        add_row_lock((lockers, multixacts), (xid, strength, view.command));
         Ok(RowLocked::Done)
     }
 

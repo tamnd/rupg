@@ -1962,6 +1962,10 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn multixacts(&self) -> (u64, u64) {
+        self.activity.map_or((0, 0), |(_, store)| store.heap().multixacts())
+    }
+
     fn prepared_xacts(&self) -> Vec<Vec<Value>> {
         let Some((_, store)) = self.activity else { return Vec::new() };
         store

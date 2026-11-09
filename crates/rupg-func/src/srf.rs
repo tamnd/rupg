@@ -67,10 +67,11 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_stat_get_activity" => crate::activity::activity,
         "pg_stat_get_backend_idset" => crate::activity::backend_idset,
         "pg_stat_get_progress_info" => crate::replication::progress_info,
-        "pg_stat_get_wal_senders"
-        | "pg_stat_get_subscription"
-        | "pg_get_replication_slots" => crate::replication::none,
+        "pg_stat_get_wal_senders" | "pg_stat_get_subscription" | "pg_get_replication_slots" => {
+            crate::replication::none
+        }
         "pg_prepared_xact" => prepared_xacts,
+        "pg_get_multixact_stats" => multixact_stats,
         "pg_stat_get_wal_receiver" => crate::replication::wal_receiver,
         "pg_stat_get_subscription_stats" => crate::replication::subscription_stats,
         "pg_stat_get_replication_slot" => crate::replication::replication_slot,
@@ -231,6 +232,23 @@ fn cursors(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_prepared_xact`: the prepared transactions of two phase commit, which the view `pg_prepared_xacts` reads.
 fn prepared_xacts(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.prepared_xacts())
+}
+
+/// `MULTIXACT_MEMBERS_PER_MEMBERGROUP`: the members of a group of the members SLRU, which share the bytes of their flags.
+const MEMBERS_PER_GROUP: u64 = 4;
+
+/// `MULTIXACT_MEMBERGROUP_SIZE`: the bytes of a group, the flags and then the transaction ID of each member.
+const MEMBER_GROUP_SIZE: u64 = MEMBERS_PER_GROUP + MEMBERS_PER_GROUP * 4;
+
+/// `pg_get_multixact_stats`: the number of the multixacts, of their members, the bytes of the members, and the oldest multixact, which is `FirstMultiXactId` as rupg never truncates them.
+fn multixact_stats(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let (multixacts, members) = call.session.multixacts();
+    // `MultiXactMemberStorageSize`: the full groups, and a group of its flags with the members of the last one.
+    let rest = members % MEMBERS_PER_GROUP;
+    let size = members / MEMBERS_PER_GROUP * MEMBER_GROUP_SIZE
+        + if rest == 0 { 0 } else { MEMBERS_PER_GROUP + rest * 4 };
+    let int8 = |n: u64| Value::Int8(i64::try_from(n).unwrap_or(i64::MAX));
+    Ok(vec![vec![int8(multixacts), int8(members), int8(size), Value::Oid(1)]])
 }
 
 /// `pg_lock_status`: the locks of the sessions, which the view `pg_locks` reads.
