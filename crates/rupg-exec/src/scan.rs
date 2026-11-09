@@ -2209,16 +2209,42 @@ enum Side<'q> {
     Expr(&'q Expr),
 }
 
+/// A condition of a join that [`join`] tests for each pair of rows: an `=` of [`HASH_EQUALS`] of two columns, or another condition.
+enum Check<'q> {
+    Columns(Var, Var, &'q Expr),
+    Expr(&'q Expr),
+}
+
+/// The result of an `=` of [`HASH_EQUALS`] of two columns in a tuple, without a copy of the values: false when a value is null, as the operators are strict, true when the values have the same key, and `None` when the operator must run, as for two texts that differ, which a collation that is not deterministic can find equal.
+fn equal_columns(tables: &Tables, tuple: &[usize], a: Var, b: Var) -> Option<bool> {
+    tables.with_column(tuple, a, |x| {
+        tables.with_column(tuple, b, |y| match (x, y) {
+            (Value::Null, _) | (_, Value::Null) => Some(false),
+            (Value::Text(x), Value::Text(y)) => (x == y).then_some(true),
+            _ => match (int_key(x), int_key(y)) {
+                (Some(x), Some(y)) => Some(x == y),
+                _ => None,
+            },
+        })
+    })
+}
+
+/// The value of a key of [`Key::Int`] for a value, or `None` for a value of another type.
+fn int_key(value: &Value) -> Option<i64> {
+    Some(match *value {
+        Value::Bool(v) => i64::from(v),
+        Value::Char(v) => i64::from(v),
+        Value::Int2(v) => i64::from(v),
+        Value::Int4(v) => i64::from(v),
+        Value::Int8(v) => v,
+        Value::Oid(v) => i64::from(v),
+        _ => return None,
+    })
+}
+
 /// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` that a hash can test, with a column or an expression of each side, or an `OR` of such `=`s, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
 fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
     let JoinInput { left, right, on, kind, left_relations, right_relations } = input;
-    let merge = |l: &[usize], r: &[usize]| -> Vec<usize> {
-        let mut tuple = l.to_vec();
-        for &rel in right_relations {
-            tuple[rel] = r[rel];
-        }
-        tuple
-    };
     // The first `=` with a column of each side, else the first `=` with an expression of each side. A column needs no evaluation.
     let side = |e: &'a Expr, relations: &[usize]| -> Option<Side<'a>> {
         match plain_var(e) {
@@ -2241,11 +2267,30 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
             _ => Some((side(b, left_relations)?, side(a, right_relations)?)),
         }
     };
-    let pairs: Vec<(Side<'a>, Side<'a>)> = on.iter().filter_map(|expr| pair(expr)).collect();
-    let hash = pairs
+    let pairs: Vec<(usize, Side<'a>, Side<'a>)> =
+        on.iter().enumerate().filter_map(|(n, expr)| pair(expr).map(|(l, r)| (n, l, r))).collect();
+    let found = pairs
         .iter()
-        .find(|(l, r)| matches!((l, r), (Side::Var(_), Side::Var(_))))
+        .find(|(_, l, r)| matches!((l, r), (Side::Var(_), Side::Var(_))))
         .or_else(|| pairs.first());
+    let hash = found.map(|(_, l, r)| (l, r));
+    // An `=` of two columns needs no test after the hash finds its rows, as the rows have the same key, and another `=` of two columns compares the values with no copy.
+    let checks: Vec<Check<'_>> = on
+        .iter()
+        .enumerate()
+        .filter_map(|(n, expr)| {
+            let columns =
+                pairs.iter().find(|(at, _, _)| *at == n).and_then(|(_, l, r)| match (l, r) {
+                    (Side::Var(a), Side::Var(b)) if a.attnum > 0 && b.attnum > 0 => Some((*a, *b)),
+                    _ => None,
+                });
+            match (columns, found) {
+                (Some(_), Some((at, Side::Var(_), Side::Var(_)))) if *at == n => None,
+                (Some((a, b)), _) => Some(Check::Columns(a, b, expr)),
+                (None, _) => Some(Check::Expr(expr)),
+            }
+        })
+        .collect();
     // With no such `=`, an `OR` of such `=`s gives the rows of the right side that match one of its arms, as a `BitmapOr` of index scans or an index scan with `= ANY` does.
     let arms: Vec<(Side<'a>, Side<'a>)> = if hash.is_none() {
         on.iter()
@@ -2300,6 +2345,7 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     }
     let all: Vec<usize> = (0..right.len()).collect();
     let mut union = Vec::new();
+    let mut tuple = Vec::new();
     for (n, l) in left.iter().enumerate() {
         let candidates: &[usize] = match hash {
             Some(_) => match &left_keys[n] {
@@ -2321,10 +2367,21 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
         };
         let mut matched = false;
         for &i in candidates {
-            let tuple = merge(l, &right[i]);
+            tuple.clear();
+            tuple.extend_from_slice(l);
+            for &rel in right_relations {
+                tuple[rel] = right[i][rel];
+            }
             let mut pass = true;
-            for expr in on {
-                if test(expr, &tuple)? != Value::Bool(true) {
+            for check in &checks {
+                let passed = match check {
+                    Check::Columns(a, b, expr) => match equal_columns(tables, &tuple, *a, *b) {
+                        Some(passed) => passed,
+                        None => test(expr, &tuple)? == Value::Bool(true),
+                    },
+                    Check::Expr(expr) => test(expr, &tuple)? == Value::Bool(true),
+                };
+                if !passed {
                     pass = false;
                     break;
                 }
@@ -2335,7 +2392,7 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
                 }
                 matched = true;
                 right_matched[i] = true;
-                out.push(tuple);
+                out.push(tuple.clone());
             }
         }
         if !matched && matches!(kind, JoinKind::Left | JoinKind::Full) {
