@@ -99,7 +99,9 @@ impl Connection {
                                 tid_text(tid),
                                 info.name
                             );
-                            self.reader().wait_xact(view.xid, holder, &context)?;
+                            let row = (view.database, info.table, tid);
+                            let held = (view.xid, holder);
+                            self.reader().wait_row(held, &context, row, crate::heap::UPDATE)?;
                         }
                         Changed::Again => break true,
                         Changed::SelfModified { .. } => {

@@ -174,6 +174,8 @@ struct State {
     log_buffer: Vec<u8>,
     /// The row locks of `FOR UPDATE` and the other locking clauses: the transactions that lock each version, by the OID of the database, the OID of the table and the ID of the version, with the strongest strength of each (spec/11 section 11.7). A lock stays in memory only and goes at the end of its transaction.
     row_locks: RowLocks,
+    /// The tuple locks of `heap_acquire_tuplock`: the transactions that wait for a row lock or a change of each version, in the order of their waits, with the strength that each wants.
+    row_queues: RowQueues,
 }
 
 /// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
@@ -206,6 +208,47 @@ fn row_conflict(held: RowStrength, wanted: RowStrength) -> bool {
 
 /// The row locks of [`State::row_locks`] by the version: the transaction, the strength and the command that took the lock. A subtransaction has no transaction ID of its own, as `MultiXactIdCreate` gives the lock of a subtransaction, so the command tells the locks that a rollback to a savepoint takes away.
 type RowLocks = HashMap<(u32, u32, u64), Vec<(u32, RowStrength, u32)>>;
+
+/// The waits of [`State::row_queues`] by the version: the transaction and the strength that it wants.
+type RowQueues = HashMap<(u32, u32, u64), Vec<(u32, RowStrength)>>;
+
+/// `heap_acquire_tuplock` for the transaction `xid`, which must wait for the transaction `holder` to lock or change the version `row` with `strength`. The transaction goes in the queue of the version, and waits first for a transaction before it in the queue that wants a strength that conflicts, which holds the tuple lock, so that the waits get the row in their order. A transaction that holds a lock on the version already does not go in the queue, so that an upgrade of a lock does not wait for a transaction that waits for that lock. The result is the transaction to wait for.
+fn queue_row(
+    (queues, locks): (&mut RowQueues, &RowLocks),
+    row: (u32, u32, u64),
+    (xid, strength): (u32, RowStrength),
+    holder: u32,
+) -> u32 {
+    unqueue_rows(queues, xid, Some(row));
+    if locks.get(&row).is_some_and(|lockers| lockers.iter().any(|&(locker, ..)| locker == xid)) {
+        unqueue_rows(queues, xid, None);
+        return holder;
+    }
+    let queue = queues.entry(row).or_default();
+    let mine = queue.iter().position(|&(waiter, _)| waiter == xid);
+    let first = queue[..mine.unwrap_or(queue.len())]
+        .iter()
+        .find(|&&(waiter, wanted)| waiter != xid && row_conflict(wanted, strength))
+        .map(|&(waiter, _)| waiter);
+    match mine {
+        Some(at) => queue[at].1 = queue[at].1.max(strength),
+        None => queue.push((xid, strength)),
+    }
+    first.unwrap_or(holder)
+}
+
+/// The end of the waits of the transaction `xid` for rows, other than for the version `kept`: it leaves their queues, as it releases its tuple locks.
+fn unqueue_rows(queues: &mut RowQueues, xid: u32, kept: Option<(u32, u32, u64)>) {
+    if queues.is_empty() {
+        return;
+    }
+    queues.retain(|row, queue| {
+        if Some(*row) != kept {
+            queue.retain(|&(waiter, _)| waiter != xid);
+        }
+        !queue.is_empty()
+    });
+}
 
 /// A lock of the transaction `xid` in the command `command`: no new entry when the transaction holds the strength or a stronger one already, and a stronger strength for an entry of the same command.
 fn add_row_lock(
@@ -290,6 +333,7 @@ struct Touched {
 impl State {
     /// The row locks of the transaction `xid` go at its end.
     fn unlock_rows(&mut self, xid: u32) {
+        unqueue_rows(&mut self.row_queues, xid, None);
         if self.row_locks.is_empty() {
             return;
         }
@@ -2880,6 +2924,12 @@ impl Heap {
             .collect()
     }
 
+    /// The end of the waits of the transaction `xid` for rows, after a lock that `SKIP LOCKED` or `NOWAIT` did not wait for.
+    pub(crate) fn unqueue_rows(&self, xid: u32) {
+        let mut state = self.state();
+        unqueue_rows(&mut state.row_queues, xid, None);
+    }
+
     /// `ExecDelete` with `changingPart`: the versions `tids` of the table `relation`, which the transaction `xid` deleted to move their rows to another partition, are marked as moved, so that a write or a row lock that waited for them fails.
     pub(crate) fn mark_moved(&self, database: u32, relation: u32, xid: u32, tids: &[u64]) {
         let mut state = self.state();
@@ -3012,7 +3062,29 @@ impl Heap {
         (xid, strength): (u32, RowStrength),
     ) -> Result<RowLocked> {
         let mut state = self.state();
-        let State { tables, running, row_locks, .. } = &mut *state;
+        let locked = Self::lock_row_in(&mut state, (relation, tid), view, (xid, strength));
+        let State { row_queues, row_locks, .. } = &mut *state;
+        match locked {
+            Ok(RowLocked::Wait(holder)) => {
+                let row = (view.database, relation, tid);
+                let queues = (row_queues, &*row_locks);
+                Ok(RowLocked::Wait(queue_row(queues, row, (xid, strength), holder)))
+            }
+            locked => {
+                unqueue_rows(row_queues, xid, None);
+                locked
+            }
+        }
+    }
+
+    /// [`Heap::lock_row`] with no tuple lock.
+    fn lock_row_in(
+        state: &mut State,
+        (relation, tid): (u32, u64),
+        view: &View,
+        (xid, strength): (u32, RowStrength),
+    ) -> Result<RowLocked> {
+        let State { tables, running, row_locks, .. } = state;
         let key = (view.database, relation);
         // A foreign table has no versions in the heap, and its rows take no lock.
         let Some(table) = tables.get_mut(&key) else { return Ok(RowLocked::Done) };
@@ -3085,6 +3157,24 @@ impl Heap {
         relation: u32,
         view: &View,
         changes: Vec<Change>,
+        keys: (&[Unique], Derive<'_>),
+        kept: &[u64],
+        applied: &mut Vec<usize>,
+    ) -> Result<Changed> {
+        let changed = self.change_rows(relation, view, changes, keys, kept, applied);
+        if !matches!(changed, Ok(Changed::Wait { .. })) {
+            let mut state = self.state();
+            unqueue_rows(&mut state.row_queues, view.xid, None);
+        }
+        changed
+    }
+
+    /// The `heap_update` and `heap_delete` of [`Heap::change`], which leaves the queues of the rows that it waited for to the caller.
+    fn change_rows(
+        &self,
+        relation: u32,
+        view: &View,
+        changes: Vec<Change>,
         (unique, derive): (&[Unique], Derive<'_>),
         kept: &[u64],
         applied: &mut Vec<usize>,
@@ -3099,8 +3189,16 @@ impl Heap {
             });
         }
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
-        let State { tables, running, rechecks: pending, toast_oids, combos, row_locks, .. } =
-            &mut *state;
+        let State {
+            tables,
+            running,
+            rechecks: pending,
+            toast_oids,
+            combos,
+            row_locks,
+            row_queues,
+            ..
+        } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
@@ -3113,6 +3211,11 @@ impl Heap {
                 continue;
             };
             let version = &table.versions[at];
+            // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
+            let key_kept =
+                values.as_ref().is_some_and(|new| !changes_key(unique, &version.values, new));
+            let strength = if key_kept { NO_KEY_UPDATE } else { UPDATE };
+            let row = (view.database, relation, tid);
             match version.xmax {
                 0 => {}
                 // The command changed the row before, as for a row that a join gives more than once.
@@ -3121,7 +3224,9 @@ impl Heap {
                     return Ok(Changed::SelfModified { update: values.is_some() });
                 }
                 xmax if running.contains(&xmax) => {
-                    return Ok(Changed::Wait { holder: xmax, tid });
+                    let queues = (&mut *row_queues, &*row_locks);
+                    let holder = queue_row(queues, row, (view.xid, strength), xmax);
+                    return Ok(Changed::Wait { holder, tid });
                 }
                 _ if view.serializable => {
                     let what = if version.next == 0 { "delete" } else { "update" };
@@ -3133,14 +3238,12 @@ impl Heap {
                 _ if version.next == MOVED => return Err(moved_error()),
                 _ => return Ok(Changed::Again),
             }
-            // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
-            let key_kept =
-                values.as_ref().is_some_and(|new| !changes_key(unique, &version.values, new));
             if !row_locks.is_empty() {
-                let strength = if key_kept { NO_KEY_UPDATE } else { UPDATE };
                 let locks = (&*row_locks, &**running);
                 let key = (view.database, relation);
                 if let Some(holder) = row_holder(locks, key, tid, (view.xid, strength)) {
+                    let queues = (&mut *row_queues, &*row_locks);
+                    let holder = queue_row(queues, row, (view.xid, strength), holder);
                     return Ok(Changed::Wait { holder, tid });
                 }
             }
@@ -3663,7 +3766,13 @@ impl Heap {
         (holder, strength): (u32, RowStrength),
     ) -> bool {
         let mut state = self.state();
-        let State { tables, row_locks, .. } = &mut *state;
+        let State { tables, row_locks, row_queues, .. } = &mut *state;
+        // A transaction that waits in the queue of the version with a strength that conflicts holds its tuple lock.
+        if row_queues.get(&(database, relation, tid)).is_some_and(|queue| {
+            queue.iter().any(|&(waiter, wanted)| waiter == holder && row_conflict(wanted, strength))
+        }) {
+            return true;
+        }
         let Some(table) = tables.get(&(database, relation)) else { return false };
         let mut tid = tid;
         loop {
@@ -3787,6 +3896,7 @@ impl Heap {
     pub(crate) fn rollback_to(&self, xid: u32, command: u32) {
         let mut state = self.state();
         state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
+        unqueue_rows(&mut state.row_queues, xid, None);
         // The row locks that the subtransaction took go, and the locks from before it stay.
         if !state.row_locks.is_empty() {
             state.row_locks.retain(|_, lockers| {
@@ -5241,5 +5351,42 @@ mod tests {
         assert!(heap.row_blocked((1, 7, tid), (a, UPDATE)));
         assert_eq!(lock(b, 0, NO_KEY_UPDATE), RowLocked::Done);
         assert_eq!(lock(b, 0, UPDATE), RowLocked::Wait(a));
+    }
+
+    #[test]
+    fn the_waits_for_a_row_get_it_in_their_order() {
+        let heap = Heap::default();
+        let first = heap.begin(1);
+        heap.insert(
+            7,
+            &view(heap.snapshot(), first, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
+        heap.commit(first);
+        let snapshot = heap.snapshot();
+        let tid = first_tid(&heap, &view(snapshot.clone(), 0, 0));
+        let (a, b, c) = (heap.begin(2), heap.begin(3), heap.begin(4));
+        // `LockTupleShare`.
+        const SHARE: RowStrength = 2;
+        let lock = |xid, strength| {
+            heap.lock_row((7, tid), &view(snapshot.clone(), xid, 0), (xid, strength)).unwrap()
+        };
+        assert_eq!(lock(a, SHARE), RowLocked::Done);
+        // `b` waits for `a` and holds the tuple lock, and `c` waits for `b`, which holds the tuple lock until it gets the row.
+        assert_eq!(lock(b, UPDATE), RowLocked::Wait(a));
+        assert_eq!(lock(c, UPDATE), RowLocked::Wait(b));
+        assert!(heap.row_blocked((1, 7, tid), (b, UPDATE)));
+        // A lock that does not conflict with `a` does not wait in the queue.
+        assert_eq!(lock(c, SHARE), RowLocked::Done);
+        // `c` holds a lock on the row, so its upgrade waits for `a` and not for `b`.
+        assert_eq!(lock(c, UPDATE), RowLocked::Wait(a));
+        heap.abort(a);
+        assert_eq!(lock(b, UPDATE), RowLocked::Wait(c));
+        heap.abort(c);
+        assert_eq!(lock(b, UPDATE), RowLocked::Done);
+        assert!(heap.row_blocked((1, 7, tid), (b, UPDATE)));
     }
 }

@@ -301,7 +301,9 @@ impl Connection {
                     tid_text(tid),
                     routing.name(at)
                 );
-                self.reader().wait_xact(view.xid, holder, &context)?;
+                let row = (view.database, routing.oid(at), tid);
+                let held = (view.xid, holder);
+                self.reader().wait_row(held, &context, row, update_lock(info))?;
                 return Ok(false);
             }
         }
