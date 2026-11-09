@@ -22,7 +22,7 @@ fn key(args: &[Value]) -> Result<AdvisoryKey> {
 /// `LockAcquire` with a wait: the functions that give `void`.
 fn lock(call: &Call<'_>, args: &[Value], share: bool, session: bool) -> Result<Value> {
     call.session.advisory_lock(AdvisoryLock { key: key(args)?, share, session }, true)?;
-    Ok(Value::Text(String::new()))
+    Ok(crate::void_result(call))
 }
 
 /// `LockAcquire` with no wait: the `pg_try_` functions, which give false when the lock is not free.
@@ -46,7 +46,7 @@ fn unlock(call: &Call<'_>, args: &[Value], share: bool) -> Result<Value> {
 /// `pg_advisory_unlock_all`: `LockReleaseSession`, which releases the locks of the session level.
 fn unlock_all(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     call.session.advisory_unlock_all()?;
-    Ok(Value::Text(String::new()))
+    Ok(crate::void_result(call))
 }
 
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
