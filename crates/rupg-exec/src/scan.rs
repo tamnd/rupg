@@ -537,7 +537,9 @@ pub fn members(
     if children.is_empty() {
         return Ok(None);
     }
-    Ok(Some(std::iter::once(from.oid).chain(children).collect()))
+    let own = session.temp_number();
+    let other = |&child: &u32| session.catalog().is_some_and(|c| c.is_other_temp(child, own));
+    Ok(Some(std::iter::once(from.oid).chain(children.into_iter().filter(|c| !other(c))).collect()))
 }
 
 /// The value of a condition of `WHERE` for a tuple of rows of some [`Tables`].
@@ -1475,8 +1477,12 @@ fn user_rows(
             }
             row.extend(system);
         }
-        // `expand_inherited_rtentry`: the rows of the tables that inherit from the table come after its own rows.
+        // `expand_inherited_rtentry`: the rows of the tables that inherit from the table come after its own rows. A temporary table of another session is not in the scan.
+        let own = session.temp_number();
         for child in children {
+            if session.catalog().is_some_and(|c| c.is_other_temp(child, own)) {
+                continue;
+            }
             child_rows(relation, (child, xids), used, session, &mut rows)?;
         }
         return Ok(rows);

@@ -1603,6 +1603,16 @@ impl Catalog {
         self.schemas.values().find(|s| s.name == name)
     }
 
+    /// `RELATION_IS_OTHER_TEMP`: true for a relation in a temporary schema that is not `pg_temp_N` or `pg_toast_temp_N` of the session whose number is `own`, which a scan of a parent and `TRUNCATE` skip.
+    pub fn is_other_temp(&self, relation: u32, own: Option<i32>) -> bool {
+        let Some(rel) = self.relation(relation) else { return false };
+        if !self.is_temp_schema(rel.namespace) {
+            return false;
+        }
+        let name = self.schemas.get(&rel.namespace).map_or("", |s| s.name.as_str());
+        own.is_none_or(|n| name != format!("pg_temp_{n}") && name != format!("pg_toast_temp_{n}"))
+    }
+
     /// `isAnyTempNamespace`: true for a temporary schema `pg_temp_N` or its TOAST schema `pg_toast_temp_N` of any session. A user cannot make a schema with the prefix `pg_`, so the name tells.
     pub fn is_temp_schema(&self, oid: u32) -> bool {
         self.schemas.get(&oid).is_some_and(|s| {
