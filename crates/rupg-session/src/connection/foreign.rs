@@ -100,6 +100,8 @@ impl Batch {
 struct State {
     other: Option<Keys>,
     own: Option<Keys>,
+    /// The keys of the rows of the referencing table that the latest snapshot sees and the snapshot of the transaction does not, for [`Connection::crosscheck`].
+    newer: Option<Keys>,
     plan: Option<Plan>,
     /// The plans of [`Foreign::casts`], one for each key column with a cast.
     casts: Vec<Option<Plan>>,
@@ -112,8 +114,8 @@ struct State {
 /// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by the hash of the columns that the equality compares.
 struct Keys {
     keys: Vec<Vec<Value>>,
-    /// The ID of the version of the row of each key, which ends the row of the scan, or 0.
-    tids: Vec<u64>,
+    /// The table or the leaf partition of the row of each key and the ID of its version, or 0 for a row with no ID.
+    places: Vec<(u32, u64)>,
     /// The keys whose versions have the lock of `FOR KEY SHARE` of the check, which the statement takes one time.
     locked: HashSet<usize>,
     hashes: HashMap<u64, Vec<usize>>,
@@ -124,7 +126,7 @@ struct Keys {
 impl Keys {
     /// The keys of the columns `columns` of the rows, with the values of the types `from` as values of the types `to`. `period` is true for a temporal foreign key.
     fn of(
-        rows: Vec<Vec<Value>>,
+        rows: Vec<(u32, Vec<Value>)>,
         columns: &[usize],
         from: &[u32],
         to: &[u32],
@@ -133,12 +135,12 @@ impl Keys {
         let equal = columns.len() - usize::from(period);
         let mut keys = Keys {
             keys: Vec::with_capacity(rows.len()),
-            tids: Vec::with_capacity(rows.len()),
+            places: Vec::with_capacity(rows.len()),
             locked: HashSet::new(),
             hashes: HashMap::new(),
             equal,
         };
-        for row in rows {
+        for (relation, row) in rows {
             let tid = match row.last() {
                 Some(&Value::Int8(tid)) => tid.cast_unsigned(),
                 _ => 0,
@@ -153,7 +155,7 @@ impl Keys {
             let Some(key) = key else { continue };
             keys.hashes.entry(hash_key(&key[..equal], to)).or_default().push(keys.keys.len());
             keys.keys.push(key);
-            keys.tids.push(tid);
+            keys.places.push((relation, tid));
         }
         keys
     }
@@ -176,14 +178,23 @@ impl Keys {
 
     /// The periods of the keys of a temporal foreign key with the other columns equal to those of `key` and a period that overlaps the period of `key`.
     fn periods(&self, key: &[Value], types: &[u32]) -> Result<Vec<&Value>, Error> {
-        let (ty, period) = (types[self.equal], &key[self.equal]);
-        let mut periods = Vec::new();
-        for other in self.matching(key, types)? {
-            if rupg_func::period_overlaps(ty, &other[self.equal], period)? {
-                periods.push(&other[self.equal]);
+        let found = self.overlapping(key, types)?;
+        Ok(found.into_iter().map(|at| &self.keys[at][self.equal]).collect())
+    }
+
+    /// The places of the keys of [`Keys::periods`].
+    fn overlapping(&self, key: &[Value], types: &[u32]) -> Result<Vec<usize>, Error> {
+        let (equal, ty, period) = (self.equal, types[self.equal], &key[self.equal]);
+        let mut found = Vec::new();
+        for &at in self.hashes.get(&hash_key(&key[..equal], types)).into_iter().flatten() {
+            let other = &self.keys[at];
+            if same(&other[..equal], &key[..equal], types)?
+                && rupg_func::period_overlaps(ty, &other[equal], period)?
+            {
+                found.push(at);
             }
         }
-        Ok(periods)
+        Ok(found)
     }
 
     /// The place of the first key equal to `key`, with no period, or `None`.
@@ -353,6 +364,7 @@ impl Connection {
                     self.check_references(batch, foreign, &key, state)?;
                     continue;
                 }
+                self.crosscheck(foreign, &key, state)?;
                 let mut params = Vec::with_capacity(key.len() * 2);
                 if foreign.action == Action::Cascade
                     && let Some(after) = after
@@ -460,8 +472,8 @@ impl Connection {
         }
         let present = loop {
             let keys = state.other.get_or_insert_with(|| {
-                // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
-                let rows = self.table_rows(foreign.other);
+                // The check sees the rows of the statement, as the command counter goes up before the triggers fire. For a partitioned referenced table, the latest snapshot that finds the partition reads the rows too, so the check sees a row that committed after the snapshot of the transaction, as PostgreSQL does.
+                let rows = self.table_rows(foreign.other, self.is_partitioned_table(foreign.other));
                 Keys::of(
                     rows,
                     &foreign.other_columns,
@@ -473,7 +485,25 @@ impl Connection {
             // For a temporal foreign key, `HAVING $n <@ range_agg(x1.r)`: the periods of the keys that overlap the period of the new key cover it.
             if foreign.period {
                 let last = probe.len() - 1;
-                let periods = keys.periods(&probe, &foreign.types)?;
+                let found = keys.overlapping(&probe, &foreign.types)?;
+                // The subquery locks each row that it finds with `FOR KEY SHARE`, before the check of the cover.
+                let mut changed = false;
+                for &at in found.iter().filter(|_| !batch.validation) {
+                    if keys.locked.contains(&at) {
+                        continue;
+                    }
+                    if !self.lock_referenced(keys.places[at])? {
+                        changed = true;
+                        break;
+                    }
+                    keys.locked.insert(at);
+                }
+                if changed {
+                    state.other = None;
+                    continue;
+                }
+                let periods: Vec<&Value> =
+                    found.iter().map(|&at| &keys.keys[at][keys.equal]).collect();
                 break rupg_func::period_covered(
                     foreign.types[last],
                     &probe[last],
@@ -485,7 +515,7 @@ impl Connection {
             if batch.validation || keys.locked.contains(&at) {
                 break true;
             }
-            if self.lock_referenced(foreign, keys.tids[at])? {
+            if self.lock_referenced(keys.places[at])? {
                 keys.locked.insert(at);
                 break true;
             }
@@ -502,13 +532,13 @@ impl Connection {
         Ok(())
     }
 
-    /// The lock of `FOR KEY SHARE OF x` of the query of `RI_FKey_check` on the version `tid` of the referenced row, which waits for a transaction in progress that deletes the row or changes its key. False when a transaction that committed after the snapshot changed the row. A partitioned table and a version with no ID take no lock.
+    /// The lock of `FOR KEY SHARE OF x` of the query of `RI_FKey_check` on the version `tid` of the referenced row in the table or leaf partition `relation`, which waits for a transaction in progress that deletes the row or changes its key. False when a transaction that committed after the snapshot changed the row. A version with no ID, as of a foreign table, takes no lock.
     ///
     /// # Errors
     ///
     /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed, and the errors of [`query::Reader::wait_xact`].
-    fn lock_referenced(&self, foreign: &Foreign, tid: u64) -> Result<bool, Error> {
-        let table = self.catalog().relation(foreign.other).map(|r| (r.kind, r.name.clone()));
+    fn lock_referenced(&self, (relation, tid): (u32, u64)) -> Result<bool, Error> {
+        let table = self.catalog().relation(relation).map(|r| (r.kind, r.name.clone()));
         let Some((RelKind::Table, name)) = table else { return Ok(true) };
         let view = self.view();
         if tid == 0 || view.xid == 0 {
@@ -516,19 +546,68 @@ impl Connection {
         }
         let heap = self.store.heap();
         loop {
-            match heap.lock_row((foreign.other, tid), &view, (view.xid, KEY_SHARE))? {
+            match heap.lock_row((relation, tid), &view, (view.xid, KEY_SHARE))? {
                 RowLocked::Done | RowLocked::Gone => return Ok(true),
                 RowLocked::Again => return Ok(false),
                 RowLocked::Wait(holder) => {
                     let context =
                         format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
-                    let row = (view.database, foreign.other, tid);
+                    let row = (view.database, relation, tid);
                     self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
                         heap.row_blocked(row, (holder, KEY_SHARE))
                     })?;
                 }
             }
         }
+    }
+
+    /// The crosscheck snapshot of `ri_PerformCheck` for an action in `REPEATABLE READ` and `SERIALIZABLE`: the statement of the action finds its rows with the latest snapshot, and a row with the old key that the snapshot of the transaction does not see, as of a transaction that committed after it, makes `heap_update` and `heap_delete` fail, in place of a row that the action leaves with a key that is gone.
+    ///
+    /// # Errors
+    ///
+    /// `40001` for a row of the referencing table with the old key that committed after the snapshot of the transaction.
+    fn crosscheck(
+        &self,
+        foreign: &Foreign,
+        key: &[&Value],
+        state: &mut State,
+    ) -> Result<(), Error> {
+        if !self.view().serializable {
+            return Ok(());
+        }
+        let newer = state.newer.get_or_insert_with(|| {
+            let seen: HashSet<(u32, u64)> = self
+                .table_rows(foreign.other, false)
+                .iter()
+                .filter_map(|(relation, row)| match row.last() {
+                    Some(&Value::Int8(tid)) => Some((*relation, tid.cast_unsigned())),
+                    _ => None,
+                })
+                .collect();
+            let rows: Vec<(u32, Vec<Value>)> = self
+                .table_rows(foreign.other, true)
+                .into_iter()
+                .filter(|(relation, row)| match row.last() {
+                    Some(&Value::Int8(tid)) => !seen.contains(&(*relation, tid.cast_unsigned())),
+                    _ => false,
+                })
+                .collect();
+            Keys::of(
+                rows,
+                &foreign.other_columns,
+                &foreign.referencing_types,
+                &foreign.types,
+                false,
+            )
+        });
+        let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
+        if newer.has(&probe, &foreign.types)? {
+            return Err(Error::new(
+                SqlState::T_R_SERIALIZATION_FAILURE,
+                "could not serialize access due to concurrent update",
+            ));
+        }
+        Ok(())
     }
 
     /// `ri_restrict`: no row of the referencing table can have an old key of the referenced table.
@@ -553,7 +632,7 @@ impl Connection {
                 state.own_permitted = true;
             }
             let keys = state.own.get_or_insert_with(|| {
-                let rows = self.table_rows(batch.table);
+                let rows = self.table_rows(batch.table, false);
                 Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, false)
             });
             if keys.has(&probe, &foreign.types)? {
@@ -572,8 +651,9 @@ impl Connection {
             )?;
             state.permitted = true;
         }
+        // `ri_restrict` passes `detectNewRows`, so it sees a row of the referencing table that committed after the snapshot of the transaction.
         let keys = state.other.get_or_insert_with(|| {
-            let rows = self.table_rows(foreign.other);
+            let rows = self.table_rows(foreign.other, true);
             Keys::of(
                 rows,
                 &foreign.other_columns,
@@ -605,14 +685,14 @@ impl Connection {
         let last = probe.len() - 1;
         let ty = foreign.types[last];
         let own = state.own.get_or_insert_with(|| {
-            let rows = self.table_rows(batch.table);
+            let rows = self.table_rows(batch.table, false);
             Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, true)
         });
         let replacements: Vec<Value> =
             own.periods(probe, &foreign.types)?.into_iter().cloned().collect();
         let replacements: Vec<&Value> = replacements.iter().collect();
         let others = state.other.get_or_insert_with(|| {
-            let rows = self.table_rows(foreign.other);
+            let rows = self.table_rows(foreign.other, true);
             Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types, true)
         });
         for period in others.periods(probe, &foreign.types)? {
@@ -647,13 +727,13 @@ impl Connection {
             let foreign = rupg_analyze::foreign_keys(&reader, partition, write)?;
             for foreign in foreign.iter().filter(|f| !f.referencing && f.cloned) {
                 let others = Keys::of(
-                    self.table_rows(foreign.other),
+                    self.table_rows(foreign.other, false),
                     &foreign.other_columns,
                     &foreign.referencing_types,
                     &foreign.types,
                     foreign.period,
                 );
-                for row in self.table_rows(partition) {
+                for (_, row) in self.table_rows(partition, false) {
                     let key: Vec<&Value> = foreign
                         .columns
                         .iter()
@@ -691,10 +771,19 @@ impl Connection {
         Ok(())
     }
 
-    /// The rows of the table `table` that a check of a foreign key reads. A partitioned table has the rows of its leaf partitions, with the columns of the table matched by name, as the scan of the query of `ri_PerformCheck` gives them.
-    fn table_rows(&self, table: u32) -> Vec<Vec<Value>> {
+    /// True for a partitioned table.
+    fn is_partitioned_table(&self, table: u32) -> bool {
+        self.catalog().relation(table).is_some_and(|r| r.kind == RelKind::Partitioned)
+    }
+
+    /// The rows of the table `table` that a check of a foreign key reads, with the latest snapshot when `latest` is true, each with the table or leaf partition that has it and ending with the ID of its version. A partitioned table has the rows of its leaf partitions, with the columns of the table matched by name, as the scan of the query of `ri_PerformCheck` gives them.
+    fn table_rows(&self, table: u32, latest: bool) -> Vec<(u32, Vec<Value>)> {
         let heap = self.store.heap();
-        let view = self.view();
+        let mut view = self.view();
+        // `ri_PerformCheck` with `detectNewRows` in `REPEATABLE READ` and `SERIALIZABLE`: the query reads the rows with a new snapshot, as `GetLatestSnapshot` gives it. The session holds the older `xmin` of the snapshot of the transaction, which keeps the versions of the new snapshot.
+        if latest {
+            view.snapshot = heap.held_snapshot_in(&self.xmin_slot());
+        }
         let catalog = self.catalog();
         // `ri_PerformCheck` with `detectNewRows` for a partitioned table: the partition directory of the query leaves out each partition with a pending detach that committed, as the latest snapshot sees it.
         let catalog = match catalog.omit_detached(|_| true) {
@@ -702,7 +791,7 @@ impl Connection {
             None => catalog,
         };
         let Some(rel) = catalog.relation(table).filter(|r| r.kind == RelKind::Partitioned) else {
-            return heap.rows(table, &view);
+            return heap.rows(table, &view).into_iter().map(|row| (table, row)).collect();
         };
         let mut rows = Vec::new();
         // The leaves in the order of a scan, or in the order of their OIDs when a compare of the bounds fails.
@@ -732,11 +821,14 @@ impl Connection {
                     part.columns.iter().position(|p| !p.dropped && p.name == c.name)
                 })
                 .collect();
+            // The row ends with the ID of the version of the leaf, as a row of a table does, for the lock of the check.
             rows.extend(heap.rows(oid, &view).into_iter().map(|row| {
-                places
+                let mut values: Vec<Value> = places
                     .iter()
                     .map(|at| at.and_then(|at| row.get(at).cloned()).unwrap_or(Value::Null))
-                    .collect::<Vec<Value>>()
+                    .collect();
+                values.extend(row.last().cloned());
+                (oid, values)
             }));
         }
         rows
