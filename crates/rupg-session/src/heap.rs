@@ -1784,6 +1784,21 @@ impl Table {
         place_of(&self.versions, tid)
     }
 
+    /// `heap_lock_updated_tuple` and `EvalPlanQualFetch` follow the update chain from the version at `at`: true when the version, or a later version that committed transactions made, was deleted to move its row to another partition, as `ItemPointerIndicatesMovedPartitions` tells.
+    fn chain_moved(&self, at: usize, running: &BTreeSet<u32>) -> bool {
+        let mut version = &self.versions[at];
+        loop {
+            if version.next == MOVED {
+                return true;
+            }
+            if version.next == 0 || version.xmax == 0 || running.contains(&version.xmax) {
+                return false;
+            }
+            let Some(next) = self.find(version.next) else { return false };
+            version = &self.versions[next];
+        }
+    }
+
     /// The place of the version of each ID of `tids`, which go up, cold or not, or `None` for an ID with no version. A cold table decodes only the IDs of its headers, a vector at a time, and only the vectors up to the last ID.
     fn places_of(&self, tids: &[u64]) -> Vec<Option<usize>> {
         let Some(cold) = &self.cold else {
@@ -3153,7 +3168,7 @@ impl Heap {
                     format!("could not serialize access due to concurrent {what}"),
                 ));
             }
-            _ if version.next == MOVED => return Err(moved_error()),
+            _ if table.chain_moved(at, running) => return Err(moved_error()),
             _ => return Ok(RowLocked::Again),
         }
         if let Some(holder) = row_holder((&*row_locks, &**running), key, tid, (xid, strength)) {
@@ -3252,7 +3267,7 @@ impl Heap {
                         format!("could not serialize access due to concurrent {what}"),
                     ));
                 }
-                _ if version.next == MOVED => return Err(moved_error()),
+                _ if table.chain_moved(at, running) => return Err(moved_error()),
                 _ => return Ok(Changed::Again),
             }
             if !row_locks.is_empty() {
