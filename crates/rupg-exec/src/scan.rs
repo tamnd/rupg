@@ -1917,23 +1917,22 @@ pub(crate) fn tuples(
                 Some(index_ranks(tables, s, &acc, session)?)
             });
         }
-        let cmp = |a: &Vec<usize>, b: &Vec<usize>| {
-            planned
-                .iter()
-                .zip(&ranks)
-                .map(|(s, rank)| {
-                    let at = |row: usize| match rank {
-                        Some(rank) => rank.get(&row).copied().unwrap_or(row),
-                        None => row,
-                    };
-                    let (x, y) = (at(a[s.relation]), at(b[s.relation]));
-                    if s.reverse { y.cmp(&x) } else { x.cmp(&y) }
-                })
-                .find(|o| o.is_ne())
-                .unwrap_or(Ordering::Equal)
-        };
-        if !acc.is_sorted_by(|a, b| cmp(a, b).is_le()) {
-            acc.sort_by(cmp);
+        // The sort key of each tuple has one number for each scan of the plan: the rank of its row, or the row for a scan with no keys and for a null row. A backward scan has the complement of the number, which reverses the order.
+        let n = planned.len();
+        let mut keys = Vec::with_capacity(acc.len() * n);
+        for tuple in &acc {
+            for (s, rank) in planned.iter().zip(&ranks) {
+                let row = tuple[s.relation];
+                let at = rank.as_ref().and_then(|rank| rank.get(row)).unwrap_or(row);
+                keys.push(if s.reverse { !at } else { at });
+            }
+        }
+        let key = |i: usize| &keys[i * n..(i + 1) * n];
+        if !(1..acc.len()).all(|i| key(i - 1) <= key(i)) {
+            let mut order: Vec<usize> = (0..acc.len()).collect();
+            order.sort_by(|&a, &b| key(a).cmp(key(b)));
+            let mut old = acc;
+            acc = order.into_iter().map(|i| std::mem::take(&mut old[i])).collect();
         }
     } else if order.is_some() {
         // The tuples come in the order of the joins in the written order, as the row numbers of the relations of each part give it.
@@ -1943,13 +1942,13 @@ pub(crate) fn tuples(
     Ok(acc)
 }
 
-/// The place of each row of the relation of the index scan `scanned` in the tuples `acc`, in the order of the keys of the index and then of the heap, or the reverse order of the heap for a backward scan. A null row of an outer join keeps its number, after the others.
+/// The place of each row of the relation of the index scan `scanned` in the tuples `acc`, in the order of the keys of the index and then of the heap, or the reverse order of the heap for a backward scan, at the index of the row. A null row of an outer join has no place, so that it keeps its number, after the others.
 fn index_ranks(
     tables: &Tables,
     scanned: &Scanned,
     acc: &[Vec<usize>],
     session: &dyn Session,
-) -> Result<BTreeMap<usize, usize>> {
+) -> Result<Ranks> {
     let r = scanned.relation;
     let rows = &tables.rows[r];
     let mut ids: Vec<usize> = acc.iter().map(|t| t[r]).filter(|&row| row < rows.len()).collect();
@@ -1974,7 +1973,35 @@ fn index_ranks(
     if let Some(error) = error {
         return Err(error);
     }
-    Ok(ids.into_iter().enumerate().map(|(rank, row)| (row, rank)).collect())
+    if ids.len().saturating_mul(8) >= rows.len() {
+        let mut ranks = vec![usize::MAX; rows.len()];
+        for (rank, row) in ids.into_iter().enumerate() {
+            ranks[row] = rank;
+        }
+        return Ok(Ranks::Dense(ranks));
+    }
+    let mut ranks: Vec<(usize, usize)> =
+        ids.into_iter().enumerate().map(|(rank, row)| (row, rank)).collect();
+    ranks.sort_unstable();
+    Ok(Ranks::Sparse(ranks))
+}
+
+/// The places of the rows of an index scan from [`index_ranks`]: one place for each row of the table when the tuples have many of its rows, or else the rows of the tuples with their places, in the order of the rows, so that a scan of a few rows of a long table does not make a place for each row of the table.
+enum Ranks {
+    Dense(Vec<usize>),
+    Sparse(Vec<(usize, usize)>),
+}
+
+impl Ranks {
+    /// The place of the row `row`, or `None` for a null row of an outer join.
+    fn get(&self, row: usize) -> Option<usize> {
+        match self {
+            Ranks::Dense(ranks) => ranks.get(row).copied(),
+            Ranks::Sparse(ranks) => {
+                ranks.binary_search_by_key(&row, |&(row, _)| row).ok().map(|at| ranks[at].1)
+            }
+        }
+    }
 }
 
 /// The order of the parts of `FROM` for the joins of [`tuples`], as `join_search_one_level` makes a join with no condition only when no other join has one: the written order, but when the next part has no `=` with the parts before it that a hash join can test, the first later part that has one comes first, so that the join does not make all the tuples of a cross join. `None` when the order is the written one. The parts keep the written order when a part reads other relations, as `LATERAL` lets it, or when the condition of a join in a part reads other parts.

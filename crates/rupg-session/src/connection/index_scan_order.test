@@ -1,0 +1,138 @@
+> CREATE TABLE ix (k int PRIMARY KEY, v int, w text)
+CREATE TABLE
+> INSERT INTO ix SELECT (i * 7919) % 10007, i, 'w' || (i % 13) FROM generate_series(0, 10006) i
+INSERT 0 10007
+> CREATE TABLE iy (k int, x int)
+CREATE TABLE
+> INSERT INTO iy SELECT (i * 31) % 997, i FROM generate_series(1, 3000) i
+INSERT 0 3000
+> CREATE INDEX iy_k ON iy (k)
+CREATE INDEX
+> ANALYZE ix
+ANALYZE
+> ANALYZE iy
+ANALYZE
+> SELECT k, v FROM ix WHERE k < 20
+fields k@ix.1:23:4:-1,v@ix.2:23:4:-1
+row 0,0
+row 19,254
+row 9,647
+row 18,1294
+row 8,1687
+row 17,2334
+row 7,2727
+row 16,3374
+row 6,3767
+row 15,4414
+row 5,4807
+row 14,5454
+row 4,5847
+row 13,6494
+row 3,6887
+row 12,7534
+row 2,7927
+row 11,8574
+row 1,8967
+row 10,9614
+SELECT 20
+> SELECT k, v FROM ix WHERE k > 9990 ORDER BY k DESC
+fields k@ix.1:23:4:-1,v@ix.2:23:4:-1
+row 10006,1040
+row 10005,2080
+row 10004,3120
+row 10003,4160
+row 10002,5200
+row 10001,6240
+row 10000,7280
+row 9999,8320
+row 9998,9360
+row 9997,393
+row 9996,1433
+row 9995,2473
+row 9994,3513
+row 9993,4553
+row 9992,5593
+row 9991,6633
+SELECT 16
+> SELECT k, x FROM iy WHERE k < 4
+fields k@iy.1:23:4:-1,x@iy.2:23:4:-1
+row 1,193
+row 2,386
+row 3,579
+row 0,997
+row 1,1190
+row 2,1383
+row 3,1576
+row 0,1994
+row 1,2187
+row 2,2380
+row 3,2573
+row 0,2991
+SELECT 12
+> SELECT a.k, a.v, b.x FROM ix a JOIN iy b ON b.k = a.k WHERE a.k < 6
+fields k@ix.1:23:4:-1,v@ix.2:23:4:-1,x@iy.2:23:4:-1
+row 1,8967,193
+row 2,7927,386
+row 3,6887,579
+row 4,5847,772
+row 5,4807,965
+row 0,0,997
+row 1,8967,1190
+row 2,7927,1383
+row 3,6887,1576
+row 4,5847,1769
+row 5,4807,1962
+row 0,0,1994
+row 1,8967,2187
+row 2,7927,2380
+row 3,6887,2573
+row 4,5847,2766
+row 5,4807,2959
+row 0,0,2991
+SELECT 18
+> SELECT a.k, b.k, b.v FROM ix a, ix b WHERE b.k = a.v AND a.k BETWEEN 100 AND 110
+fields k@ix.1:23:4:-1,k@ix.1:23:4:-1,v@ix.2:23:4:-1
+row 105,877,8564
+row 104,1917,7720
+row 103,2957,6876
+row 102,3997,6032
+row 101,5037,5188
+row 110,5684,2777
+row 100,6077,4344
+row 109,6724,1933
+row 108,7764,1089
+row 107,8804,245
+row 106,9844,9408
+SELECT 11
+> SELECT count(*), sum(v), min(k), max(k) FROM ix WHERE k < 5000
+fields count:20:8:-1,sum:20:8:-1,min:23:4:-1,max:23:4:-1
+row 5000,25029324,0,4999
+SELECT 1
+> SELECT w, count(*) FROM ix WHERE k < 300 GROUP BY w
+fields w@ix.3:25:-1:-1,count:20:8:-1
+row w4,28
+row w8,19
+row w1,29
+row w9,20
+row w11,30
+row w5,20
+row w12,19
+row w6,18
+row w3,20
+row w0,21
+row w7,30
+row w10,27
+row w2,19
+SELECT 13
+> SELECT count(*), sum(v), avg(v), min(w), max(k), bool_and(v >= 0) FROM ix WHERE k < 4000
+fields count:20:8:-1,sum:20:8:-1,avg:1700:-1:-1,min:25:-1:-1,max:23:4:-1,bool_and:16:1:-1
+row 4000,20022477,5005.6192500000000000,w0,3999,t
+SELECT 1
+> SELECT sum(v::float8 / 7) FROM ix WHERE k < 3000
+fields sum:701:8:-1
+row 2146160.857142857
+SELECT 1
+> SELECT count(*) FROM ix WHERE k BETWEEN 10 AND 2000 AND v % 2 = 0
+fields count:20:8:-1
+row 999
+SELECT 1
