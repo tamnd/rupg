@@ -1114,12 +1114,13 @@ impl Connection {
                 let (mut changes, mut given) = row_changes(rows, info)?;
                 let mut kept = Vec::new();
                 let mut applied = Vec::new();
+                let periods = self.period_keys(info.table);
                 let count = loop {
                     let changed = heap.change(
                         info.table,
                         &view,
                         changes.clone(),
-                        (&info.unique, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
+                        (&info.unique, &periods, &|d: &Derived, r: &[Value]| self.index_key(d, r)),
                         &kept,
                         &mut applied,
                     )?;
@@ -1365,6 +1366,19 @@ impl Connection {
             None => Ok(unique.shown.clone()),
             Some(_) => rupg_func::index_key_columns(unique.oid, &self.reader_on(catalog)),
         }
+    }
+
+    /// The columns, from 0, of the primary keys and the unique constraints `WITHOUT OVERLAPS` of the table `table`. Their indexes are exclusion indexes, which are not in the unique keys of a write, but `RelationGetIndexAttrBitmap` counts them as keys that a foreign key can reference, so an update of one of them takes `UPDATE` and not `NO KEY UPDATE`.
+    pub(crate) fn period_keys(&self, table: u32) -> Vec<usize> {
+        let catalog = self.catalog();
+        let mut columns: Vec<usize> = catalog
+            .constraints_of(table)
+            .filter(|c| c.foreign.is_none() && c.period())
+            .flat_map(|c| c.keys.iter().filter_map(|&k| usize::try_from(k - 1).ok()))
+            .collect();
+        columns.sort_unstable();
+        columns.dedup();
+        columns
     }
 
     /// The key of a row in a unique index with an expression or a predicate, [`rupg_exec::index_key`].
