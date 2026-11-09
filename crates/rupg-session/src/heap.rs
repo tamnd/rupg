@@ -180,7 +180,7 @@ struct State {
 pub(crate) type RowStrength = u8;
 
 /// `LockTupleKeyShare`: the lock of `FOR KEY SHARE`, which a check of a foreign key takes.
-const KEY_SHARE: RowStrength = 1;
+pub(crate) const KEY_SHARE: RowStrength = 1;
 
 /// `LockTupleNoKeyExclusive`: the lock of `FOR NO KEY UPDATE`, which an `UPDATE` that changes no key column takes.
 pub(crate) const NO_KEY_UPDATE: RowStrength = 3;
@@ -193,8 +193,22 @@ fn row_conflict(held: RowStrength, wanted: RowStrength) -> bool {
     held + wanted > UPDATE
 }
 
-/// The row locks of [`State::row_locks`] by the version.
-type RowLocks = HashMap<(u32, u32, u64), Vec<(u32, RowStrength)>>;
+/// The row locks of [`State::row_locks`] by the version: the transaction, the strength and the command that took the lock. A subtransaction has no transaction ID of its own, as `MultiXactIdCreate` gives the lock of a subtransaction, so the command tells the locks that a rollback to a savepoint takes away.
+type RowLocks = HashMap<(u32, u32, u64), Vec<(u32, RowStrength, u32)>>;
+
+/// A lock of the transaction `xid` in the command `command`: no new entry when the transaction holds the strength or a stronger one already, and a stronger strength for an entry of the same command.
+fn add_row_lock(
+    lockers: &mut Vec<(u32, RowStrength, u32)>,
+    (xid, strength, command): (u32, RowStrength, u32),
+) {
+    if lockers.iter().any(|&(locker, held, _)| locker == xid && held >= strength) {
+        return;
+    }
+    match lockers.iter_mut().find(|(locker, _, at)| *locker == xid && *at == command) {
+        Some((_, held, _)) => *held = strength,
+        None => lockers.push((xid, strength, command)),
+    }
+}
 
 /// The transaction in progress other than `xid` that holds a lock on the version `tid` of the table `key` that conflicts with `strength`, or `None`.
 fn row_holder(
@@ -209,10 +223,10 @@ fn row_holder(
     locks
         .get(&(key.0, key.1, tid))?
         .iter()
-        .find(|&&(locker, held)| {
+        .find(|&&(locker, held, _)| {
             locker != xid && row_conflict(held, strength) && running.contains(&locker)
         })
-        .map(|&(locker, _)| locker)
+        .map(|&(locker, _, _)| locker)
 }
 
 /// `CheckForSerializableConflictIn` of the transaction of the view in `SERIALIZABLE` for a write of the table `relation` that the targets `targets` cover, or of the whole table with no targets, with the lock of [`Heap::serializable_lock`].
@@ -269,7 +283,7 @@ impl State {
             return;
         }
         self.row_locks.retain(|_, lockers| {
-            lockers.retain(|&(locker, _)| locker != xid);
+            lockers.retain(|&(locker, _, _)| locker != xid);
             !lockers.is_empty()
         });
     }
@@ -3008,10 +3022,7 @@ impl Heap {
             }
             for tid in chain {
                 let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
-                match lockers.iter_mut().find(|(locker, _)| *locker == xid) {
-                    Some((_, held)) => *held = (*held).max(strength),
-                    None => lockers.push((xid, strength)),
-                }
+                add_row_lock(lockers, (xid, strength, view.command));
             }
             return Ok(RowLocked::Done);
         }
@@ -3032,10 +3043,7 @@ impl Heap {
             return Ok(RowLocked::Wait(holder));
         }
         let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
-        match lockers.iter_mut().find(|(locker, _)| *locker == xid) {
-            Some((_, held)) => *held = (*held).max(strength),
-            None => lockers.push((xid, strength)),
-        }
+        add_row_lock(lockers, (xid, strength, view.command));
         Ok(RowLocked::Done)
     }
 
@@ -3145,7 +3153,7 @@ impl Heap {
                 let (database, relation) = (view.database, relation);
                 if let Some(lockers) = row_locks.get(&(database, relation, old)) {
                     let kept: Vec<_> =
-                        lockers.iter().copied().filter(|(x, _)| running.contains(x)).collect();
+                        lockers.iter().copied().filter(|(x, _, _)| running.contains(x)).collect();
                     if !kept.is_empty() {
                         row_locks.insert((database, relation, next), kept);
                     }
@@ -3619,6 +3627,34 @@ impl Heap {
         None
     }
 
+    /// True while the transaction `holder` changed the version `tid` of the table `relation` of the database, or a later version of its update chain, or holds a lock on it that conflicts with `strength`. A rollback to a savepoint takes away the change and the locks of its commands, and a wait for the lock then ends, as for the end of the subtransaction in `XactLockTableWait`.
+    pub(crate) fn row_blocked(
+        &self,
+        (database, relation, tid): (u32, u32, u64),
+        (holder, strength): (u32, RowStrength),
+    ) -> bool {
+        let mut state = self.state();
+        let State { tables, row_locks, .. } = &mut *state;
+        let Some(table) = tables.get(&(database, relation)) else { return false };
+        let mut tid = tid;
+        loop {
+            let locked = row_locks.get(&(database, relation, tid)).is_some_and(|lockers| {
+                lockers
+                    .iter()
+                    .any(|&(locker, held, _)| locker == holder && row_conflict(held, strength))
+            });
+            let Some(at) = table.find(tid) else { return locked };
+            let version = &table.versions[at];
+            if locked || version.xmax == holder {
+                return true;
+            }
+            if version.xmax == 0 || version.next == 0 || version.next == tid {
+                return false;
+            }
+            tid = version.next;
+        }
+    }
+
     /// True while a transaction is in progress.
     pub(crate) fn running(&self, xid: u32) -> bool {
         self.state().running.contains(&xid)
@@ -3722,6 +3758,13 @@ impl Heap {
     pub(crate) fn rollback_to(&self, xid: u32, command: u32) {
         let mut state = self.state();
         state.rechecks.retain(|recheck| recheck.xid != xid || recheck.command < command);
+        // The row locks that the subtransaction took go, and the locks from before it stay.
+        if !state.row_locks.is_empty() {
+            state.row_locks.retain(|_, lockers| {
+                lockers.retain(|&(locker, _, at)| locker != xid || at < command);
+                !lockers.is_empty()
+            });
+        }
         let touched = |table: &Table| {
             table.truncated.iter().any(|&(x, c, _)| x == xid && c >= command)
                 || table.versions.iter().any(|version| {
@@ -5136,5 +5179,38 @@ mod tests {
         let serializable = View { serializable: true, ..view(old, c, 0) };
         let error = heap.lock_row((7, tid), &serializable, (c, KEY_SHARE)).unwrap_err();
         assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
+    }
+
+    #[test]
+    fn rollback_to_a_savepoint_takes_away_its_row_locks() {
+        let heap = Heap::default();
+        let first = heap.begin(1);
+        heap.insert(
+            7,
+            &view(heap.snapshot(), first, 0),
+            vec![vec![Value::Int4(1)]],
+            (&[], &none),
+            &[],
+        )
+        .unwrap();
+        heap.commit(first);
+        let snapshot = heap.snapshot();
+        let tid = first_tid(&heap, &view(snapshot.clone(), 0, 0));
+        let a = heap.begin(2);
+        let b = heap.begin(3);
+        // `a` takes `FOR KEY SHARE` in command 0, then `FOR NO KEY UPDATE` after a savepoint at command 1.
+        let lock = |xid, command, strength| {
+            heap.lock_row((7, tid), &view(snapshot.clone(), xid, command), (xid, strength)).unwrap()
+        };
+        assert_eq!(lock(a, 0, KEY_SHARE), RowLocked::Done);
+        assert_eq!(lock(a, 1, NO_KEY_UPDATE), RowLocked::Done);
+        assert_eq!(lock(b, 0, NO_KEY_UPDATE), RowLocked::Wait(a));
+        assert!(heap.row_blocked((1, 7, tid), (a, NO_KEY_UPDATE)));
+        heap.rollback_to(a, 1);
+        // The lock of the command before the savepoint stays, and it does not conflict with `FOR NO KEY UPDATE`.
+        assert!(!heap.row_blocked((1, 7, tid), (a, NO_KEY_UPDATE)));
+        assert!(heap.row_blocked((1, 7, tid), (a, UPDATE)));
+        assert_eq!(lock(b, 0, NO_KEY_UPDATE), RowLocked::Done);
+        assert_eq!(lock(b, 0, UPDATE), RowLocked::Wait(a));
     }
 }
