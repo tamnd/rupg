@@ -4480,6 +4480,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/reduce_or.test")));
     }
 
+    /// The rows of a query with no `ORDER BY` come in the order of the index scans of the plan, forward and backward, with rows of the same key in the order of the heap, and an aggregate that does not depend on the row order gives the same result, as in PostgreSQL 19.
+    #[test]
+    fn index_scan_order() {
+        big_stack(|| script_tasks(include_str!("connection/index_scan_order.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {

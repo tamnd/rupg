@@ -1736,6 +1736,42 @@ fn method<'q>(agg: &'q Aggref, expr: &'q Expr) -> Result<Option<Method<'q>>> {
     }))
 }
 
+/// True when a query gives one row of aggregates that does not change with the order of the rows: no `GROUP BY` and no volatile function, and each aggregate is `count`, `min`, `max`, `bool_and`, `bool_or` or `every`, or `sum` or `avg` of integers or `numeric`, with no `ORDER BY` in the call. The sum of floating point values changes with the order of the rows, and `string_agg` and `array_agg` keep the order.
+fn order_free(query: &Query) -> bool {
+    if !query.group.is_empty() || !query.grouping_sets.is_empty() {
+        return false;
+    }
+    let exprs = || query.targets.iter().map(|t| &t.expr).chain(&query.having);
+    if query.filter.iter().chain(exprs()).any(crate::volatile) {
+        return false;
+    }
+    let mut aggs = 0;
+    let mut free = true;
+    for expr in exprs() {
+        expr.find(0, &mut |e, _| {
+            if let ExprKind::Agg(agg) = &e.kind {
+                aggs += 1;
+                free &= agg.levels_up == 0
+                    && agg.kind == b'n'
+                    && agg.order.is_empty()
+                    && order_free_agg(agg);
+            }
+            None::<()>
+        });
+    }
+    free && aggs > 0
+}
+
+/// True for an aggregate of [`order_free`].
+fn order_free_agg(agg: &Aggref) -> bool {
+    let Some(proc) = builtin::proc_by_oid(agg.oid) else { return false };
+    match proc.name {
+        "count" | "min" | "max" | "bool_and" | "bool_or" | "every" => true,
+        "sum" | "avg" => agg.args.first().is_some_and(|arg| matches!(arg.ty, 20 | 21 | 23 | 1700)),
+        _ => false,
+    }
+}
+
 /// The rows of a query of one table that the scan can run, or `None` for a query that the row engine runs.
 ///
 /// # Errors
@@ -1771,8 +1807,12 @@ pub(crate) fn run(
     if scan::unique_key(query, params, session) {
         return Ok(None);
     }
-    // An index scan gives its rows in the order of the index, which the columns do not keep.
-    if session.join_order(query).is_some_and(|planned| planned.iter().any(|s| !s.keys.is_empty())) {
+    // An index scan gives its rows in the order of the index, which the columns do not keep. The order does not change one row of aggregates that do not read the order.
+    if !order_free(query)
+        && session
+            .join_order(query)
+            .is_some_and(|planned| planned.iter().any(|s| !s.keys.is_empty()))
+    {
         return Ok(None);
     }
     let Some(catalog) = session.catalog() else { return Ok(None) };
