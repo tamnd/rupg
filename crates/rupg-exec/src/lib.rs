@@ -1715,6 +1715,61 @@ fn passed_param(expr: &Expr, n: usize) -> bool {
     }
 }
 
+/// `make_inh_translation_list` after the locks of the children of `parents`: a transaction that committed while the statement waited for the lock of a child can have changed the type of a column of that child, which the statement sees in the catalog of the last commit.
+///
+/// # Errors
+///
+/// `42804` for a column of a child whose type or collation is not the type or the collation of the column of its parent, and `XX000` for a column of the parent that the child no longer has.
+fn check_children(parents: &[u32], session: &dyn Session) -> Result<()> {
+    let (Some(seen), Some(latest)) = (session.catalog(), session.latest_catalog()) else {
+        return Ok(());
+    };
+    if std::ptr::eq(seen, &*latest) {
+        return Ok(());
+    }
+    for &parent in parents {
+        let Some(parent_rel) = latest.relation(parent) else { continue };
+        if !matches!(parent_rel.kind, rupg_catalog::RelKind::Table) {
+            continue;
+        }
+        for child in seen.all_inheritors(parent) {
+            let Some(child_rel) = latest.relation(child) else { continue };
+            for column in parent_rel.columns.iter().filter(|c| !c.dropped) {
+                let Some(found) =
+                    child_rel.columns.iter().find(|c| !c.dropped && c.name == column.name)
+                else {
+                    return Err(Error::new(
+                        SqlState::INTERNAL_ERROR,
+                        format!(
+                            "could not find inherited attribute \"{}\" of relation \"{}\"",
+                            column.name, child_rel.name
+                        ),
+                    ));
+                };
+                if found.ty != column.ty || found.typmod != column.typmod {
+                    return Err(Error::new(
+                        SqlState::DATATYPE_MISMATCH,
+                        format!(
+                            "attribute \"{}\" of relation \"{}\" does not match parent's type",
+                            column.name, child_rel.name
+                        ),
+                    ));
+                }
+                if found.collation != column.collation {
+                    return Err(Error::new(
+                        SqlState::DATATYPE_MISMATCH,
+                        format!(
+                            "attribute \"{}\" of relation \"{}\" does not match parent's collation",
+                            column.name, child_rel.name
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Plan {
     /// The query of the plan after `prepare` and `fold`, which `EXPLAIN` shows.
     pub fn query(&self) -> &Query {
@@ -2085,6 +2140,7 @@ impl Plan {
         let children = scan::inherited_relations(parents, session);
         if !children.is_empty() {
             session.lock_relations(&children, mode, None)?;
+            check_children(parents, session)?;
         }
         Ok(reads)
     }
