@@ -1,10 +1,10 @@
 //! The reduction of the rows of the tables of a join before the join (spec/14 section 14.8.2). Each table keeps the rows that pass its own conditions of `WHERE`, and then the rows whose key of an `=` with another table is a key of a row that the other table keeps, until no table loses a row. The join then reads and joins only these rows, so that a join of long tables makes the values of only the rows that can join.
 //!
-//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` is volatile and no condition can fail, because the join tests the conditions on fewer rows, and in another order. A join of two tables with one `=` of their columns can also have conditions that can fail and read the two tables, such as a subquery that reads a column of each table. The join tests such a condition only on the tuples of the `=`, and the reduction removes only the rows that have no other row for the `=`, so the condition sees the same tuples.
+//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` is volatile and no condition can fail, because the join tests the conditions on fewer rows, and in another order. A condition `x IN (SELECT ...)` of one table whose subquery cannot fail and reads no column of the query is also a condition of the table, as the semi-join of `pull_up_sublinks`, so that TPC-H Q18 joins only the orders of the subquery. A join of two tables with one `=` of their columns can also have conditions that can fail and read the two tables, such as a subquery that reads a column of each table. The join tests such a condition only on the tuples of the `=`, and the reduction removes only the rows that have no other row for the `=`, so the condition sees the same tuples.
 
 use std::rc::Rc;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Query};
+use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, SubLinkKind};
 use rupg_common::Result;
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
@@ -91,6 +91,10 @@ pub(crate) fn plan<'q>(
     // The conditions that can fail and read the two tables, and the conditions that cannot fail and read the two tables.
     let (mut both, mut joins) = (false, 0);
     for &cond in conds {
+        if let Some(relation) = semi_join(cond, session) {
+            plan.own[relation].push(cond);
+            continue;
+        }
         if !harmless(cond) {
             if width != 2 || crate::volatile(cond) || relations_of(cond).len() != 2 {
                 return None;
@@ -199,21 +203,117 @@ fn relations_of(expr: &Expr) -> Vec<usize> {
 
 /// True when an expression cannot fail and is not volatile: columns of the query, constants, `AND`, `OR`, `NOT`, the tests of nulls and of truth values, and the built-in functions that are leakproof, the comparisons of `numeric` values and of a date and a timestamp, and `LIKE` with a constant pattern that does not end in an escape, with no collation of ICU.
 fn harmless(expr: &Expr) -> bool {
+    safe(expr, false)
+}
+
+/// True when an expression cannot fail and is not volatile, as [`harmless`] tells. With `aggs`, an aggregate of [`aggregate`] can also be in the expression.
+fn safe(expr: &Expr, aggs: bool) -> bool {
+    let all = |args: &[Expr]| args.iter().all(|arg| safe(arg, aggs));
     match &expr.kind {
         ExprKind::Var(var) => var.levels_up == 0 && var.attnum > 0,
         ExprKind::Const(_) => true,
         ExprKind::Relabel(arg, _) | ExprKind::NullTest(arg, _) | ExprKind::BooleanTest(arg, _) => {
-            harmless(arg)
+            safe(arg, aggs)
         }
-        ExprKind::Bool(_, args) => args.iter().all(harmless),
+        ExprKind::Bool(_, args) => all(args),
         ExprKind::Func(f) => {
-            !f.retset && f.collation == 0 && function(f.oid, &f.args) && f.args.iter().all(harmless)
+            !f.retset && f.collation == 0 && function(f.oid, &f.args) && all(&f.args)
         }
         ExprKind::ScalarArrayOp { func, args, collation, .. } => {
-            *collation == 0 && function(*func, args) && args.iter().all(harmless)
+            *collation == 0 && function(*func, args) && all(args)
         }
+        ExprKind::Agg(agg) => aggs && aggregate(agg) && agg.args.iter().all(harmless),
         _ => false,
     }
+}
+
+/// True for an aggregate that cannot fail: a built-in `count`, a `sum` or an `avg` of integers or `numeric` values, or a `min` or a `max` of integers, `numeric` values or dates, with no `DISTINCT`, no `ORDER BY`, no `FILTER` and no collation. A `sum` of floats fails when it overflows.
+fn aggregate(agg: &Aggref) -> bool {
+    const SUMS: [u32; 4] = [21, 23, 20, 1700];
+    const ORDERED: [u32; 5] = [21, 23, 20, 1700, 1082];
+    if agg.oid >= rupg_catalog::FIRST_NORMAL_OID
+        || agg.levels_up != 0
+        || agg.kind != b'n'
+        || agg.collation != 0
+        || !agg.order.is_empty()
+        || !agg.distinct.is_empty()
+        || agg.filter.is_some()
+        || !agg.direct.is_empty()
+    {
+        return false;
+    }
+    let Some(proc) = builtin::proc_by_oid(agg.oid) else { return false };
+    let ty = agg.args.first().map(|arg| arg.ty);
+    match proc.name {
+        "count" => true,
+        "sum" | "avg" => ty.is_some_and(|ty| SUMS.contains(&ty)),
+        "min" | "max" => ty.is_some_and(|ty| ORDERED.contains(&ty)),
+        _ => false,
+    }
+}
+
+/// The relation of a condition `x IN (SELECT ...)` that the reduction can test on the rows of one relation, as `pull_up_sublinks` makes a semi-join of it. `x` must be an expression that cannot fail and reads one relation, the test must be an `=` of two integers or two dates, and the subquery must read no column of the query and must not fail, as [`harmless_query`] tells. The subquery then gives the same rows for each row of the relation.
+fn semi_join(cond: &Expr, session: &dyn Session) -> Option<usize> {
+    let ExprKind::SubLink(sub) = &cond.kind else { return None };
+    if sub.kind != SubLinkKind::Any
+        || sub.volatile
+        || crate::volatile(cond)
+        || crate::correlated(&sub.query)
+        || !harmless_query(&sub.query, session)
+    {
+        return None;
+    }
+    let ExprKind::Func(f) = &sub.test.as_ref()?.kind else { return None };
+    if !EQUALS.contains(&f.oid) || f.collation != 0 {
+        return None;
+    }
+    let [a, b] = f.args.as_slice() else { return None };
+    let column = |e: &Expr| {
+        let mut e = e;
+        while let ExprKind::Relabel(arg, _) = &e.kind {
+            e = arg;
+        }
+        matches!(e.kind, ExprKind::SubColumn(_))
+    };
+    let value = match (column(a), column(b)) {
+        (false, true) => a,
+        (true, false) => b,
+        _ => return None,
+    };
+    match relations_of(value).as_slice() {
+        [relation] if harmless(value) => Some(*relation),
+        _ => None,
+    }
+}
+
+/// True when a subquery cannot fail: a query of tables of the user with no children, with no set operation, no write, no window, no row lock, no policy, no `WITH`, no grouping sets, no `LIMIT` and no `OFFSET`, whose expressions cannot fail and whose aggregates are those of [`aggregate`].
+fn harmless_query(query: &Query, session: &dyn Session) -> bool {
+    let Some(catalog) = session.catalog() else { return false };
+    let plain = query.set_op.is_none()
+        && query.write.is_none()
+        && query.windows.is_empty()
+        && query.row_marks.is_empty()
+        && query.limit.is_none()
+        && query.offset.is_none()
+        && query.ctes.is_empty()
+        && query.grouping_sets.is_empty()
+        && query.barrier.is_empty()
+        && query.security.is_empty()
+        && query.minmax.is_none();
+    plain
+        && query.relations.iter().all(|relation| {
+            relation.subquery.is_none()
+                && relation.function.is_none()
+                && relation.values.is_none()
+                && relation.cte.is_none()
+                && relation.tablesample.is_none()
+                && relation.oid >= rupg_catalog::FIRST_NORMAL_OID
+                && catalog
+                    .relation(relation.oid)
+                    .is_some_and(|table| table.kind == rupg_catalog::RelKind::Table)
+                && catalog.all_inheritors(relation.oid).is_empty()
+        })
+        && query.exprs().iter().all(|expr| safe(expr, true))
 }
 
 /// True for a built-in function that cannot fail with the arguments `args`.

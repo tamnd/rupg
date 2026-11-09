@@ -4578,6 +4578,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/join_keys.test")));
     }
 
+    /// A join with `x IN (SELECT ...)` of a subquery that cannot fail reduces the rows of the table of `x` before the join, and gives the rows of PostgreSQL 19: `NOT IN`, a correlated subquery, a test of `text` and a subquery that can fail do not reduce the rows, and a null in the subquery matches no row.
+    #[test]
+    fn semi_join_reduction() {
+        big_stack(|| script_tasks(include_str!("connection/semi_join.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
