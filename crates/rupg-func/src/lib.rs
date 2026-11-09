@@ -476,6 +476,10 @@ pub trait Session {
     fn prepared_xacts(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
+    /// `GetMultiXactInfo`: the number of the multixacts that the row locks of the server made, and the sum of their members. A session with no server has none.
+    fn multixacts(&self) -> (u64, u64) {
+        (0, 0)
+    }
     /// The rows of `pg_lock_status`, in the 16 columns of the function: the locks that the sessions hold or wait for. A session with no server has no locks.
     fn locks(&self) -> Vec<Vec<Value>> {
         Vec::new()
