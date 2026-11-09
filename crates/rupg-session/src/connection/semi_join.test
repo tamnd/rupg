@@ -1,0 +1,66 @@
+> CREATE TABLE sa (k int, g int, v int)
+CREATE TABLE
+> INSERT INTO sa SELECT i % 60, i % 7, i FROM generate_series(1, 300) i
+INSERT 0 300
+> CREATE TABLE sb (k int, w text)
+CREATE TABLE
+> INSERT INTO sb SELECT CASE WHEN i % 17 = 0 THEN NULL ELSE i % 50 END, 'w' || (i % 4) FROM generate_series(1, 200) i
+INSERT 0 200
+> CREATE TABLE sc (k int, g int, q numeric, b bigint)
+CREATE TABLE
+> INSERT INTO sc SELECT CASE WHEN i % 23 = 0 THEN NULL ELSE i % 80 END, i % 7, (i % 9)::numeric, (i % 45)::bigint FROM generate_series(1, 500) i
+INSERT 0 500
+> ANALYZE sa
+ANALYZE
+> ANALYZE sb
+ANALYZE
+> ANALYZE sc
+ANALYZE
+> SELECT count(*), sum(x.v) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT k FROM sc GROUP BY k HAVING sum(q) > 30)
+fields count:20:8:-1,sum:20:8:-1
+row 165,23750
+SELECT 1
+> SELECT x.k, y.w, sum(x.v) FROM sa x, sb y, sc z WHERE x.k IN (SELECT k FROM sc GROUP BY k HAVING sum(q) > 30) AND x.k = y.k AND y.k = z.k GROUP BY x.k, y.w ORDER BY 3 DESC, 1, 2 LIMIT 10
+fields k@sa.1:23:4:-1,w@sb.2:25:-1:-1,sum:20:8:-1
+row 0,w0,10800
+row 0,w2,10800
+row 44,w0,9840
+row 44,w2,9840
+row 19,w1,9730
+row 18,w2,9660
+row 17,w3,9590
+row 10,w0,9100
+row 10,w2,9100
+row 9,w1,9030
+SELECT 10
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND x.k NOT IN (SELECT k FROM sc GROUP BY k HAVING sum(q) > 30)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND y.k IN (SELECT k FROM sc WHERE g = 3)
+fields count:20:8:-1
+row 825
+SELECT 1
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT k FROM sc WHERE q > 100)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*), sum(x.v) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT b FROM sc GROUP BY b HAVING count(*) > 11)
+fields count:20:8:-1,sum:20:8:-1
+row 85,10470
+SELECT 1
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT k FROM sc WHERE sc.g = x.g)
+fields count:20:8:-1
+row 797
+SELECT 1
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND y.w IN (SELECT 'w' || g FROM sc WHERE k < 5)
+fields count:20:8:-1
+row 945
+SELECT 1
+> SELECT count(*) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT k / (g - g) FROM sc)
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*), sum(y.k) FROM sa x, sb y WHERE x.k = y.k AND x.k IN (SELECT max(b) FROM sc GROUP BY g)
+fields count:20:8:-1,sum:20:8:-1
+row 20,880
+SELECT 1
