@@ -2,7 +2,7 @@
 //!
 //! The strings are in one arena, in the order of their codes. A hash table of codes finds a string. Code 0 means no value and is never an entry, so the first string gets code 1 (spec/09 section 9.5.2).
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use rupg_common::bytes::Bytes;
 use rupg_common::{Error, Result};
@@ -13,6 +13,38 @@ pub const NONE: u32 = 0;
 
 /// The code that a lookup gives when the dictionary does not have the string.
 pub const MISSING: u32 = u32::MAX;
+
+/// The most strings that [`Recent`] keeps.
+const RECENT: usize = 8;
+
+/// The last strings that [`Dictionary::find`] found with no table of codes, with their codes, the last first. A scan finds the same constant in each vector, and this list finds it again with no read of all the strings.
+#[derive(Debug, Default)]
+struct Recent(Mutex<Vec<(Box<[u8]>, u32)>>);
+
+impl Recent {
+    /// The code of `value` in the list, which then goes first.
+    fn get(&self, value: &[u8]) -> Option<u32> {
+        let mut list = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = list.iter().position(|(s, _)| **s == *value)?;
+        let found = list.remove(at);
+        let code = found.1;
+        list.insert(0, found);
+        Some(code)
+    }
+
+    /// Puts `value` with its code `code` first, and drops the last string when the list is full.
+    fn put(&self, value: &[u8], code: u32) {
+        let mut list = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        list.truncate(RECENT - 1);
+        list.insert(0, (value.into(), code));
+    }
+}
+
+impl Clone for Recent {
+    fn clone(&self) -> Recent {
+        Recent::default()
+    }
+}
 
 /// The strings of one column of one table, each with its code.
 ///
@@ -29,6 +61,8 @@ pub struct Dictionary {
     base: u32,
     /// The place of each code in the order of the bytes of all the strings, which [`Dictionary::order`] makes when a query first needs it. A new string clears it.
     order: OnceLock<Box<[u32]>>,
+    /// The last strings that a find with no table found. A new string clears them.
+    recent: Recent,
 }
 
 impl Default for Dictionary {
@@ -47,6 +81,7 @@ impl Dictionary {
             slots: OnceLock::from(vec![NONE; 1024]),
             base: 0,
             order: OnceLock::new(),
+            recent: Recent::default(),
         }
     }
 
@@ -93,10 +128,17 @@ impl Dictionary {
         Strings { bytes: self.bytes.slice(), ends: self.ends.slice().as_chunks::<8>().0 }
     }
 
-    /// The code of `value`, or [`MISSING`].
+    /// The code of `value`, or [`MISSING`]. A dictionary with a table of codes finds it in the table. A dictionary with no table, as a load reads it from the file, finds it in the last strings that it found, or else in a read of the lengths of all the strings, and makes no table: a table takes 8 bytes or more for each string for all the time that the dictionary lives, and its first find reads and hashes all the strings, but a query finds each constant one time for each vector.
     #[must_use]
     pub fn find(&self, value: &[u8]) -> u32 {
-        let slots = self.slots();
+        let Some(slots) = self.slots.get() else {
+            if let Some(code) = self.recent.get(value) {
+                return code;
+            }
+            let code = self.scan(value);
+            self.recent.put(value, code);
+            return code;
+        };
         let mask = slots.len() - 1;
         let mut at = hash::bytes(value) as usize & mask;
         loop {
@@ -109,6 +151,20 @@ impl Dictionary {
             }
             at = (at + 1) & mask;
         }
+    }
+
+    /// The code of `value` from a read of the end of each string, which compares the bytes of a string only when its length is the length of `value`, or [`MISSING`].
+    fn scan(&self, value: &[u8]) -> u32 {
+        let bytes = self.bytes.slice();
+        let mut start = 0;
+        for (at, end) in self.ends.slice().as_chunks::<8>().0.iter().enumerate() {
+            let end = u64::from_le_bytes(*end) as usize;
+            if end - start == value.len() && bytes[start..end] == *value {
+                return at as u32 + 1;
+            }
+            start = end;
+        }
+        MISSING
     }
 
     /// The code of `value`, which the dictionary adds to the tail when it does not have it.
@@ -144,6 +200,7 @@ impl Dictionary {
             slots.len()
         });
         self.order = OnceLock::new();
+        self.recent = Recent::default();
         if self.len() * 2 > slots {
             self.grow();
         }
@@ -195,7 +252,14 @@ impl Dictionary {
         if !ordered || base as usize > len || len >= (MISSING - 1) as usize {
             return Err(Error::corrupted("a dictionary has bad string ends"));
         }
-        Ok(Dictionary { bytes, ends, slots: OnceLock::new(), base, order: OnceLock::new() })
+        Ok(Dictionary {
+            bytes,
+            ends,
+            slots: OnceLock::new(),
+            base,
+            order: OnceLock::new(),
+            recent: Recent::default(),
+        })
     }
 
     fn grow(&mut self) {
@@ -299,7 +363,7 @@ impl Dictionary {
             rest = after;
             start = end;
         }
-        let queue = std::sync::Mutex::new(slices);
+        let queue = Mutex::new(slices);
         let work: Vec<Job<'_>> = (0..jobs)
             .map(|_| {
                 let queue = &queue;
@@ -468,6 +532,35 @@ mod tests {
         for (place, &code) in sorted.iter().enumerate() {
             assert_eq!(order[code as usize], place as u32 + 1, "{:?}", dict.get(code));
         }
+    }
+
+    /// A dictionary from its parts finds each string, the empty string, a string that is the start of another and a string that it does not have, with no table of codes, also when the finds repeat more times than the list of the last finds holds. A new string after a find that did not find it is then found.
+    #[test]
+    fn a_dictionary_from_its_parts_finds_with_no_table() {
+        let mut built = Dictionary::new();
+        let words: Vec<Vec<u8>> = (0..3000)
+            .map(|i| format!("http://example.com/{}", i * 7).into_bytes())
+            .chain([b"".to_vec(), b"http".to_vec(), b"http://example.com/7x".to_vec()])
+            .collect();
+        for w in &words {
+            built.intern(w);
+        }
+        let (bytes, ends, base) = built.parts();
+        let ends: Vec<u64> =
+            ends.as_chunks::<8>().0.iter().map(|e| u64::from_le_bytes(*e)).collect();
+        let mut dict = Dictionary::from_parts(bytes.to_vec(), ends, base).unwrap();
+        for round in 0..3 {
+            for (c, w) in words.iter().enumerate().step_by(97 - round * 40) {
+                assert_eq!(dict.find(w), c as u32 + 1, "{w:?}");
+                assert_eq!(dict.find(w), c as u32 + 1, "{w:?}");
+            }
+        }
+        assert_eq!(dict.find(b"http://example.com/"), MISSING);
+        assert_eq!(dict.find(b"nope"), MISSING);
+        assert!(dict.slots.get().is_none());
+        assert_eq!(dict.intern(b"nope"), 3004);
+        assert_eq!(dict.find(b"nope"), 3004);
+        assert_eq!(dict.find(b"http"), 3002);
     }
 
     #[test]
