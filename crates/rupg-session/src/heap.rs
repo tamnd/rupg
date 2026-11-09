@@ -1672,20 +1672,19 @@ impl Table {
         let values = Arc::<[Value]>::from(values);
         let len = u16::try_from(len).unwrap_or(u16::MAX);
         let made = self.made;
-        let version =
-            Version {
-                tid,
-                made,
-                xmin,
-                cmin,
-                xmax: 0,
-                cmax: 0,
-                aborted: 0,
-                next: 0,
-                key_kept: false,
-                len,
-                values,
-            };
+        let version = Version {
+            tid,
+            made,
+            xmin,
+            cmin,
+            xmax: 0,
+            cmax: 0,
+            aborted: 0,
+            next: 0,
+            key_kept: false,
+            len,
+            values,
+        };
         if self.versions.last().is_none_or(|last| last.tid < tid) {
             self.versions.push(version);
         } else {
@@ -2994,7 +2993,9 @@ impl Heap {
                 };
             }
             for &tid in &chain {
-                if let Some(holder) = row_holder((&*row_locks, &**running), key, tid, (xid, strength)) {
+                if let Some(holder) =
+                    row_holder((&*row_locks, &**running), key, tid, (xid, strength))
+                {
                     return Ok(RowLocked::Wait(holder));
                 }
             }
@@ -3060,7 +3061,8 @@ impl Heap {
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
-        let mut found: Vec<(u64, Option<Vec<Value>>, Fresh, bool)> = Vec::with_capacity(changes.len());
+        let mut found: Vec<(u64, Option<Vec<Value>>, Fresh, bool)> =
+            Vec::with_capacity(changes.len());
         let mut indexes = Vec::with_capacity(changes.len());
         let mut targets = Vec::new();
         for (index, ((tid, values), keys)) in changes.into_iter().zip(keys).enumerate() {

@@ -3,7 +3,7 @@
 //! The weak modes of a relation, `AccessShareLock`, `RowShareLock` and `RowExclusiveLock`, conflict only with the strong modes. When no owner holds or waits for a strong mode on a relation of the same partition, a weak lock goes in the [`Fast`] path of its owner and touches no shared state. A strong request first counts itself in its partition and moves the weak locks of the relation from all the fast paths to the table, as `FastPathTransferRelationLocks` does.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -207,6 +207,10 @@ pub(crate) struct Locks {
     strong: Box<[AtomicU32]>,
     /// The fast paths of the owners.
     fast: Mutex<Vec<Arc<Fast>>>,
+    /// `WaitForLockers`: for each owner that waits for the transactions of other owners to end, as `VirtualXactLock` waits for a virtual transaction ID, each of those owners and true once its transaction ended.
+    watches: Mutex<HashMap<i32, Vec<(i32, bool)>>>,
+    /// The number of the owners in `watches`, so that the end of a transaction takes no lock while no owner waits.
+    watching: AtomicUsize,
 }
 
 impl Default for Locks {
@@ -217,6 +221,8 @@ impl Default for Locks {
             changed: Condvar::default(),
             strong: (0..PARTITIONS).map(|_| AtomicU32::new(0)).collect(),
             fast: Mutex::default(),
+            watches: Mutex::default(),
+            watching: AtomicUsize::new(0),
         }
     }
 }
@@ -228,6 +234,67 @@ impl Locks {
 
     fn fasts(&self) -> MutexGuard<'_, Vec<Arc<Fast>>> {
         self.fast.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn watches(&self) -> MutexGuard<'_, HashMap<i32, Vec<(i32, bool)>>> {
+        self.watches.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `GetLockConflicts` and the start of `WaitForLockersMultiple`: `owner` starts to wait for the transactions of the other owners that hold a mode that conflicts with `mode` on a tag of `tags`, on a fast path or in the table. False when there is none, and then the owner does not wait.
+    pub(crate) fn watch(&self, owner: i32, tags: &[Tag], mode: Mode) -> bool {
+        let mut watches = self.watches();
+        self.watching.fetch_add(1, Ordering::SeqCst);
+        let mut lockers: Vec<(i32, bool)> = Vec::new();
+        for (tag, pid, held, granted, _) in self.status() {
+            if granted
+                && pid != owner
+                && tags.contains(&tag)
+                && conflicts(mode, held)
+                && !lockers.iter().any(|&(p, _)| p == pid)
+            {
+                lockers.push((pid, false));
+            }
+        }
+        if lockers.is_empty() {
+            self.watching.fetch_sub(1, Ordering::SeqCst);
+            return false;
+        }
+        if watches.insert(owner, lockers).is_some() {
+            self.watching.fetch_sub(1, Ordering::SeqCst);
+        }
+        true
+    }
+
+    /// The owners whose transactions `owner` still waits for since [`Locks::watch`].
+    pub(crate) fn watched(&self, owner: i32) -> Vec<i32> {
+        if self.watching.load(Ordering::SeqCst) == 0 {
+            return Vec::new();
+        }
+        let watches = self.watches();
+        watches.get(&owner).map_or_else(Vec::new, |lockers| {
+            lockers.iter().filter(|&&(_, ended)| !ended).map(|&(pid, _)| pid).collect()
+        })
+    }
+
+    /// The end of the wait of `owner` for the transactions of other owners.
+    pub(crate) fn unwatch(&self, owner: i32) {
+        if self.watches().remove(&owner).is_some() {
+            self.watching.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The end of the transaction of `owner`, after it released its locks, for the owners that wait for it.
+    fn xact_ended(&self, owner: i32) {
+        if self.watching.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        for lockers in self.watches().values_mut() {
+            for (pid, ended) in lockers.iter_mut() {
+                if *pid == owner {
+                    *ended = true;
+                }
+            }
+        }
     }
 
     /// The fast path of a new owner.
@@ -341,25 +408,21 @@ impl Locks {
             lock.grant(owner, mode, session);
             return Request::Granted;
         }
-        if !wait {
-            if lock.holds.is_empty() && lock.queue.is_empty() {
-                table.remove(&tag);
-            }
-            return Request::Busy;
-        }
-        // A session that holds a mode on the tag goes before the first request that waits for a mode that conflicts with it.
+        // `JoinWaitQueue`: a session that holds a mode on the tag goes before the first request that waits for a mode that conflicts with it, and gets the lock there when nothing before it conflicts, also with `NOWAIT`.
         let held: Vec<Mode> =
             lock.holds.iter().filter(|h| h.owner == owner).map(|h| h.mode).collect();
         let mut at = lock.queue.len();
+        let mut deadlock = None;
         for (i, other) in lock.queue.iter().enumerate() {
             if !held.iter().any(|&mine| conflicts(mine, other.mode)) {
                 continue;
             }
             if lock.holds.iter().any(|h| h.owner == other.owner && conflicts(mode, h.mode)) {
-                return Request::Deadlock(vec![
+                deadlock = Some(vec![
                     Edge { pid: owner, mode, tag },
                     Edge { pid: other.owner, mode: other.mode, tag },
                 ]);
+                break;
             }
             if lock.free_for(owner, mode, &lock.queue[..i]) {
                 lock.grant(owner, mode, session);
@@ -367,6 +430,15 @@ impl Locks {
             }
             at = i;
             break;
+        }
+        if !wait {
+            if lock.holds.is_empty() && lock.queue.is_empty() {
+                table.remove(&tag);
+            }
+            return Request::Busy;
+        }
+        if let Some(cycle) = deadlock {
+            return Request::Deadlock(cycle);
         }
         lock.queue.insert(at, Wait { owner, mode });
         Request::Queued
@@ -455,6 +527,12 @@ impl Locks {
                 if pid != owner && conflicts(mode, held) && !pids.contains(&pid) {
                     pids.push(pid);
                 }
+            }
+        }
+        drop(table);
+        for pid in self.watched(owner) {
+            if !pids.contains(&pid) {
+                pids.push(pid);
             }
         }
         pids
@@ -579,6 +657,14 @@ impl Locks {
 
     /// `LockReleaseAll` for one level: releases all the holds of the owner at the session level or at the transaction level.
     pub(crate) fn release_all(&self, owner: i32, session: bool) {
+        self.release_holds(owner, session);
+        if !session {
+            self.xact_ended(owner);
+        }
+    }
+
+    /// The release of the holds of `owner` at one level for [`Locks::release_all`].
+    fn release_holds(&self, owner: i32, session: bool) {
         // The owner set the flag itself before it got any hold, so a clear flag means that it holds nothing.
         if !self.used.load(Ordering::Relaxed) {
             return;
@@ -747,6 +833,17 @@ mod tests {
         assert_eq!(locks.xact_holds(2, Some(&two)), [(rel, 3, 1)]);
         locks.leave(&one);
         assert_eq!(locks.status().len(), 1);
+    }
+
+    #[test]
+    fn a_holder_goes_before_a_request_that_waits_for_it_also_with_nowait() {
+        let locks = Locks::default();
+        assert_eq!(locks.request(tag(1), 1, 8, true, true), Request::Granted);
+        assert_eq!(locks.request(tag(1), 2, EXCLUSIVE, true, true), Request::Queued);
+        // `LOCK TABLE ... IN SHARE ROW EXCLUSIVE MODE NOWAIT` of the holder conflicts only with the queued request.
+        assert_eq!(locks.request(tag(1), 1, 6, true, false), Request::Granted);
+        // A session that holds nothing waits behind the queue.
+        assert_eq!(locks.request(tag(1), 3, 1, true, false), Request::Busy);
     }
 
     #[test]

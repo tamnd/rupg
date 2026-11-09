@@ -263,6 +263,9 @@ fn check_options(stmt: &VacuumStmt, parsed: &Parsed) -> Result<(), Error> {
     Ok(())
 }
 
+/// A relation that `VACUUM` works on, with the columns of `ANALYZE`.
+type Columns = (u32, Vec<String>);
+
 impl Connection {
     /// `ExecVacuum`, then `vacuum`: `PreventInTransactionBlock` for `VACUUM`, and the checks of [`rupg_analyze::vacuum_relations`] on each relation of the statement. `vacuum_is_permitted_for_relation` skips a relation that the role cannot maintain, with a warning.
     pub(super) fn vacuum(
@@ -287,6 +290,8 @@ impl Connection {
             ));
         }
         let analyze = parsed.analyze || !stmt.is_vacuumcmd;
+        // The committed catalog before the statement waits for the locks of the relations, first in the lookups of their names: a relation of it that is gone from the committed catalog after its lock went away during the wait. A relation of the catalog of the system, or one that the transaction made, is not in it.
+        let committed = self.committed_view().0;
         let reader = self.reader();
         let mut warnings = Vec::new();
         let permitted = |relid| rupg_func::vacuum_permitted(relid, &reader);
@@ -311,6 +316,8 @@ impl Connection {
             notices.push(Notice::warning(warning));
             false
         };
+        // The relations that the statement names, by their names, for the warning of `vacuum_open_relation` when one went away while the statement waited for a lock.
+        let mut named = Vec::new();
         // `get_all_vacuum_rels`: with no list, each table, materialized view and partitioned table.
         let relids = if parsed.only_database_stats {
             Vec::new()
@@ -323,7 +330,8 @@ impl Connection {
         } else {
             // `expand_vacuum_rel`: with no `ONLY`, the partitions and the inheritance children of the relation come after it, with its column list.
             let mut all = Vec::new();
-            for VacuumRel { relid, columns, inh, permitted } in relids {
+            for VacuumRel { relid, columns, inh, permitted, name } in relids {
+                named.push((relid, name));
                 if inh {
                     let children = catalog.all_inheritors(relid);
                     if permitted {
@@ -345,16 +353,22 @@ impl Connection {
         // `vacuum_rel` takes `ShareUpdateExclusiveLock`, and `AccessExclusiveLock` for `FULL`, which writes a new file.
         let mode = if vacuum.is_some_and(|parsed| parsed.full) { 8 } else { 4 };
         self.in_vacuum.set(true);
-        let result = self.vacuum_relations(&catalog, relids, (vacuum, analyze), mode, notices);
+        let result = self.vacuum_relations(
+            (&catalog, &committed),
+            (relids, &named),
+            (vacuum, analyze),
+            mode,
+            notices,
+        );
         self.in_vacuum.set(false);
         result.map(|()| Done::Tag(tag))
     }
 
-    /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest.
+    /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest. A relation that went away while the statement waited for its lock is skipped, with a warning for one of `named`, the relations that the statement names, as `vacuum_open_relation` gives it.
     fn vacuum_relations(
         &self,
-        catalog: &Catalog,
-        relids: Vec<(u32, Vec<String>)>,
+        (catalog, committed): (&Catalog, &Catalog),
+        (relids, named): (Vec<Columns>, &[(u32, String)]),
         (vacuum, analyze): (Option<&Parsed>, bool),
         mode: u8,
         notices: &mut Vec<Notice>,
@@ -362,6 +376,18 @@ impl Connection {
         let reader = self.reader();
         for (relid, columns) in relids {
             rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
+            if committed.relation(relid).is_some()
+                && self.committed_view().0.relation(relid).is_none()
+            {
+                if let Some((_, name)) = named.iter().find(|(named, _)| *named == relid) {
+                    let what = if vacuum.is_some() { "vacuum" } else { "analyze" };
+                    notices.push(Notice::warning(Error::new(
+                        SqlState::WARNING,
+                        format!("skipping {what} of \"{name}\" --- relation no longer exists"),
+                    )));
+                }
+                continue;
+            }
             if let Some(parsed) = vacuum
                 && let Some(name) = parallel_temp(catalog, relid, parsed)
             {
