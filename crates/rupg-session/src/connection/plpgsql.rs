@@ -132,7 +132,13 @@ impl<'a> PlSpi<'a> {
         let mark = self.conn.event_mark();
         // The messages of the triggers that fired before this statement stay in the queue of the outer statement.
         let said = self.conn.trigger_warnings.borrow().len();
-        let rows = plan.run(params, &*reader);
+        // A query with a locking clause locks its rows, as `ExecLockRows` does.
+        let rows = match plan.locking() {
+            Some(locking) => {
+                crate::query::locked_values(&locking, plan.columns().len(), params, &reader)
+            }
+            None => plan.run(params, &*reader),
+        };
         self.forward(&reader);
         let rows = rows?;
         let Some(info) = plan.write() else {

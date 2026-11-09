@@ -2484,6 +2484,10 @@ pub(crate) fn run(
     formats: &[i16],
 ) -> Result<Vec<Row>> {
     let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+    // A query with a locking clause locks its rows, as `ExecLockRows` does in each way to run it.
+    if let Some(locking) = plan.locking() {
+        return run_locking(&types, &locking, params, reader, formats).map_err(|(_, error)| error);
+    }
     plan.run(params, reader)?.iter().map(|values| encode(&types, values, reader, formats)).collect()
 }
 
@@ -2544,30 +2548,8 @@ fn run_locking(
     reader: &Reader<'_>,
     formats: &[i16],
 ) -> std::result::Result<Vec<Row>, (Vec<Row>, Error)> {
-    let limits = match &locking.limits {
-        Some(plan) => limits(plan, params, reader).map_err(|error| (Vec::new(), error))?,
-        None => (0, None),
-    };
-    let mut fresh = None;
-    let values = loop {
-        let current = fresh.as_ref().unwrap_or(reader);
-        let values =
-            locking.plan.run_select(params, current).map_err(|(_, error)| (Vec::new(), error))?;
-        let marks = (locking.plan.marks(), locking.locks.as_slice());
-        let locked = current.lock_rows(marks, values, (types.len(), limits));
-        match locked.map_err(|error| (Vec::new(), error))? {
-            Some(values) => break values,
-            None => match reader.conn {
-                Some(conn) => fresh = Some(conn.reader()),
-                None => {
-                    return Err((
-                        Vec::new(),
-                        Error::internal("a row changed in a reader with no session"),
-                    ));
-                }
-            },
-        }
-    };
+    let values =
+        locked_values(locking, types.len(), params, reader).map_err(|error| (Vec::new(), error))?;
     let mut rows = Vec::with_capacity(values.len());
     for values in &values {
         match encode(types, values, reader, formats) {
@@ -2576,6 +2558,36 @@ fn run_locking(
         }
     }
     Ok(rows)
+}
+
+/// `ExecLockRows`: the rows of the query of `locking` with `width` columns, after it locks them, again with a new snapshot when a row changed under it in `READ COMMITTED`.
+///
+/// # Errors
+///
+/// The errors of the query and of the locks of its rows.
+pub(crate) fn locked_values(
+    locking: &rupg_exec::Locking,
+    width: usize,
+    params: &[Value],
+    reader: &Reader<'_>,
+) -> Result<Vec<Vec<Value>>> {
+    let limits = match &locking.limits {
+        Some(plan) => limits(plan, params, reader)?,
+        None => (0, None),
+    };
+    let mut fresh = None;
+    loop {
+        let current = fresh.as_ref().unwrap_or(reader);
+        let values = locking.plan.run_select(params, current).map_err(|(_, error)| error)?;
+        let marks = (locking.plan.marks(), locking.locks.as_slice());
+        match current.lock_rows(marks, values, (width, limits))? {
+            Some(values) => return Ok(values),
+            None => match reader.conn {
+                Some(conn) => fresh = Some(conn.reader()),
+                None => return Err(Error::internal("a row changed in a reader with no session")),
+            },
+        }
+    }
 }
 
 /// `recompute_limits` of `nodeLimit.c` for a `SELECT` with a locking clause: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows, from the one row of `plan` of [`rupg_exec::Locking::limits`].
