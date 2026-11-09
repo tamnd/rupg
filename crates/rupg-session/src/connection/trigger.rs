@@ -20,7 +20,7 @@ use internal::Internal;
 use super::Connection;
 use super::merge::Action;
 use super::upsert::{Upsert, Upserted};
-use crate::heap::View;
+use crate::heap::{RowLocked, View, tid_text};
 use crate::query::{Captured, Reader, Transition};
 use crate::utility::Notice;
 
@@ -466,6 +466,91 @@ impl Connection {
             self.before_statement(triggers, info)?;
         }
         Ok(())
+    }
+
+    /// `GetTupleForTrigger`: an `UPDATE` or a `DELETE` locks each old row whose table fires triggers `BEFORE ... FOR EACH ROW` before the triggers fire, and waits for a transaction in progress that changed or locked it, so that a trigger does not run on a row that a concurrent write changes. Each row of `rows` ends with the ID of its version, after the OID of its leaf when `routed`. For a routed `UPDATE`, the triggers `BEFORE DELETE` of a leaf count too, as a row can move. The result is false when a transaction that committed after the snapshot of `view` changed a row, and the statement must run again with a new snapshot.
+    ///
+    /// # Errors
+    ///
+    /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed, and the errors of a wait.
+    pub(super) fn lock_for_triggers(
+        &self,
+        info: &Write,
+        view: &View,
+        rows: &[Vec<Value>],
+        routed: bool,
+    ) -> Result<bool, Error> {
+        let (event, strength) = match info.kind {
+            WriteKind::Update => (TRIGGER_UPDATE, crate::heap::NO_KEY_UPDATE),
+            WriteKind::Delete => (TRIGGER_DELETE, crate::heap::UPDATE),
+            _ => return Ok(true),
+        };
+        let catalog = self.catalog();
+        let mut fires: Vec<(u32, bool)> = Vec::new();
+        let heap = self.store.heap();
+        for row in rows {
+            let at = row.len().wrapping_sub(if routed { 2 } else { 1 });
+            let relation = match (routed, row.get(at)) {
+                (true, Some(Value::Oid(leaf))) => *leaf,
+                _ => info.table,
+            };
+            let Some(Value::Int8(tid)) = row.last() else { continue };
+            let tid = tid.cast_unsigned();
+            let fire = match fires.iter().find(|(oid, _)| *oid == relation) {
+                Some(&(_, fire)) => fire,
+                None => {
+                    let reader = self.reader();
+                    let mut fire = armed(&catalog, &reader, relation, event)?.before_rows();
+                    if routed && event == TRIGGER_UPDATE && !fire {
+                        fire = armed(&catalog, &reader, relation, TRIGGER_DELETE)?.before_rows();
+                    }
+                    fires.push((relation, fire));
+                    fire
+                }
+            };
+            if !fire {
+                continue;
+            }
+            loop {
+                match heap.lock_row((relation, tid), view, (view.xid, strength))? {
+                    RowLocked::Done | RowLocked::Gone => break,
+                    RowLocked::Again => return Ok(false),
+                    RowLocked::Wait(holder) => {
+                        let name =
+                            catalog.relation(relation).map(|r| r.name.clone()).unwrap_or_default();
+                        let context =
+                            format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
+                        let locked = (view.database, relation, tid);
+                        self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
+                            heap.row_blocked(locked, (holder, strength))
+                        })?;
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// The rows of the plan of an `UPDATE` or a `DELETE` of a table that is not partitioned, after [`Connection::lock_for_triggers`] locked them. While a transaction that committed after the snapshot changed a row, the plan runs again with a new snapshot, and the write keeps its command.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the locks and of the plan.
+    pub(super) fn rows_for_triggers(
+        &self,
+        (plan, params): (&Plan, &[Value]),
+        info: &Write,
+        view: &mut View,
+        mut rows: Vec<Vec<Value>>,
+    ) -> Result<Vec<Vec<Value>>, Error> {
+        while !self.lock_for_triggers(info, view, &rows, false)? {
+            let reader = self.reader();
+            rows = plan.run(params, &reader)?;
+            let command = view.command;
+            *view = reader.view().cloned().unwrap_or_default();
+            view.command = command;
+        }
+        Ok(rows)
     }
 
     /// `ExecBRInsertTriggers` and the other calls of the triggers `BEFORE ... FOR EACH ROW` of a write, for the rows of the plan. A trigger that gives a null row skips the row, and a trigger that gives a row changes the new row. Then the checks of the constraints run on each new row. The rows of an `INSERT` and of an `UPDATE` have the columns, the conditions of the checks and then the other values, and the rows of an `UPDATE` and of a `DELETE` end with the ID of the version of the old row.

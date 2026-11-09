@@ -188,6 +188,17 @@ pub(crate) const NO_KEY_UPDATE: RowStrength = 3;
 /// `LockTupleExclusive`: the lock of `FOR UPDATE`, which a `DELETE` and an `UPDATE` of a key column take.
 pub(crate) const UPDATE: RowStrength = 4;
 
+/// `MovedPartitionsOffsetNumber`: the [`Version::next`] of a version that an `UPDATE` deleted to move its row to another partition, as `ItemPointerSetMovedPartitions` sets `t_ctid`.
+const MOVED: u64 = u64::MAX;
+
+/// The error of a write or a row lock in `READ COMMITTED` that finds its row moved to another partition by a transaction that committed after the snapshot.
+fn moved_error() -> Error {
+    Error::new(
+        SqlState::T_R_SERIALIZATION_FAILURE,
+        "tuple to be locked was already moved to another partition due to concurrent update",
+    )
+}
+
 /// The conflicts of the row locks, as `tupleLockExtraInfo` gives them: `KEY SHARE` conflicts only with `UPDATE`, `SHARE` with `NO KEY UPDATE` and `UPDATE`, and the two updates with all the strengths.
 fn row_conflict(held: RowStrength, wanted: RowStrength) -> bool {
     held + wanted > UPDATE
@@ -2746,7 +2757,7 @@ impl Heap {
         };
         while let Some(version) = table.find(tid).map(|at| &table.versions[at]) {
             let done = version.xmax == view.xid || !state.running.contains(&version.xmax);
-            if version.next == 0 || version.xmax == 0 || !done {
+            if matches!(version.next, 0 | MOVED) || version.xmax == 0 || !done {
                 break;
             }
             tid = version.next;
@@ -2869,6 +2880,20 @@ impl Heap {
             .collect()
     }
 
+    /// `ExecDelete` with `changingPart`: the versions `tids` of the table `relation`, which the transaction `xid` deleted to move their rows to another partition, are marked as moved, so that a write or a row lock that waited for them fails.
+    pub(crate) fn mark_moved(&self, database: u32, relation: u32, xid: u32, tids: &[u64]) {
+        let mut state = self.state();
+        let Some(table) = state.tables.get_mut(&(database, relation)) else { return };
+        for &tid in tids {
+            if let Some(at) = table.find(tid) {
+                let version = &mut table.versions[at];
+                if version.xmax == xid && version.next == 0 {
+                    version.next = MOVED;
+                }
+            }
+        }
+    }
+
     /// The ID of the version after each version of `tids`, which an `UPDATE` made, or 0 for a version with no next version.
     pub(crate) fn next_versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<u64> {
         let mut guard = self.state();
@@ -2876,7 +2901,8 @@ impl Heap {
         let Some(table) = state.tables.get(&(database, relation)) else {
             return vec![0; tids.len()];
         };
-        tids.iter().map(|&tid| table.find(tid).map_or(0, |at| table.versions[at].next)).collect()
+        let next = |at: usize| Some(table.versions[at].next).filter(|&next| next != MOVED);
+        tids.iter().map(|&tid| table.find(tid).and_then(next).unwrap_or(0)).collect()
     }
 
     /// `ExecCheckIndexConstraints` and the speculative insertion of `ExecInsert` for one row of `INSERT ... ON CONFLICT`. The row goes in when no version that a dirty snapshot sees has its key in an arbiter index, the indexes at the places `arbiters` of `unique`. The check and the insertion hold the lock of the heap, so no other write can come between them. `kept` is the ID of the version of an earlier try that waited.
@@ -3010,6 +3036,7 @@ impl Heap {
                         SqlState::T_R_SERIALIZATION_FAILURE,
                         "could not serialize access due to concurrent update",
                     )),
+                    _ if version.next == MOVED => Err(moved_error()),
                     _ => Ok(RowLocked::Again),
                 };
             }
@@ -3037,6 +3064,7 @@ impl Heap {
                     format!("could not serialize access due to concurrent {what}"),
                 ));
             }
+            _ if version.next == MOVED => return Err(moved_error()),
             _ => return Ok(RowLocked::Again),
         }
         if let Some(holder) = row_holder((&*row_locks, &**running), key, tid, (xid, strength)) {
@@ -3102,6 +3130,7 @@ impl Heap {
                         format!("could not serialize access due to concurrent {what}"),
                     ));
                 }
+                _ if version.next == MOVED => return Err(moved_error()),
                 _ => return Ok(Changed::Again),
             }
             // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
@@ -3648,7 +3677,7 @@ impl Heap {
             if locked || version.xmax == holder {
                 return true;
             }
-            if version.xmax == 0 || version.next == 0 || version.next == tid {
+            if version.xmax == 0 || matches!(version.next, 0 | MOVED) || version.next == tid {
                 return false;
             }
             tid = version.next;
