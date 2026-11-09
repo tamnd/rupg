@@ -12,7 +12,11 @@ use rupg_types::Value;
 use super::route::{self, Routing};
 use super::trigger::{RowPair, Triggers};
 use super::{Connection, put_tids};
-use crate::heap::{Changed, NO_KEY_UPDATE, RowLocked, Speculative, UPDATE, View, tid_text};
+use crate::heap::{
+    Changed, KEY_SHARE, NO_KEY_UPDATE, RowLocked, RowStrength, SHARE, Speculative, UPDATE, View,
+    tid_text,
+};
+use rupg_sql::nodes::LockClauseStrength;
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
 #[derive(Debug, Default)]
@@ -287,24 +291,21 @@ impl Connection {
         done: &mut Upserted,
     ) -> Result<bool, Error> {
         let Target { tid, old, excluded } = target;
-        // `ExecOnConflictUpdate` locks the row of the leaf before it tests the condition of `DO UPDATE ... WHERE`.
-        match self.store.heap().lock_row(
-            (routing.oid(at), tid),
-            view,
-            (view.xid, update_lock(info)),
-        )? {
-            RowLocked::Done => {}
-            RowLocked::Gone | RowLocked::Again => return Ok(false),
-            RowLocked::Wait(holder) => {
-                let context = format!(
-                    "while locking tuple {} in relation \"{}\"",
-                    tid_text(tid),
-                    routing.name(at)
-                );
-                let row = (view.database, routing.oid(at), tid);
-                let held = (view.xid, holder);
-                self.reader().wait_row(held, &context, row, update_lock(info))?;
-                return Ok(false);
+        // `ExecOnConflictUpdate` and `ExecOnConflictSelect` lock the row of the leaf before they test the condition of `WHERE`.
+        if let Some(strength) = conflict_lock(info) {
+            match self.store.heap().lock_row((routing.oid(at), tid), view, (view.xid, strength))? {
+                RowLocked::Done => {}
+                RowLocked::Gone | RowLocked::Again => return Ok(false),
+                RowLocked::Wait(holder) => {
+                    let context = format!(
+                        "while locking tuple {} in relation \"{}\"",
+                        tid_text(tid),
+                        routing.name(at)
+                    );
+                    let row = (view.database, routing.oid(at), tid);
+                    self.reader().wait_row((view.xid, holder), &context, row, strength)?;
+                    return Ok(false);
+                }
             }
         }
         let mut existing = routing.to_root(at, &old, info.width);
@@ -417,10 +418,10 @@ impl Connection {
         done: &mut Upserted,
     ) -> Result<bool, Error> {
         let Target { tid, old, excluded } = target;
-        // `ExecOnConflictUpdate` locks the row before it tests the condition of `DO UPDATE ... WHERE`, so the row stays locked also when the condition is false.
-        if info.on_conflict.as_ref().is_some_and(|c| c.select.is_none()) {
+        // `ExecOnConflictUpdate` and `ExecOnConflictSelect` lock the row before they test the condition of `WHERE`, so the row stays locked also when the condition is false.
+        if let Some(strength) = conflict_lock(info) {
             let heap = self.store.heap();
-            match heap.lock_row((info.table, tid), view, (view.xid, update_lock(info)))? {
+            match heap.lock_row((info.table, tid), view, (view.xid, strength))? {
                 RowLocked::Done => {}
                 RowLocked::Gone | RowLocked::Again => return Ok(false),
                 RowLocked::Wait(holder) => {
@@ -429,7 +430,8 @@ impl Connection {
                         tid_text(tid),
                         info.name
                     );
-                    self.reader().wait_xact(view.xid, holder, &context)?;
+                    let row = (view.database, info.table, tid);
+                    self.reader().wait_row((view.xid, holder), &context, row, strength)?;
                     return Ok(false);
                 }
             }
@@ -604,8 +606,20 @@ struct Target<'a> {
     excluded: &'a [Value],
 }
 
+/// The lock that `ExecOnConflictUpdate` and `ExecOnConflictSelect` take on the row of the table that a row of the statement meets: the lock of [`update_lock`] for `DO UPDATE`, the lock of the clause of `DO SELECT FOR ...`, and `None` for `DO SELECT` with no lock.
+fn conflict_lock(info: &Write) -> Option<RowStrength> {
+    match info.on_conflict.as_ref().and_then(|c| c.select) {
+        None => Some(update_lock(info)),
+        Some(LockClauseStrength::LCS_FORKEYSHARE) => Some(KEY_SHARE),
+        Some(LockClauseStrength::LCS_FORSHARE) => Some(SHARE),
+        Some(LockClauseStrength::LCS_FORNOKEYUPDATE) => Some(NO_KEY_UPDATE),
+        Some(LockClauseStrength::LCS_FORUPDATE) => Some(UPDATE),
+        Some(_) => None,
+    }
+}
+
 /// `ExecUpdateLockMode`: `LockTupleExclusive` when `SET` of `DO UPDATE` gives a column of a unique index with no expression and no predicate, which a foreign key can reference, and `LockTupleNoKeyExclusive` for the other columns.
-fn update_lock(info: &Write) -> crate::heap::RowStrength {
+fn update_lock(info: &Write) -> RowStrength {
     let key = info
         .unique
         .iter()
