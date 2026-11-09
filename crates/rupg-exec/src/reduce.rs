@@ -1,6 +1,6 @@
 //! The reduction of the rows of the tables of a join before the join (spec/14 section 14.8.2). Each table keeps the rows that pass its own conditions of `WHERE`, and then the rows whose key of an `=` with another table is a key of a row that the other table keeps, until no table loses a row. The join then reads and joins only these rows, so that a join of long tables makes the values of only the rows that can join.
 //!
-//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` is volatile and no condition can fail, because the join tests the conditions on fewer rows, and in another order. A condition `x IN (SELECT ...)` of one table whose subquery cannot fail and reads no column of the query is also a condition of the table, as the semi-join of `pull_up_sublinks`, so that TPC-H Q18 joins only the orders of the subquery. A join of two tables with one `=` of their columns can also have conditions that can fail and read the two tables, such as a subquery that reads a column of each table. The join tests such a condition only on the tuples of the `=`, and the reduction removes only the rows that have no other row for the `=`, so the condition sees the same tuples.
+//! The rows that the reduction removes give no tuple of the join, so the join gives the same tuples in the same order. The reduction runs only when no condition of `WHERE` is volatile and no condition can fail, because the join tests the conditions on fewer rows, and in another order. A condition `x IN (SELECT ...)` of one table whose subquery cannot fail and reads no column of the query is also a condition of the table, as the semi-join of `pull_up_sublinks`, so that TPC-H Q18 joins only the orders of the subquery. A comparison of a column with a subquery `(SELECT ...)` that gives one row and cannot fail, such as the subquery of `min(ps_supplycost)` in TPC-H Q2, cannot fail too, so it does not stop the reduction, also when the subquery reads columns of the query. The join tests it on the tuples of its relations, as before. A join of two tables with one `=` of their columns can also have conditions that can fail and read the two tables, such as a subquery that reads a column of each table. The join tests such a condition only on the tuples of the `=`, and the reduction removes only the rows that have no other row for the `=`, so the condition sees the same tuples.
 
 use std::rc::Rc;
 
@@ -95,7 +95,7 @@ pub(crate) fn plan<'q>(
             plan.own[relation].push(cond);
             continue;
         }
-        if !harmless(cond) {
+        if !harmless(cond) && !scalar_test(cond, session) {
             if width != 2 || crate::volatile(cond) || relations_of(cond).len() != 2 {
                 return None;
             }
@@ -203,17 +203,17 @@ fn relations_of(expr: &Expr) -> Vec<usize> {
 
 /// True when an expression cannot fail and is not volatile: columns of the query, constants, `AND`, `OR`, `NOT`, the tests of nulls and of truth values, and the built-in functions that are leakproof, the comparisons of `numeric` values and of a date and a timestamp, and `LIKE` with a constant pattern that does not end in an escape, with no collation of ICU.
 fn harmless(expr: &Expr) -> bool {
-    safe(expr, false)
+    safe(expr, false, 0)
 }
 
-/// True when an expression cannot fail and is not volatile, as [`harmless`] tells. With `aggs`, an aggregate of [`aggregate`] can also be in the expression.
-fn safe(expr: &Expr, aggs: bool) -> bool {
-    let all = |args: &[Expr]| args.iter().all(|arg| safe(arg, aggs));
+/// True when an expression cannot fail and is not volatile, as [`harmless`] tells. With `aggs`, an aggregate of [`aggregate`] can also be in the expression. A column can be a column of a query `up` levels or fewer outside the expression.
+fn safe(expr: &Expr, aggs: bool, up: usize) -> bool {
+    let all = |args: &[Expr]| args.iter().all(|arg| safe(arg, aggs, up));
     match &expr.kind {
-        ExprKind::Var(var) => var.levels_up == 0 && var.attnum > 0,
+        ExprKind::Var(var) => var.levels_up <= up && var.attnum > 0,
         ExprKind::Const(_) => true,
         ExprKind::Relabel(arg, _) | ExprKind::NullTest(arg, _) | ExprKind::BooleanTest(arg, _) => {
-            safe(arg, aggs)
+            safe(arg, aggs, up)
         }
         ExprKind::Bool(_, args) => all(args),
         ExprKind::Func(f) => {
@@ -259,7 +259,7 @@ fn semi_join(cond: &Expr, session: &dyn Session) -> Option<usize> {
         || sub.volatile
         || crate::volatile(cond)
         || crate::correlated(&sub.query)
-        || !harmless_query(&sub.query, session)
+        || !harmless_query(&sub.query, session, 0)
     {
         return None;
     }
@@ -286,8 +286,8 @@ fn semi_join(cond: &Expr, session: &dyn Session) -> Option<usize> {
     }
 }
 
-/// True when a subquery cannot fail: a query of tables of the user with no children, with no set operation, no write, no window, no row lock, no policy, no `WITH`, no grouping sets, no `LIMIT` and no `OFFSET`, whose expressions cannot fail and whose aggregates are those of [`aggregate`].
-fn harmless_query(query: &Query, session: &dyn Session) -> bool {
+/// True when a subquery cannot fail: a query of tables of the user with no children, with no set operation, no write, no window, no row lock, no policy, no `WITH`, no grouping sets, no `LIMIT` and no `OFFSET`, whose expressions cannot fail and whose aggregates are those of [`aggregate`]. The expressions can read the columns of the queries `up` levels or fewer outside the subquery.
+fn harmless_query(query: &Query, session: &dyn Session, up: usize) -> bool {
     let Some(catalog) = session.catalog() else { return false };
     let plain = query.set_op.is_none()
         && query.write.is_none()
@@ -313,7 +313,29 @@ fn harmless_query(query: &Query, session: &dyn Session) -> bool {
                     .is_some_and(|table| table.kind == rupg_catalog::RelKind::Table)
                 && catalog.all_inheritors(relation.oid).is_empty()
         })
-        && query.exprs().iter().all(|expr| safe(expr, true))
+        && query.exprs().iter().all(|expr| safe(expr, true, up))
+}
+
+/// True for a comparison of a value with a subquery `(SELECT ...)` that cannot fail, such as `ps_supplycost = (SELECT min(ps_supplycost) ...)` of TPC-H Q2. The comparison must be a built-in function that cannot fail, and the value must not fail. The subquery must make one group with no `GROUP BY`, so that it gives one row or no row, and it cannot fail, as [`harmless_query`] tells. It can read the columns of the query.
+fn scalar_test(cond: &Expr, session: &dyn Session) -> bool {
+    let ExprKind::Func(f) = &cond.kind else { return false };
+    if f.retset || f.collation != 0 || !function(f.oid, &f.args) || crate::volatile(cond) {
+        return false;
+    }
+    let [a, b] = f.args.as_slice() else { return false };
+    let (value, link) = match (&a.kind, &b.kind) {
+        (_, ExprKind::SubLink(link)) => (a, link),
+        (ExprKind::SubLink(link), _) => (b, link),
+        _ => return false,
+    };
+    let query = &link.query;
+    link.kind == SubLinkKind::Expr
+        && !link.volatile
+        && harmless(value)
+        && query.grouped
+        && query.group.is_empty()
+        && query.grouping_sets.is_empty()
+        && harmless_query(query, session, 1)
 }
 
 /// True for a built-in function that cannot fail with the arguments `args`.

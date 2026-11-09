@@ -4589,6 +4589,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/semi_join.test")));
     }
 
+    /// A join of three tables with a comparison of a column and a correlated subquery `(SELECT ...)` that gives one row and cannot fail reduces the rows of the tables before the join, and gives the rows of PostgreSQL 19. A subquery that can fail, a subquery that can give two rows and another condition that can fail do not reduce the rows, and give the errors of PostgreSQL 19.
+    #[test]
+    fn scalar_subquery_reduction() {
+        big_stack(|| script_tasks(include_str!("connection/scalar_join.test")));
+    }
+
     /// The tasks of the server find the groups of a vector scan at the same time, and give the groups, the aggregates and the order of a scan with no tasks.
     #[test]
     fn group_tasks() {
