@@ -1932,6 +1932,10 @@ impl rupg_func::Session for Reader<'_> {
         self.conn.map_or_else(Vec::new, Connection::listening_channels)
     }
 
+    fn notification_queue_usage(&self) -> f64 {
+        self.activity.map_or(0.0, |(_, store)| store.listeners().usage())
+    }
+
     /// `pg_lock_status`. Each session in a transaction holds `ExclusiveLock` on its virtual transaction ID, and on the ID of its transaction when it has one, as `VirtualXactLockTableInsert` and `XactLockTableInsert` take them. rupg keeps no local transaction IDs, so the local part of a virtual transaction ID is 1.
     fn lock_relations(&self, reads: &[u32], mode: u8, write: Option<u32>) -> Result<()> {
         if let Some(table) = write {

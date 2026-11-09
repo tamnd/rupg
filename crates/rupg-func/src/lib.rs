@@ -419,6 +419,10 @@ pub trait Session {
     fn listening_channels(&self) -> Vec<String> {
         Vec::new()
     }
+    /// `asyncQueueUsage`, for `pg_notification_queue_usage`: the part of the queue of the notifications in use. A session with no server has no queue.
+    fn notification_queue_usage(&self) -> f64 {
+        0.0
+    }
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
         Vec::new()
