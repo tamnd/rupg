@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use rupg_analyze::{Expr, ExprKind, FromItem, Query, Relation, TABLE_OID_ATTNUM, Target, Var};
-use rupg_types::oid;
+use rupg_common::{Error, Result, SqlState};
+use rupg_types::{Value, oid};
 
 use crate::Plan;
 
@@ -77,7 +78,7 @@ impl Plan {
             && (query.offset.is_some() || query.limit.is_some()))
         .then(|| {
             let cursor = Arc::make_mut(&mut plan.query);
-            let null = || Expr::new(ExprKind::Const(rupg_types::Value::Null), oid::INT8);
+            let null = || Expr::new(ExprKind::Const(Value::Null), oid::INT8);
             let targets = [cursor.offset.take(), cursor.limit.take()].map(|expr| Target {
                 name: String::new(),
                 expr: expr.unwrap_or_else(null),
@@ -113,6 +114,34 @@ pub struct Locking {
     pub locks: Vec<(i32, i32)>,
     /// A plan whose one row is the value of `OFFSET` and the value of `LIMIT` of the query, which apply to the rows that the locks keep, or `None` for a query with no `OFFSET` and `LIMIT`.
     pub limits: Option<Plan>,
+}
+
+/// `recompute_limits` of `nodeLimit.c` for a query with a locking clause: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows, from the one row `rows` of [`Locking::limits`].
+///
+/// # Errors
+///
+/// `2201X` for a negative `OFFSET` and `2201W` for a negative `LIMIT`.
+pub fn limit_values(rows: &[Vec<Value>]) -> Result<(usize, Option<usize>)> {
+    let value = |at: usize| match rows.first().and_then(|row| row.get(at)) {
+        Some(&Value::Int8(v)) => Some(v),
+        _ => None,
+    };
+    let offset = value(0).unwrap_or(0);
+    if offset < 0 {
+        return Err(Error::new(
+            SqlState::INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE,
+            "OFFSET must not be negative",
+        ));
+    }
+    let count = value(1);
+    if count.is_some_and(|c| c < 0) {
+        return Err(Error::new(
+            SqlState::INVALID_ROW_COUNT_IN_LIMIT_CLAUSE,
+            "LIMIT must not be negative",
+        ));
+    }
+    let size = |v: i64| usize::try_from(v).unwrap_or(usize::MAX);
+    Ok((size(offset), count.map(size)))
 }
 
 /// A target that is a system column of the relation `relation`.

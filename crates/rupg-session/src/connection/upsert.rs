@@ -12,7 +12,7 @@ use rupg_types::Value;
 use super::route::{self, Routing};
 use super::trigger::{RowPair, Triggers};
 use super::{Connection, put_tids};
-use crate::heap::{Changed, RowLocked, Speculative, UPDATE, View, tid_text};
+use crate::heap::{Changed, NO_KEY_UPDATE, RowLocked, Speculative, UPDATE, View, tid_text};
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
 #[derive(Debug, Default)]
@@ -287,6 +287,24 @@ impl Connection {
         done: &mut Upserted,
     ) -> Result<bool, Error> {
         let Target { tid, old, excluded } = target;
+        // `ExecOnConflictUpdate` locks the row of the leaf before it tests the condition of `DO UPDATE ... WHERE`.
+        match self.store.heap().lock_row(
+            (routing.oid(at), tid),
+            view,
+            (view.xid, update_lock(info)),
+        )? {
+            RowLocked::Done => {}
+            RowLocked::Gone | RowLocked::Again => return Ok(false),
+            RowLocked::Wait(holder) => {
+                let context = format!(
+                    "while locking tuple {} in relation \"{}\"",
+                    tid_text(tid),
+                    routing.name(at)
+                );
+                self.reader().wait_xact(view.xid, holder, &context)?;
+                return Ok(false);
+            }
+        }
         let mut existing = routing.to_root(at, &old, info.width);
         existing.push(Value::Int8(tid.cast_signed()));
         let (checked, carried) = {
@@ -397,10 +415,10 @@ impl Connection {
         done: &mut Upserted,
     ) -> Result<bool, Error> {
         let Target { tid, old, excluded } = target;
-        // `ExecOnConflictUpdate` locks the row with `LockTupleExclusive` before it tests the condition of `DO UPDATE ... WHERE`, so the row stays locked also when the condition is false.
+        // `ExecOnConflictUpdate` locks the row before it tests the condition of `DO UPDATE ... WHERE`, so the row stays locked also when the condition is false.
         if info.on_conflict.as_ref().is_some_and(|c| c.select.is_none()) {
             let heap = self.store.heap();
-            match heap.lock_row((info.table, tid), view, (view.xid, UPDATE))? {
+            match heap.lock_row((info.table, tid), view, (view.xid, update_lock(info)))? {
                 RowLocked::Done => {}
                 RowLocked::Gone | RowLocked::Again => return Ok(false),
                 RowLocked::Wait(holder) => {
@@ -582,4 +600,17 @@ struct Target<'a> {
     tid: u64,
     old: Vec<Value>,
     excluded: &'a [Value],
+}
+
+/// `ExecUpdateLockMode`: `LockTupleExclusive` when `SET` of `DO UPDATE` gives a column of a unique index with no expression and no predicate, which a foreign key can reference, and `LockTupleNoKeyExclusive` for the other columns.
+fn update_lock(info: &Write) -> crate::heap::RowStrength {
+    let key = info
+        .unique
+        .iter()
+        .filter(|index| index.derived.is_none())
+        .flat_map(|index| &index.columns)
+        .any(|&column| {
+            info.updated.iter().any(|&number| usize::try_from(number - 1) == Ok(column))
+        });
+    if key { UPDATE } else { NO_KEY_UPDATE }
 }

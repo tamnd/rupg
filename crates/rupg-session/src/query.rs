@@ -1904,6 +1904,28 @@ impl rupg_func::Session for Reader<'_> {
         self.take_locks(reads.iter().copied().filter(|&read| Some(read) != write), mode)
     }
 
+    fn lock_subquery_rows(
+        &self,
+        marks: (&[u32], &[(i32, i32)]),
+        rows: Vec<Vec<Value>>,
+        limits: (usize, (usize, Option<usize>)),
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        self.lock_rows(marks, rows, limits)
+    }
+
+    fn with_new_snapshot(
+        &self,
+        run: &mut dyn FnMut(&dyn rupg_func::Session) -> Result<rupg_func::LockedRows>,
+    ) -> Result<rupg_func::LockedRows> {
+        let Some(conn) = self.conn else { return Ok(None) };
+        loop {
+            let fresh = conn.reader();
+            if let Some(rows) = run(&fresh)? {
+                return Ok(Some(rows));
+            }
+        }
+    }
+
     fn prepared_xacts(&self) -> Vec<Vec<Value>> {
         let Some((_, store)) = self.activity else { return Vec::new() };
         store
@@ -2523,26 +2545,7 @@ fn run_locking(
 /// `recompute_limits` of `nodeLimit.c` for a `SELECT` with a locking clause: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows, from the one row of `plan` of [`rupg_exec::Locking::limits`].
 fn limits(plan: &Plan, params: &[Value], reader: &Reader<'_>) -> Result<(usize, Option<usize>)> {
     let rows = plan.run_select(params, reader).map_err(|(_, error)| error)?;
-    let value = |at: usize| match rows.first().and_then(|row| row.get(at)) {
-        Some(&Value::Int8(v)) => Some(v),
-        _ => None,
-    };
-    let offset = value(0).unwrap_or(0);
-    if offset < 0 {
-        return Err(Error::new(
-            SqlState::INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE,
-            "OFFSET must not be negative",
-        ));
-    }
-    let count = value(1);
-    if count.is_some_and(|c| c < 0) {
-        return Err(Error::new(
-            SqlState::INVALID_ROW_COUNT_IN_LIMIT_CLAUSE,
-            "LIMIT must not be negative",
-        ));
-    }
-    let size = |v: i64| usize::try_from(v).unwrap_or(usize::MAX);
-    Ok((size(offset), count.map(size)))
+    rupg_exec::limit_values(&rows)
 }
 
 /// The bytes of the values of a row of the types `types` in the result format of each column: 1 is binary and any other code is text.

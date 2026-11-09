@@ -232,6 +232,9 @@ pub struct HeapSize {
 /// The values of all the columns of a version as the store keeps them, and the ID of the version, for [`Session::table_shared_rows_by_key`].
 pub type SharedRow = (Arc<[Value]>, u64);
 
+/// The rows of [`Session::lock_subquery_rows`], or `None` when the subquery must run again with a new snapshot.
+pub type LockedRows = Option<Vec<Vec<Value>>>;
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -432,6 +435,42 @@ pub trait Session {
     fn lock_relations(&self, reads: &[u32], mode: u8, write: Option<u32>) -> Result<()> {
         let _ = (reads, mode, write);
         Ok(())
+    }
+    /// `ExecLockRows` of a subquery with a locking clause, such as a query of `WITH` with `FOR UPDATE`: the rows `rows` end with the `tableoid` and the `ctid` of the row of each table of `marks` after the `width` columns of the query, and the transaction locks each of them with the strength and the wait policy of `locks`, before `OFFSET` and `LIMIT` of `limits` keep a part of the rows. The result has the rows with the columns of the query, or `None` when a transaction that committed after the snapshot changed a row, so the subquery must run again with a new snapshot. A session with no server takes no locks.
+    ///
+    /// # Errors
+    ///
+    /// `55P03` for `NOWAIT`, `57014` for a cancel, `40P01` for a cycle of waits, and `40001` in `REPEATABLE READ` for a row that a transaction that committed after the snapshot changed.
+    fn lock_subquery_rows(
+        &self,
+        (marks, locks): (&[u32], &[(i32, i32)]),
+        rows: Vec<Vec<Value>>,
+        (width, (offset, count)): (usize, (usize, Option<usize>)),
+    ) -> Result<Option<Vec<Vec<Value>>>> {
+        let _ = (marks, locks);
+        let end = count.map_or(usize::MAX, |c| offset.saturating_add(c));
+        Ok(Some(
+            rows.into_iter()
+                .take(end)
+                .skip(offset)
+                .map(|mut row| {
+                    row.truncate(width);
+                    row
+                })
+                .collect(),
+        ))
+    }
+    /// `EvalPlanQual` for [`Session::lock_subquery_rows`]: runs `run` with a session with a new snapshot until it gives rows, which sees the last version of each row that a transaction that committed after the snapshot changed. `None` for a session that cannot take a new snapshot.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `run`.
+    fn with_new_snapshot(
+        &self,
+        run: &mut dyn FnMut(&dyn Session) -> Result<LockedRows>,
+    ) -> Result<LockedRows> {
+        let _ = run;
+        Ok(None)
     }
     /// The rows of `pg_prepared_xact`, in the 5 columns of the function: the prepared transactions of the server. A session with no server has none.
     fn prepared_xacts(&self) -> Vec<Vec<Value>> {
