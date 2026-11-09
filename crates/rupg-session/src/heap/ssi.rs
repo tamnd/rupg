@@ -8,8 +8,48 @@ use std::collections::{BTreeSet, HashMap};
 
 use rupg_common::{Error, SqlState};
 
-/// A table in a database: the target of a `SIREAD` lock and of a write.
-pub(crate) type Target = (u32, u32);
+/// A table in a database.
+pub(crate) type Table = (u32, u32);
+
+/// `PREDICATELOCKTARGETTAG`: what a `SIREAD` lock covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Target {
+    /// `PredicateLockRelation`: the whole table, for a sequential scan.
+    Relation(Table),
+    /// `PredicateLockPage`: a page of the heap of the table, `tid >> 16` of its versions with the generation of the heap.
+    Page(Table, u64),
+    /// `PredicateLockTID`: the version `tid` of the table, which an index scan found.
+    Tuple(Table, u64),
+    /// The leaf page of the indexes of the table that an index scan read, as `_bt_first` locks it. The index of a small table has one leaf page, so the lock covers each key of each index of the table, and an insert of an index entry conflicts with it.
+    Index(Table),
+}
+
+impl Target {
+    /// The table of the target.
+    fn table(self) -> Table {
+        match self {
+            Self::Relation(table)
+            | Self::Page(table, _)
+            | Self::Tuple(table, _)
+            | Self::Index(table) => table,
+        }
+    }
+}
+
+/// `max_pred_locks_per_page`: the most `SIREAD` locks of versions of one page that a transaction takes before it locks the page.
+const MAX_PER_PAGE: usize = 2;
+
+/// `max_pred_locks_per_relation` of -2: half of `max_pred_locks_per_transaction`, the most `SIREAD` locks of pages and versions of one table that a transaction takes before it locks the table.
+const MAX_PER_RELATION: usize = 32;
+
+/// A version that an index scan examined, for `HeapCheckForSerializableConflictOut`: its ID, `xmin`, `xmax`, and whether the snapshot of the scan sees it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Examined {
+    pub(crate) tid: u64,
+    pub(crate) xmin: u32,
+    pub(crate) xmax: u32,
+    pub(crate) visible: bool,
+}
 
 /// `SerCommitSeqNo`: the order of the commits of the serializable transactions.
 type SeqNo = u64;
@@ -48,10 +88,10 @@ struct Sxact {
     in_conflicts: BTreeSet<u64>,
     /// `outConflicts`: the transactions that wrote what this one read.
     out_conflicts: BTreeSet<u64>,
-    /// The tables of the `SIREAD` locks of the transaction.
+    /// The targets of the `SIREAD` locks of the transaction.
     reads: BTreeSet<Target>,
     /// The tables that the transaction wrote.
-    writes: BTreeSet<Target>,
+    writes: BTreeSet<Table>,
     /// The process ID of the session of the transaction.
     pid: i32,
     /// `possibleUnsafeConflicts`: for a transaction declared `READ ONLY`, the writable transactions that ran at its snapshot, and for a writable one, the read-only transactions whose snapshot it ran at.
@@ -235,7 +275,7 @@ impl Ssi {
     pub(crate) fn read(
         &mut self,
         id: u64,
-        target: Target,
+        table: Table,
         concurrent: Concurrent<'_>,
     ) -> Result<(), Error> {
         let Some(me) = self.xacts.get_mut(&id) else { return Ok(()) };
@@ -244,13 +284,11 @@ impl Ssi {
             self.end(id, false, 0);
             return Ok(());
         }
-        if me.reads.insert(target) {
-            self.locks.entry(target).or_default().insert(id);
-        }
+        self.acquire(id, Target::Relation(table));
         let writers: Vec<u64> = self
             .xacts
             .iter()
-            .filter(|&(&w, sxact)| w != id && sxact.xid != 0 && sxact.writes.contains(&target))
+            .filter(|&(&w, sxact)| w != id && sxact.xid != 0 && sxact.writes.contains(&table))
             .map(|(&w, _)| w)
             .collect();
         if writers.is_empty() {
@@ -261,6 +299,138 @@ impl Ssi {
             self.conflict_out(id, writer, concurrent)?;
         }
         Ok(())
+    }
+
+    /// An index scan of the table `table` by the transaction `id`, whose transaction ID is `own`, that examined the versions `versions`: the transaction locks the leaf page of the index, as `_bt_first` does, and each version that it sees, as `heap_hot_search_buffer` does with `PredicateLockTID`, and gets a conflict to each concurrent serializable transaction that wrote a version it examined, `HeapCheckForSerializableConflictOut`.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the transaction is doomed or a conflict makes a dangerous structure where this transaction must fail.
+    pub(crate) fn read_versions(
+        &mut self,
+        id: u64,
+        (table, own): (Table, u32),
+        versions: &[Examined],
+        concurrent: Concurrent<'_>,
+    ) -> Result<(), Error> {
+        if self.xacts.contains_key(&id) && !self.xacts[&id].ro_safe {
+            self.acquire(id, Target::Index(table));
+        }
+        self.fetched(id, (table, own), versions, concurrent)
+    }
+
+    /// `heap_fetch` of the versions `versions` of the table `table` by the transaction `id`, whose transaction ID is `own`, as `ExecCheckTIDVisible` fetches the version that an `INSERT ... ON CONFLICT` found: [`Ssi::read_versions`] with no lock of the index.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the transaction is doomed or a conflict makes a dangerous structure where this transaction must fail.
+    pub(crate) fn fetched(
+        &mut self,
+        id: u64,
+        (table, own): (Table, u32),
+        versions: &[Examined],
+        concurrent: Concurrent<'_>,
+    ) -> Result<(), Error> {
+        let Some(me) = self.xacts.get(&id) else { return Ok(()) };
+        if me.ro_safe {
+            self.end(id, false, 0);
+            return Ok(());
+        }
+        let mut writers = BTreeSet::new();
+        for version in versions {
+            // `PredicateLockTID`: a version of the transaction itself needs no lock.
+            if version.visible && (own == 0 || version.xmin != own) {
+                self.acquire(id, Target::Tuple(table, version.tid));
+            }
+            // A version that the snapshot sees conflicts with the transaction that deleted it, and one that it does not see with the transaction that inserted it.
+            let xid = if version.visible { version.xmax } else { version.xmin };
+            if xid == 0 || xid == own || !concurrent(xid) {
+                continue;
+            }
+            if let Some(&writer) = self.by_xid.get(&xid)
+                && writer != id
+            {
+                writers.insert(writer);
+            }
+        }
+        if writers.is_empty() {
+            return Ok(());
+        }
+        self.check_doomed(id, "during conflict out checking")?;
+        for writer in writers {
+            self.conflict_out(id, writer, concurrent)?;
+        }
+        Ok(())
+    }
+
+    /// `PredicateLockAcquire` of the target `target` for the transaction `id`. A lock that a lock of the transaction on its page or table covers is not taken, `CoarserLockCovers`. A lock of a page or a table takes the place of the locks of the transaction that it covers, `DeleteChildTargetLocks`. More than [`MAX_PER_PAGE`] locks of versions of a page become a lock of the page, and more than [`MAX_PER_RELATION`] locks of pages and versions of a table become a lock of the table, `CheckAndPromotePredicateLockRequest`.
+    fn acquire(&mut self, id: u64, target: Target) {
+        let Some(me) = self.xacts.get_mut(&id) else { return };
+        let table = target.table();
+        let covered = match target {
+            Target::Relation(_) | Target::Index(_) => false,
+            Target::Page(..) => me.reads.contains(&Target::Relation(table)),
+            Target::Tuple(_, tid) => {
+                me.reads.contains(&Target::Relation(table))
+                    || me.reads.contains(&Target::Page(table, tid >> 16))
+            }
+        };
+        if covered || !me.reads.insert(target) {
+            return;
+        }
+        self.locks.entry(target).or_default().insert(id);
+        match target {
+            Target::Relation(_) => {
+                let children: Vec<Target> = self.children(id, table, None);
+                self.drop_locks(id, &children);
+            }
+            Target::Page(_, page) => {
+                let children: Vec<Target> = self.children(id, table, Some(page));
+                self.drop_locks(id, &children);
+                if self.children(id, table, None).len() > MAX_PER_RELATION {
+                    self.acquire(id, Target::Relation(table));
+                }
+            }
+            Target::Tuple(_, tid) => {
+                let page = tid >> 16;
+                if self.children(id, table, Some(page)).len() > MAX_PER_PAGE {
+                    self.acquire(id, Target::Page(table, page));
+                } else if self.children(id, table, None).len() > MAX_PER_RELATION {
+                    self.acquire(id, Target::Relation(table));
+                }
+            }
+            Target::Index(_) => {}
+        }
+    }
+
+    /// The locks of the transaction `id` that a lock of the table `table`, or of its page `page`, covers: the locks of its versions, and of its pages for the table.
+    fn children(&self, id: u64, table: Table, page: Option<u64>) -> Vec<Target> {
+        let Some(me) = self.xacts.get(&id) else { return Vec::new() };
+        let tuples = match page {
+            Some(page) => {
+                Target::Tuple(table, page << 16)..=Target::Tuple(table, (page << 16) | 0xffff)
+            }
+            None => Target::Tuple(table, 0)..=Target::Tuple(table, u64::MAX),
+        };
+        let mut children: Vec<Target> = me.reads.range(tuples).copied().collect();
+        if page.is_none() {
+            children.extend(me.reads.range(Target::Page(table, 0)..=Target::Page(table, u64::MAX)));
+        }
+        children
+    }
+
+    /// The locks `targets` of the transaction `id` go.
+    fn drop_locks(&mut self, id: u64, targets: &[Target]) {
+        let Some(me) = self.xacts.get_mut(&id) else { return };
+        for target in targets {
+            me.reads.remove(target);
+            if let Some(holders) = self.locks.get_mut(target) {
+                holders.remove(&id);
+                if holders.is_empty() {
+                    self.locks.remove(target);
+                }
+            }
+        }
     }
 
     /// `CheckForSerializableConflictOut` of the reader `me` for a version of the transaction of the record `writer`.
@@ -289,16 +459,16 @@ impl Ssi {
         self.flag_rw_conflict(me, writer, me)
     }
 
-    /// `CheckForSerializableConflictIn` for a write of the table `target` by the transaction `id` with the transaction ID `xid`: each other transaction with a `SIREAD` lock on the table that overlaps this one gets a conflict to this one. `snapshot_xmin` is `xmin` of the snapshot of the transaction.
+    /// `CheckForSerializableConflictIn` for a write of the table `table` by the transaction `id` with the transaction ID `xid`: each other transaction with a `SIREAD` lock on one of the targets `targets` that overlaps this one gets a conflict to this one. With no targets, a lock of any target of the table counts, as `CheckTableForSerializableConflictIn` does. `snapshot_xmin` is `xmin` of the snapshot of the transaction.
     ///
     /// # Errors
     ///
     /// `40001` when the transaction is doomed or a conflict makes a dangerous structure where this transaction must fail.
     pub(crate) fn write(
         &mut self,
-        id: u64,
-        xid: u32,
-        target: Target,
+        (id, xid): (u64, u32),
+        table: Table,
+        targets: Option<&[Target]>,
         snapshot_xmin: u32,
     ) -> Result<(), Error> {
         if !self.xacts.contains_key(&id) {
@@ -311,13 +481,24 @@ impl Ssi {
                 me.xid = xid;
                 self.by_xid.insert(xid, id);
             }
-            me.writes.insert(target);
+            me.writes.insert(table);
         }
-        let holders: Vec<u64> = self
-            .locks
-            .get(&target)
-            .map(|holders| holders.iter().copied().filter(|&h| h != id).collect())
-            .unwrap_or_default();
+        let mut holders = BTreeSet::new();
+        match targets {
+            Some(targets) => {
+                for target in targets {
+                    holders.extend(self.locks.get(target).into_iter().flatten());
+                }
+            }
+            None => {
+                for (target, held) in &self.locks {
+                    if target.table() == table {
+                        holders.extend(held);
+                    }
+                }
+            }
+        }
+        holders.remove(&id);
         for holder in holders {
             let Some(sxact) = self.get(holder) else { continue };
             // `CheckTargetForConflictsIn`: a committed reader overlaps the writer while it ended after `xmin` of the snapshot of the writer.
@@ -567,8 +748,8 @@ impl Ssi {
 mod tests {
     use super::*;
 
-    const T: Target = (1, 100);
-    const U: Target = (1, 101);
+    const T: Table = (1, 100);
+    const U: Table = (1, 101);
 
     /// Write skew: each transaction reads the table that the other writes, and the second commit fails.
     #[test]
@@ -581,8 +762,8 @@ mod tests {
         ssi.read(b, U, &none).unwrap();
         ssi.read(a, U, &none).unwrap();
         ssi.read(b, T, &none).unwrap();
-        ssi.write(a, 10, T, 10).unwrap();
-        ssi.write(b, 11, U, 10).unwrap();
+        ssi.write((a, 10), T, None, 10).unwrap();
+        ssi.write((b, 11), U, None, 10).unwrap();
         ssi.pre_commit(a).unwrap();
         ssi.end(a, true, 12);
         let error = ssi.pre_commit(b).unwrap_err();
@@ -599,7 +780,7 @@ mod tests {
         let b = ssi.begin(10, false, false, 1);
         let none = |_: u32| true;
         ssi.read(a, T, &none).unwrap();
-        ssi.write(b, 11, T, 10).unwrap();
+        ssi.write((b, 11), T, None, 10).unwrap();
         ssi.pre_commit(b).unwrap();
         ssi.end(b, true, 12);
         ssi.pre_commit(a).unwrap();
@@ -622,14 +803,14 @@ mod tests {
         let s1 = ssi.begin(10, false, false, 1);
         let s2 = ssi.begin(10, false, false, 2);
         ssi.read(s2, T, &none).unwrap();
-        ssi.write(s1, 10, U, 10).unwrap();
+        ssi.write((s1, 10), U, None, 10).unwrap();
         ssi.read(s2, U, &none).unwrap();
         ssi.pre_commit(s1).unwrap();
         ssi.end(s1, true, 11);
         let s3 = ssi.begin(11, true, true, 3);
         assert_eq!(ssi.safety(s3), None);
         assert_eq!(ssi.safe_snapshot_blockers(3), vec![2]);
-        ssi.write(s2, 11, T, 10).unwrap();
+        ssi.write((s2, 11), T, None, 10).unwrap();
         ssi.pre_commit(s2).unwrap();
         ssi.end(s2, true, 12);
         assert_eq!(ssi.safety(s3), Some(false));
@@ -644,10 +825,69 @@ mod tests {
         let w = ssi.begin(10, false, false, 1);
         let r = ssi.begin(10, true, true, 2);
         assert_eq!(ssi.safety(r), None);
-        ssi.write(w, 10, T, 10).unwrap();
+        ssi.write((w, 10), T, None, 10).unwrap();
         ssi.pre_commit(w).unwrap();
         ssi.end(w, true, 11);
         assert_eq!(ssi.safety(r), Some(true));
         assert!(ssi.xacts.is_empty());
+    }
+
+    /// A version that the snapshot sees, at slot `slot` of page 0.
+    fn seen(slot: u64) -> Examined {
+        Examined { tid: slot, xmin: 1, xmax: 0, visible: true }
+    }
+
+    /// `read-only-anomaly-2`: index scans lock only the rows that they find, so an update of a row that no other transaction read makes no conflict.
+    #[test]
+    fn index_scans_lock_rows() {
+        let mut ssi = Ssi::default();
+        let none = |_| true;
+        let s1 = ssi.begin(10, false, false, 1);
+        let s2 = ssi.begin(10, false, false, 2);
+        let (x, y) = (seen(1), seen(2));
+        ssi.read_versions(s2, (T, 0), &[x], &none).unwrap();
+        ssi.read_versions(s2, (T, 0), &[y], &none).unwrap();
+        ssi.read_versions(s1, (T, 0), &[y], &none).unwrap();
+        let tuple_y = [Target::Relation(T), Target::Page(T, 0), Target::Tuple(T, 2)];
+        ssi.write((s1, 10), T, Some(&tuple_y), 10).unwrap();
+        assert!(ssi.get(s2).unwrap().out_conflicts.contains(&s1));
+        ssi.pre_commit(s1).unwrap();
+        ssi.end(s1, true, 12);
+        let tuple_x = [Target::Relation(T), Target::Page(T, 0), Target::Tuple(T, 1)];
+        ssi.write((s2, 11), T, Some(&tuple_x), 10).unwrap();
+        ssi.pre_commit(s2).unwrap();
+    }
+
+    /// A third lock of a version of a page locks the page, and an insert conflicts with the lock of the index.
+    #[test]
+    fn locks_of_versions_become_a_lock_of_the_page() {
+        let mut ssi = Ssi::default();
+        let none = |_| true;
+        let r = ssi.begin(10, false, false, 1);
+        let w = ssi.begin(10, false, false, 2);
+        ssi.read_versions(r, (T, 0), &[seen(1), seen(2)], &none).unwrap();
+        assert!(ssi.get(r).unwrap().reads.contains(&Target::Tuple(T, 2)));
+        ssi.read_versions(r, (T, 0), &[seen(3)], &none).unwrap();
+        let reads: Vec<Target> = ssi.get(r).unwrap().reads.iter().copied().collect();
+        assert_eq!(reads, [Target::Page(T, 0), Target::Index(T)]);
+        ssi.read_versions(r, (T, 0), &[seen(4)], &none).unwrap();
+        assert_eq!(ssi.get(r).unwrap().reads.len(), 2);
+        ssi.write((w, 11), T, Some(&[Target::Relation(T), Target::Index(T)]), 10).unwrap();
+        assert!(ssi.get(r).unwrap().out_conflicts.contains(&w));
+    }
+
+    /// An index scan conflicts with the transaction that deleted a version that it sees, and not with one that wrote another version.
+    #[test]
+    fn index_scans_conflict_out_with_the_versions_they_examine() {
+        let mut ssi = Ssi::default();
+        let none = |_| true;
+        let w = ssi.begin(10, false, false, 1);
+        let r = ssi.begin(10, false, false, 2);
+        ssi.write((w, 11), T, Some(&[Target::Tuple(T, 5)]), 10).unwrap();
+        ssi.read_versions(r, (T, 0), &[seen(1)], &none).unwrap();
+        assert!(ssi.get(r).unwrap().out_conflicts.is_empty());
+        let deleted = Examined { tid: 5, xmin: 1, xmax: 11, visible: true };
+        ssi.read_versions(r, (T, 0), &[deleted], &none).unwrap();
+        assert!(ssi.get(r).unwrap().out_conflicts.contains(&w));
     }
 }

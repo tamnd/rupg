@@ -771,8 +771,11 @@ impl Connection {
                     snapshot.clone()
                 }
                 None if ssi => {
-                    let (snapshot, sxact) =
-                        heap.serializable_snapshot_in(&self.xmin_slot(), (read_only, false), self.pid);
+                    let (snapshot, sxact) = heap.serializable_snapshot_in(
+                        &self.xmin_slot(),
+                        (read_only, false),
+                        self.pid,
+                    );
                     self.sxact.set(sxact);
                     kept.insert(snapshot).clone()
                 }
@@ -1474,6 +1477,11 @@ impl Connection {
     /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
     fn ts_config(&self, node: &Node) -> Result<Option<String>, Error> {
         if !matches!(node, Node::VariableSetStmt(_)) {
+            return Ok(None);
+        }
+        // A `SET` with no check of the catalog takes no snapshot, so that the first query of a transaction in `REPEATABLE READ` takes the snapshot of the transaction. The reader with no view still sets up the roles that `SET ROLE` finds.
+        if !utility::checks_catalog(node) {
+            drop(self.reader_without_view(self.catalog()));
             return Ok(None);
         }
         utility::ts_config(node, &self.reader())

@@ -1087,17 +1087,30 @@ fn date_format(text: &str) -> DateFormat {
 }
 
 impl Reader<'_> {
-    /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a scan of the table `relation` in `SERIALIZABLE`. `PredicateLockingNeededForRelation` skips a system table, a temporary table and a materialized view.
+    /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a scan of the table `relation` in `SERIALIZABLE`. `PredicateLockingNeededForRelation` skips a system table and a temporary table.
     fn serializable_read(&self, relation: u32, store: &Store, view: &View) -> Result<()> {
-        if view.sxact == 0 || relation < FIRST_NORMAL_OID {
-            return Ok(());
-        }
-        if self.catalog.relation(relation).is_some_and(|r| {
-            r.kind == rupg_catalog::RelKind::MatView || self.catalog.is_temp_schema(r.namespace)
-        }) {
+        if !self.predicate_locking(relation, view) {
             return Ok(());
         }
         store.heap().serializable_read(relation, view)
+    }
+
+    /// `PredicateLockingNeededForRelation` for a read of `relation` with the view: a read in `SERIALIZABLE` of a table that is not a system table or a temporary table. A materialized view takes `SIREAD` locks too, as `REFRESH MATERIALIZED VIEW CONCURRENTLY` changes its rows with DML.
+    fn predicate_locking(&self, relation: u32, view: &View) -> bool {
+        view.sxact != 0
+            && relation >= FIRST_NORMAL_OID
+            && !self
+                .catalog
+                .relation(relation)
+                .is_some_and(|r| self.catalog.is_temp_schema(r.namespace))
+    }
+
+    /// The view for an index scan of `relation`, with no record of serializable snapshot isolation when the scan takes no `SIREAD` locks. The view is not copied outside `SERIALIZABLE`, as the count of the `Arc` of its snapshot is on a line of the cache that the other connections also write.
+    fn predicate_view<'v>(&self, relation: u32, view: &'v View) -> Cow<'v, View> {
+        if view.sxact == 0 || self.predicate_locking(relation, view) {
+            return Cow::Borrowed(view);
+        }
+        Cow::Owned(View { sxact: 0, ..view.clone() })
     }
 
     /// The order of the joins and the hash tables of the plan of `query`, which the statement plans once. `None` when the reader is not a session or the planner fails.
@@ -1563,8 +1576,9 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Option<Vec<Vec<Value>>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
-                self.serializable_read(relation, store, view)?;
-                Ok(store.heap().key_rows(relation, view, used, key_columns, key))
+                // An index scan takes the `SIREAD` locks of the rows that it finds.
+                let view = &*self.predicate_view(relation, view);
+                store.heap().key_rows(relation, view, used, key_columns, key)
             }
             _ => Ok(None),
         }
@@ -1578,8 +1592,9 @@ impl rupg_func::Session for Reader<'_> {
     ) -> Result<Option<Vec<rupg_func::SharedRow>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
-                self.serializable_read(relation, store, view)?;
-                Ok(store.heap().key_shared(relation, view, key_columns, key))
+                // An index scan takes the `SIREAD` locks of the rows that it finds.
+                let view = &*self.predicate_view(relation, view);
+                store.heap().key_shared(relation, view, key_columns, key)
             }
             _ => Ok(None),
         }
@@ -1893,7 +1908,8 @@ impl rupg_func::Session for Reader<'_> {
             }
         }
         for &(xid, _) in &prepared {
-            let mut own = row("transactionid", crate::twophase::Prepared::lock_owner(xid), EXCLUSIVE, true);
+            let mut own =
+                row("transactionid", crate::twophase::Prepared::lock_owner(xid), EXCLUSIVE, true);
             own[6] = Value::Oid(xid);
             rows.push(own);
         }

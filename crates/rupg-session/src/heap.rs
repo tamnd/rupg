@@ -179,6 +179,9 @@ struct State {
 /// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
 pub(crate) type RowStrength = u8;
 
+/// `LockTupleKeyShare`: the lock of `FOR KEY SHARE`, which a check of a foreign key takes.
+const KEY_SHARE: RowStrength = 1;
+
 /// `LockTupleNoKeyExclusive`: the lock of `FOR NO KEY UPDATE`, which an `UPDATE` that changes no key column takes.
 pub(crate) const NO_KEY_UPDATE: RowStrength = 3;
 
@@ -210,6 +213,23 @@ fn row_holder(
             locker != xid && row_conflict(held, strength) && running.contains(&locker)
         })
         .map(|&(locker, _)| locker)
+}
+
+/// `CheckForSerializableConflictIn` of the transaction of the view in `SERIALIZABLE` for a write of the table `relation` that the targets `targets` cover, or of the whole table with no targets, with the lock of [`Heap::serializable_lock`].
+fn conflict_in(
+    ssi: Option<&mut ssi::Ssi>,
+    view: &View,
+    relation: u32,
+    targets: Option<&[ssi::Target]>,
+) -> Result<()> {
+    let Some(ssi) = ssi else { return Ok(()) };
+    let xmin = view.snapshot.xmin();
+    ssi.write((view.sxact, view.xid), (view.database, relation), targets, xmin)
+}
+
+/// The targets that an insert into the table `table` checks: the table, for `heap_insert`, and the leaf pages of its indexes.
+fn inserted(table: ssi::Table) -> [ssi::Target; 2] {
+    [ssi::Target::Relation(table), ssi::Target::Index(table)]
 }
 
 /// `HeapDetermineColumnsInfo` for the key columns: true when the new values `new` change a column of a unique index of `unique` with no expression and no predicate, which a foreign key can reference.
@@ -616,6 +636,7 @@ impl Cold {
                 cmax: 0,
                 aborted: 0,
                 next: 0,
+                key_kept: false,
                 len: lens[at] as u16,
                 values: Arc::default(),
             })
@@ -1652,7 +1673,19 @@ impl Table {
         let len = u16::try_from(len).unwrap_or(u16::MAX);
         let made = self.made;
         let version =
-            Version { tid, made, xmin, cmin, xmax: 0, cmax: 0, aborted: 0, next: 0, len, values };
+            Version {
+                tid,
+                made,
+                xmin,
+                cmin,
+                xmax: 0,
+                cmax: 0,
+                aborted: 0,
+                next: 0,
+                key_kept: false,
+                len,
+                values,
+            };
         if self.versions.last().is_none_or(|last| last.tid < tid) {
             self.versions.push(version);
         } else {
@@ -1901,6 +1934,8 @@ struct Version {
     aborted: u32,
     /// `t_ctid`: the ID of the version that an `UPDATE` made from this version, or 0.
     next: u64,
+    /// The update that made [`Version::next`] kept the columns of each unique index, so `HEAP_KEYS_UPDATED` is not set and a `FOR KEY SHARE` goes on over it.
+    key_kept: bool,
     /// `MAXALIGN(t_len)`: the space of the version in its page.
     len: u16,
     /// The values of the columns. A point read takes a count of the `Arc` and reads the values after it lets the lock of the heap go, with no copy of them.
@@ -2232,17 +2267,32 @@ impl Heap {
         self.ssi().read(view.sxact, (view.database, relation), &concurrent)
     }
 
-    /// `CheckForSerializableConflictIn` for a write of the table `relation` with the view.
+    /// `CheckTableForSerializableConflictIn` for a write of the whole table `relation` with the view, as `TRUNCATE` does.
     ///
     /// # Errors
     ///
     /// `40001` when the write makes a dangerous structure where the transaction of the view must fail.
     pub(crate) fn serializable_write(&self, relation: u32, view: &View) -> Result<()> {
-        if view.sxact == 0 {
-            return Ok(());
-        }
-        let xmin = view.snapshot.xmin();
-        self.ssi().write(view.sxact, view.xid, (view.database, relation), xmin)
+        let mut ssi = self.serializable_lock(view);
+        conflict_in(ssi.as_deref_mut(), view, relation, None)
+    }
+
+    /// The lock of the serializable transactions for a read or a write of the transaction of the view in `SERIALIZABLE`. A write holds it from its check of the `SIREAD` locks until the write is in the heap, as `heap_update` holds the lock of the buffer, and an index scan holds it from its read until it has its `SIREAD` locks, so that the read either finds the write or the write finds the lock of the read.
+    fn serializable_lock(&self, view: &View) -> Option<MutexGuard<'_, ssi::Ssi>> {
+        (view.sxact != 0).then(|| self.ssi())
+    }
+
+    /// `PredicateLockTID` and `HeapCheckForSerializableConflictOut` for the versions `examined` that an index scan of the table `relation` with the view examined, with the lock of [`Heap::serializable_lock`].
+    fn serializable_read_versions(
+        ssi: Option<&mut ssi::Ssi>,
+        view: &View,
+        relation: u32,
+        examined: &[ssi::Examined],
+    ) -> Result<()> {
+        let Some(ssi) = ssi else { return Ok(()) };
+        let snapshot = &view.snapshot;
+        let concurrent = |xid: u32| !committed_before(xid, snapshot);
+        ssi.read_versions(view.sxact, ((view.database, relation), view.xid), examined, &concurrent)
     }
 
     /// `PreCommit_CheckForSerializationFailure` for the transaction of the record `sxact`.
@@ -2437,7 +2487,7 @@ impl Heap {
         used: Option<&[bool]>,
         key_columns: (&[usize], &[u32], bool),
         key: &[Value],
-    ) -> Option<Vec<Vec<Value>>> {
+    ) -> Result<Option<Vec<Vec<Value>>>> {
         let wanted = used_columns(used);
         self.key_versions(relation, view, key_columns, key, |version, combos| {
             version_row(version, &version.values, combos, wanted.as_deref(), false)
@@ -2451,21 +2501,57 @@ impl Heap {
         view: &View,
         key_columns: (&[usize], &[u32], bool),
         key: &[Value],
-    ) -> Option<Vec<rupg_func::SharedRow>> {
+    ) -> Result<Option<Vec<rupg_func::SharedRow>>> {
         self.key_versions(relation, view, key_columns, key, |version, _| {
             (Arc::clone(&version.values), version.tid)
         })
     }
 
-    /// The result of `each` for each version that [`Heap::key_rows`] reads, with the combo command IDs of the table.
+    /// The result of `each` for each version that [`Heap::key_rows`] reads, with the combo command IDs of the table. In `SERIALIZABLE`, the read takes the `SIREAD` locks of an index scan of the key.
+    ///
+    /// # Errors
+    ///
+    /// `40001` when the read makes a dangerous structure where the transaction of the view must fail.
     fn key_versions<T>(
+        &self,
+        relation: u32,
+        view: &View,
+        key_columns: (&[usize], &[u32], bool),
+        key: &[Value],
+        mut each: impl FnMut(&Version, &HashMap<u64, u32>) -> T,
+    ) -> Result<Option<Vec<T>>> {
+        let mut ssi = self.serializable_lock(view);
+        let mut examined = Vec::new();
+        let examine = ssi.is_some().then_some(&mut examined);
+        let found = self.key_versions_in(relation, view, key_columns, key, examine, &mut each);
+        if found.is_some() {
+            Self::serializable_read_versions(ssi.as_deref_mut(), view, relation, &examined)?;
+        }
+        Ok(found)
+    }
+
+    /// [`Heap::key_versions`] with no `SIREAD` locks. With `examined`, each version with the key that the read looks at goes in it.
+    fn key_versions_in<T>(
         &self,
         relation: u32,
         view: &View,
         (columns, types, nulls_not_distinct): (&[usize], &[u32], bool),
         key: &[Value],
-        mut each: impl FnMut(&Version, &HashMap<u64, u32>) -> T,
+        mut examined: Option<&mut Vec<ssi::Examined>>,
+        each: &mut impl FnMut(&Version, &HashMap<u64, u32>) -> T,
     ) -> Option<Vec<T>> {
+        let mut examine = |version: &Version| {
+            let visible = visible(version, view);
+            if let Some(examined) = examined.as_deref_mut() {
+                examined.push(ssi::Examined {
+                    tid: version.tid,
+                    xmin: version.xmin,
+                    xmax: version.xmax,
+                    visible,
+                });
+            }
+            visible
+        };
         // A table with its versions in memory and a map of the key needs no change for a key with at most one version, so the read lock is sufficient. A key with more versions prunes its list under the write lock.
         {
             let state = self.state_read();
@@ -2490,7 +2576,7 @@ impl Heap {
                         found
                             .iter()
                             .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
-                            .filter(|version| visible(version, view))
+                            .filter(|version| examine(version))
                             .map(|version| each(version, &table.combos))
                             .collect(),
                     );
@@ -2550,7 +2636,7 @@ impl Heap {
         Some(
             tids.iter()
                 .filter_map(|&tid| table.find(tid).map(|at| &table.versions[at]))
-                .filter(|version| visible(version, view))
+                .filter(|version| examine(version))
                 .map(|version| each(version, &table.combos))
                 .collect(),
         )
@@ -2642,7 +2728,14 @@ impl Heap {
         kept: &[u64],
         ids: &mut Vec<u64>,
     ) -> Result<Changed> {
-        self.serializable_write(relation, view)?;
+        // `heap_insert` checks the lock of the table, and the insert into each index the lock of its page.
+        let mut ssi = self.serializable_lock(view);
+        conflict_in(
+            ssi.as_deref_mut(),
+            view,
+            relation,
+            Some(&inserted((view.database, relation))),
+        )?;
         ids.clear();
         let count = rows.len() as u64;
         let made = (view.xid, view.command);
@@ -2728,7 +2821,13 @@ impl Heap {
         arbiters: &[usize],
         kept: Option<u64>,
     ) -> Result<Speculative> {
-        self.serializable_write(relation, view)?;
+        let mut ssi = self.serializable_lock(view);
+        conflict_in(
+            ssi.as_deref_mut(),
+            view,
+            relation,
+            Some(&inserted((view.database, relation))),
+        )?;
         let keys = fresh(unique, &values, derive)?;
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
@@ -2763,12 +2862,26 @@ impl Heap {
                     return Ok(Speculative::Wait { holder, tid: other });
                 }
                 let own = version.xmin == view.xid;
+                let in_snapshot = visible(version, view);
+                // `ExecCheckTIDVisible` and `ExecOnConflictUpdate` fetch the version, which takes its `SIREAD` lock. A version that the snapshot does not see fails first with a concurrent update.
+                if let Some(ssi) = ssi.as_deref_mut().filter(|_| in_snapshot || own) {
+                    let examined = [ssi::Examined {
+                        tid: other,
+                        xmin: version.xmin,
+                        xmax: version.xmax,
+                        visible: in_snapshot,
+                    }];
+                    let snapshot = &view.snapshot;
+                    let concurrent = |xid: u32| !committed_before(xid, snapshot);
+                    let table = ((view.database, relation), view.xid);
+                    ssi.fetched(view.sxact, table, &examined, &concurrent)?;
+                }
                 return Ok(Speculative::Conflict {
                     tid: other,
                     values: version.values.to_vec(),
                     own,
                     command: own && version.cmin == view.command,
-                    visible: visible(version, view),
+                    visible: in_snapshot,
                 });
             }
         }
@@ -2807,6 +2920,41 @@ impl Heap {
         let Some(table) = tables.get_mut(&key) else { return Ok(RowLocked::Done) };
         let Some(at) = table.find(tid) else { return Ok(RowLocked::Done) };
         let version = &table.versions[at];
+        // `heap_lock_tuple`: `FOR KEY SHARE` goes on over an update that kept the key, and `heap_lock_updated_tuple` locks the versions of the update chain too, so that a delete or an update of the key of a later version waits for the lock.
+        if strength == KEY_SHARE && version.key_kept && version.next != 0 && version.xmax != xid {
+            let mut chain = vec![tid];
+            let mut version = version;
+            while version.xmax != 0 && version.xmax != xid {
+                if version.key_kept && version.next != 0 {
+                    let Some(next) = table.find(version.next) else { break };
+                    chain.push(version.next);
+                    version = &table.versions[next];
+                    continue;
+                }
+                // A delete or an update of the key conflicts with the lock.
+                return match version.xmax {
+                    xmax if running.contains(&xmax) => Ok(RowLocked::Wait(xmax)),
+                    _ if view.serializable => Err(Error::new(
+                        SqlState::T_R_SERIALIZATION_FAILURE,
+                        "could not serialize access due to concurrent update",
+                    )),
+                    _ => Ok(RowLocked::Again),
+                };
+            }
+            for &tid in &chain {
+                if let Some(holder) = row_holder((&*row_locks, &**running), key, tid, (xid, strength)) {
+                    return Ok(RowLocked::Wait(holder));
+                }
+            }
+            for tid in chain {
+                let lockers = row_locks.entry((key.0, key.1, tid)).or_default();
+                match lockers.iter_mut().find(|(locker, _)| *locker == xid) {
+                    Some((_, held)) => *held = (*held).max(strength),
+                    None => lockers.push((xid, strength)),
+                }
+            }
+            return Ok(RowLocked::Done);
+        }
         match version.xmax {
             0 => {}
             xmax if xmax == xid => return Ok(RowLocked::Gone),
@@ -2845,7 +2993,7 @@ impl Heap {
         kept: &[u64],
         applied: &mut Vec<usize>,
     ) -> Result<Changed> {
-        self.serializable_write(relation, view)?;
+        let mut ssi = self.serializable_lock(view);
         applied.clear();
         let mut keys = Vec::with_capacity(changes.len());
         for (_, values) in &changes {
@@ -2860,8 +3008,9 @@ impl Heap {
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
-        let mut found: Vec<(u64, Option<Vec<Value>>, Fresh)> = Vec::with_capacity(changes.len());
+        let mut found: Vec<(u64, Option<Vec<Value>>, Fresh, bool)> = Vec::with_capacity(changes.len());
         let mut indexes = Vec::with_capacity(changes.len());
+        let mut targets = Vec::new();
         for (index, ((tid, values), keys)) in changes.into_iter().zip(keys).enumerate() {
             let Ok(at) = table.versions.binary_search_by_key(&tid, |version| version.tid) else {
                 continue;
@@ -2887,11 +3036,10 @@ impl Heap {
                 _ => return Ok(Changed::Again),
             }
             // `heap_update` and `heap_delete` wait for the transactions that lock the row with a strength that conflicts: a `DELETE` and an `UPDATE` of a key column take `UPDATE`, and the other updates take `NO KEY UPDATE`.
+            let key_kept =
+                values.as_ref().is_some_and(|new| !changes_key(unique, &version.values, new));
             if !row_locks.is_empty() {
-                let strength = match &values {
-                    Some(new) if !changes_key(unique, &version.values, new) => NO_KEY_UPDATE,
-                    _ => UPDATE,
-                };
+                let strength = if key_kept { NO_KEY_UPDATE } else { UPDATE };
                 let locks = (&*row_locks, &**running);
                 let key = (view.database, relation);
                 if let Some(holder) = row_holder(locks, key, tid, (view.xid, strength)) {
@@ -2901,8 +3049,23 @@ impl Heap {
             if found.iter().any(|(old, ..)| *old == tid) {
                 continue;
             }
-            found.push((tid, values, keys));
+            if ssi.is_some() {
+                // `heap_update` and `heap_delete` check the locks of the version, its page and the table, and an update that is not HOT inserts into each index.
+                let table = (view.database, relation);
+                targets
+                    .extend([ssi::Target::Tuple(table, tid), ssi::Target::Page(table, tid >> 16)]);
+                if values.is_some() && !key_kept {
+                    targets.push(ssi::Target::Index(table));
+                }
+            }
+            found.push((tid, values, keys, key_kept));
             indexes.push(index);
+        }
+        if ssi.is_some() {
+            targets.push(ssi::Target::Relation((view.database, relation)));
+            targets.sort_unstable();
+            targets.dedup();
+            conflict_in(ssi.as_deref_mut(), view, relation, Some(&targets))?;
         }
         let count = found.len() as u64;
         let mut kept = kept.iter().copied();
@@ -2910,7 +3073,7 @@ impl Heap {
         let mut deleted = Vec::with_capacity(found.len());
         let mut made_ids = Vec::with_capacity(found.len());
         let mut partial = Vec::new();
-        for (old, values, keys) in found {
+        for (old, values, keys, key_kept) in found {
             let made = (view.xid, view.command);
             table.pages.touch(page_of(old));
             let next = values.map_or(0, |v| {
@@ -2932,6 +3095,7 @@ impl Heap {
                 version.xmax = view.xid;
                 version.cmax = view.command;
                 version.next = next;
+                version.key_kept = key_kept;
                 // `HeapTupleHeaderAdjustCmax`: a version that the transaction inserted keeps a combo command ID of its `cmin` and `cmax` in `t_cid`.
                 if version.xmin == view.xid {
                     let pairs = combos.entry(view.xid).or_default();
@@ -3737,18 +3901,39 @@ fn visible(version: &Version, view: &View) -> bool {
     }
 }
 
-rupg_common::persist_struct!(Version {
-    tid,
-    made,
-    xmin,
-    cmin,
-    xmax,
-    cmax,
-    aborted,
-    next,
-    len,
-    values
-});
+/// The bytes of a version keep no [`Version::key_kept`]: after a restart no update is in progress, and an update that committed before it is in each snapshot.
+impl Persist for Version {
+    fn put(&self, out: &mut Vec<u8>) {
+        let Self { tid, made, xmin, cmin, xmax, cmax, aborted, next, key_kept: _, len, values } =
+            self;
+        tid.put(out);
+        made.put(out);
+        xmin.put(out);
+        cmin.put(out);
+        xmax.put(out);
+        cmax.put(out);
+        aborted.put(out);
+        next.put(out);
+        len.put(out);
+        values.put(out);
+    }
+
+    fn take(input: &mut Reader<'_>) -> Result<Self> {
+        Ok(Self {
+            tid: Persist::take(input)?,
+            made: Persist::take(input)?,
+            xmin: Persist::take(input)?,
+            cmin: Persist::take(input)?,
+            xmax: Persist::take(input)?,
+            cmax: Persist::take(input)?,
+            aborted: Persist::take(input)?,
+            next: Persist::take(input)?,
+            key_kept: false,
+            len: Persist::take(input)?,
+            values: Persist::take(input)?,
+        })
+    }
+}
 
 impl Heap {
     /// The bytes of the rows of all the tables, as a restart after a crash finds them: a transaction in progress aborts, so its new versions go and its deletes do not count. The maps of the unique keys and the sizes of the indexes are not kept, as the heap makes them again from the versions.
@@ -4147,6 +4332,7 @@ mod tests {
                 cmax: 0,
                 aborted: 0,
                 next: 0,
+                key_kept: false,
                 len: 32,
                 values: Arc::default(),
             })
@@ -4579,7 +4765,7 @@ mod tests {
         let heap = Heap::default();
         let key = (&[0][..], &[oid::INT4][..], false);
         let read = |view: &View| {
-            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap();
+            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap().unwrap();
             assert_eq!(rows.len(), 1);
             let Some(&Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
             (rows[0][1].clone(), tid.cast_unsigned())
@@ -4623,7 +4809,7 @@ mod tests {
         let heap = Heap::default();
         let key = (&[0][..], &[oid::INT4][..], false);
         let read = |view: &View| {
-            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap();
+            let rows = heap.key_rows(7, view, None, key, &[Value::Int4(1)]).unwrap().unwrap();
             assert_eq!(rows.len(), 1);
             let Some(&Value::Int8(tid)) = rows[0].last() else { panic!("a row with no ID") };
             (rows[0][1].clone(), tid.cast_unsigned())
@@ -4782,5 +4968,64 @@ mod tests {
         assert_eq!(error.message(), "could not serialize access due to concurrent delete");
         assert_eq!(tid_text(1), "(0,1)");
         assert_eq!(tid_text(1 << 16 | 1), "(1,1)");
+    }
+
+    #[test]
+    fn key_share_goes_over_an_update_that_kept_the_key() {
+        let heap = Heap::default();
+        let key = Unique {
+            oid: 0,
+            name: "t_pkey".to_string(),
+            columns: vec![0],
+            types: vec![oid::INT4],
+            shown: "a".to_string(),
+            nulls_not_distinct: false,
+            derived: None,
+            deferrable: None,
+        };
+        let unique = std::slice::from_ref(&key);
+        let row = |a: i32, b: i32| vec![Value::Int4(a), Value::Int4(b)];
+        let first = heap.begin(1);
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![row(1, 1)], (unique, &none), &[])
+            .unwrap();
+        heap.commit(first);
+        let old = heap.snapshot();
+        let tid = first_tid(&heap, &view(old.clone(), 0, 0));
+        // `b` updates the other column, then updates the key of the new version.
+        let b = heap.begin(2);
+        let update = |tid, values, command| {
+            heap.change(
+                7,
+                &view(heap.snapshot(), b, command),
+                vec![(tid, Some(values))],
+                (unique, &none),
+                &[],
+                &mut Vec::new(),
+            )
+            .unwrap()
+        };
+        assert_eq!(update(tid, row(1, 2), 0), Changed::Done(1));
+        let a = heap.begin(3);
+        let lock = |view: &View| heap.lock_row((7, tid), view, (a, KEY_SHARE)).unwrap();
+        assert_eq!(lock(&view(old.clone(), a, 0)), RowLocked::Done);
+        // `FOR SHARE` waits for the update.
+        assert_eq!(
+            heap.lock_row((7, tid), &view(old.clone(), a, 0), (a, 2)).unwrap(),
+            RowLocked::Wait(b)
+        );
+        // The lock covers the new version too, so an update of its key waits.
+        let next = first_tid(&heap, &view(heap.snapshot(), b, 1));
+        assert_eq!(update(next, row(2, 2), 1), Changed::Wait { holder: a, tid: next });
+        heap.abort(a);
+        assert_eq!(update(next, row(2, 2), 1), Changed::Done(1));
+        // The update of the key of the later version conflicts with a new lock.
+        let c = heap.begin(4);
+        let lock = |view: &View| heap.lock_row((7, tid), view, (c, KEY_SHARE)).unwrap();
+        assert_eq!(lock(&view(old.clone(), c, 0)), RowLocked::Wait(b));
+        heap.commit(b);
+        assert_eq!(lock(&view(old.clone(), c, 0)), RowLocked::Again);
+        let serializable = View { serializable: true, ..view(old, c, 0) };
+        let error = heap.lock_row((7, tid), &serializable, (c, KEY_SHARE)).unwrap_err();
+        assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
     }
 }

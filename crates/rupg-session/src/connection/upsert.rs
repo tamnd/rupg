@@ -12,7 +12,7 @@ use rupg_types::Value;
 use super::route::{self, Routing};
 use super::trigger::{RowPair, Triggers};
 use super::{Connection, put_tids};
-use crate::heap::{Changed, Speculative, View, tid_text};
+use crate::heap::{Changed, RowLocked, Speculative, UPDATE, View, tid_text};
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
 #[derive(Debug, Default)]
@@ -397,6 +397,23 @@ impl Connection {
         done: &mut Upserted,
     ) -> Result<bool, Error> {
         let Target { tid, old, excluded } = target;
+        // `ExecOnConflictUpdate` locks the row with `LockTupleExclusive` before it tests the condition of `DO UPDATE ... WHERE`, so the row stays locked also when the condition is false.
+        if info.on_conflict.as_ref().is_some_and(|c| c.select.is_none()) {
+            let heap = self.store.heap();
+            match heap.lock_row((info.table, tid), view, (view.xid, UPDATE))? {
+                RowLocked::Done => {}
+                RowLocked::Gone | RowLocked::Again => return Ok(false),
+                RowLocked::Wait(holder) => {
+                    let context = format!(
+                        "while locking tuple {} in relation \"{}\"",
+                        tid_text(tid),
+                        info.name
+                    );
+                    self.reader().wait_xact(view.xid, holder, &context)?;
+                    return Ok(false);
+                }
+            }
+        }
         let mut existing = old.clone();
         existing.push(Value::Int8(tid.cast_signed()));
         let new = {
