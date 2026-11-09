@@ -672,7 +672,7 @@ fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut 
     table.clear();
 }
 
-/// Puts into `sel` the rows of the vector `vector` of the segment `segment` that pass the filters of `plan`, and the columns that the filters test into `decoded`. False when no row passes.
+/// Puts into `sel` the rows of the vector `vector` of the segment `segment` that pass the filters of `plan`, into `tests` the filters that read decoded values, and the columns of these filters into `decoded`. False when no row passes.
 pub(super) fn select<'p>(
     stored: &[Arc<Stored>],
     plan: &'p Plan,
@@ -699,15 +699,43 @@ pub(super) fn select<'p>(
             Verdict::Some => tests.push(filter),
         }
     }
+    // spec/09 section 9.6: a test of a vector of one value, of runs or of one value with exceptions reads the encoded values. Its column is then not decoded and the test leaves `tests`, so that the scan decodes the column when it reads it. A later test of a column that an earlier test decoded reads the decoded values. Until a test selects rows, `sel` is empty and stands for every row, so that the first test writes only the rows that pass.
     sel.clear();
-    sel.extend(0..count);
-    for &&(place, ref test) in tests.iter() {
-        let d = decode(&stored[place], segment, vector)?;
-        keep(test, &d, sel);
-        decoded[place] = Some(d);
+    let mut every = true;
+    let mut t = 0;
+    while t < tests.len() {
+        let &(place, ref test) = tests[t];
+        let decoded_here = tests[..t].iter().any(|earlier| earlier.0 == place);
+        if !decoded_here
+            && stored[place].segments[segment].keep(
+                vector,
+                |x| passes(test, false, x),
+                sel,
+                every,
+            )?
+        {
+            every = false;
+            decoded[place] = None;
+            tests.remove(t);
+        } else {
+            if every {
+                sel.extend(0..count);
+                every = false;
+            }
+            if !decoded_here {
+                decoded[place] = Some(decode(&stored[place], segment, vector)?);
+            }
+            if let Some(d) = &decoded[place] {
+                keep(test, d, sel);
+            }
+            t += 1;
+        }
         if sel.is_empty() {
             return Ok(false);
         }
+    }
+    if every {
+        sel.extend(0..count);
     }
     Ok(true)
 }

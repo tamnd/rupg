@@ -367,6 +367,135 @@ pub fn fold(bytes: &[u8], mut emit: impl FnMut(i64, u64) -> Result<()>) -> Resul
     Ok(count)
 }
 
+/// Keeps the positions of `sel` whose values in the chunk `bytes` pass `test`, from the encoded form and with no decode of the rows (spec/09 section 9.6). With `every`, `sel` is empty and stands for every position of the chunk, and the positions that pass are written into it, so that the work follows the runs and the exceptions and not the rows. A chunk of one value tests the value once. A run length chunk tests each run once. A chunk of one dominant value with exceptions tests the dominant value once and each exception once. `sel` holds positions of the chunk in increasing order. For the other kinds, and for a sparse chunk whose exceptions are not in increasing order, it leaves `sel` as it was and gives false, and the caller decodes the chunk.
+///
+/// # Errors
+///
+/// As [`decode`], or if a position of `sel` is outside the chunk.
+pub fn keep(
+    bytes: &[u8],
+    test: impl Fn(i64) -> bool,
+    sel: &mut Vec<usize>,
+    every: bool,
+) -> Result<bool> {
+    let mut reader = Reader::new(bytes);
+    let kind = Kind::from_tag(reader.u8()?)?;
+    let count = reader.u32()? as usize;
+    if sel.last().is_some_and(|&last| last >= count) {
+        return Err(Error::internal("a selected position is outside the chunk"));
+    }
+    match kind {
+        Kind::Constant => {
+            if !test(reader.i64()?) {
+                sel.clear();
+            } else if every {
+                sel.extend(0..count);
+            }
+        }
+        Kind::Rle => {
+            let values = decode_chunk(&mut reader)?;
+            let lengths = decode_chunk(&mut reader)?;
+            if values.len() != lengths.len() {
+                return Err(Error::internal("an RLE chunk has more runs than run lengths"));
+            }
+            // The end of each run, and whether its value passes.
+            let mut runs = Vec::with_capacity(values.len());
+            let mut rows = 0_usize;
+            for (&value, &length) in values.iter().zip(&lengths) {
+                let length = usize::try_from(length)
+                    .map_err(|_| Error::internal("a negative RLE run length"))?;
+                rows = rows
+                    .checked_add(length)
+                    .filter(|&rows| rows <= count)
+                    .ok_or_else(|| Error::internal("an RLE run ends past its chunk"))?;
+                runs.push((rows, test(value)));
+            }
+            check_count(rows, count)?;
+            if runs.iter().all(|run| !run.1) {
+                sel.clear();
+            } else if every {
+                // The passing runs are the selection, and the work is a run and not a row.
+                let mut start = 0;
+                for &(end, passes) in &runs {
+                    if passes {
+                        sel.extend(start..end);
+                    }
+                    start = end;
+                }
+            } else if runs.iter().any(|run| !run.1) {
+                let mut run = 0;
+                sel.retain(|&i| {
+                    while runs[run].0 <= i {
+                        run += 1;
+                    }
+                    runs[run].1
+                });
+            }
+        }
+        Kind::Sparse => {
+            let dominant = reader.i64()?;
+            let exception_count = reader.u32()? as usize;
+            let positions = decode_chunk(&mut reader)?;
+            let values = decode_chunk(&mut reader)?;
+            if positions.len() != exception_count || values.len() != exception_count {
+                return Err(Error::internal("a sparse chunk disagrees about its exception count"));
+            }
+            let mut previous = None;
+            for &position in &positions {
+                let position = usize::try_from(position)
+                    .ok()
+                    .filter(|&position| position < count)
+                    .ok_or_else(|| Error::internal("a sparse exception is outside the chunk"))?;
+                if previous.is_some_and(|last| position <= last) {
+                    return Ok(false);
+                }
+                previous = Some(position);
+            }
+            // A position passes by its exception when it has one, and by the dominant value when it has none. Both lists are in increasing order, so one walk merges them.
+            let others = test(dominant);
+            if every {
+                // The selection is made from the exceptions, with no test of each row.
+                let mut start = 0;
+                for (&position, &value) in positions.iter().zip(&values) {
+                    let position = position as usize;
+                    if others {
+                        sel.extend(start..position);
+                    }
+                    if test(value) {
+                        sel.push(position);
+                    }
+                    start = position + 1;
+                }
+                if others {
+                    sel.extend(start..count);
+                }
+                return finish(&reader);
+            }
+            let mut next = positions.iter().zip(&values).peekable();
+            sel.retain(|&i| {
+                while next.next_if(|&(&position, _)| (position as usize) < i).is_some() {}
+                match next.peek() {
+                    Some(&(&position, &value)) if position as usize == i => test(value),
+                    _ => others,
+                }
+            });
+        }
+        _ => return Ok(false),
+    }
+    finish(&reader)
+}
+
+/// True when the test of [`keep`] read all the bytes of its chunk.
+fn finish(reader: &Reader<'_>) -> Result<bool> {
+    if reader.remaining() != 0 {
+        return Err(Error::internal(format!(
+            "{} bytes left over after testing a chunk",
+            reader.remaining()
+        )));
+    }
+    Ok(true)
+}
+
 /// How few of a packed unit's values a selected decode has to want before it finds each one on its
 /// own rather than unpacking the unit, as one in this many.
 ///
@@ -1743,6 +1872,52 @@ fn put_i64(out: &mut Vec<u8>, value: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_keeps_the_positions_that_the_decoded_values_keep() {
+        let mut random = Random::new();
+        let shapes: Vec<Vec<i64>> = vec![
+            vec![7; 1000],
+            (0..1000).map(|i| [0, 0, 0, 2, 13][(i / 37) % 5]).collect(),
+            (0..1000).map(|i| if i % 97 == 5 { (i % 7) as i64 } else { 0 }).collect(),
+            (0..1000).map(|_| (random.next() % 4) as i64).collect(),
+        ];
+        let tests: [&dyn Fn(i64) -> bool; 4] = [&|x| x != 0, &|x| x == 0, &|x| x > 1, &|x| x == 7];
+        let mut tested = Vec::new();
+        for values in &shapes {
+            for kind in [Kind::Constant, Kind::Rle, Kind::Sparse, Kind::Packed] {
+                let Some(bytes) = encode_only(kind, values).unwrap() else { continue };
+                tested.push(kind);
+                let every: Vec<usize> = (0..values.len()).collect();
+                let some: Vec<usize> = (0..values.len()).filter(|i| i % 3 != 1).collect();
+                for (sel, all) in [
+                    (every.clone(), true),
+                    (every, false),
+                    (some, false),
+                    (vec![0, 5, 999], false),
+                    (vec![], false),
+                ] {
+                    for test in tests {
+                        let want: Vec<usize> =
+                            sel.iter().copied().filter(|&i| test(values[i])).collect();
+                        let mut got = if all { Vec::new() } else { sel.clone() };
+                        let before = got.clone();
+                        if keep(&bytes, test, &mut got, all).unwrap() {
+                            assert_eq!(got, want, "{kind:?} {all} {}", describe(&bytes).unwrap());
+                        } else {
+                            assert_eq!(got, before);
+                            assert_eq!(kind, Kind::Packed);
+                        }
+                    }
+                }
+            }
+        }
+        for kind in [Kind::Constant, Kind::Rle, Kind::Sparse, Kind::Packed] {
+            assert!(tested.contains(&kind), "{kind:?}");
+        }
+        let bytes = encode_only(Kind::Constant, &[1; 10]).unwrap().unwrap();
+        assert!(keep(&bytes, |_| true, &mut vec![10], false).is_err());
+    }
 
     fn round_trip(values: &[i64]) -> Vec<u8> {
         let bytes = encode(values).unwrap();
