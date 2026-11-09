@@ -712,7 +712,13 @@ impl Connection {
 
     /// What a statement reads of the session, with the catalog `catalog`.
     fn reader_on(&self, catalog: Arc<Catalog>) -> Reader<'_> {
-        self.reader_without_view(catalog).with_view(self.view())
+        let view = self.view();
+        let omitted = if catalog.has_pending_detach() {
+            catalog.omit_detached(|xid| view.sees(xid)).map(Arc::new)
+        } else {
+            None
+        };
+        self.reader_without_view(omitted.unwrap_or(catalog)).with_view(view)
     }
 
     /// A reader that does not see the rows of the tables, for the expressions of an index: they are `IMMUTABLE` and run while the heap is locked, so they must not take a snapshot.
@@ -1735,7 +1741,72 @@ impl Connection {
                 return Err(self.prevent_in_call(statement));
             }
             self.prevent_block(statement)?;
+            if matches!(node, Node::AlterTableStmt(_)) {
+                return self.detach_concurrently(node, text, notices, role);
+            }
         }
+        self.define_allowed(node, text, notices, role, call)
+    }
+
+    /// `ATExecDetachPartition` with `CONCURRENTLY`: the first transaction marks the partition with a pending detach and commits, with locks of the session on the parent and the partition. The second transaction waits for the transactions that lock the parent, as `WaitForLockersMultiple` waits, and then ends the detach as `DETACH PARTITION ... FINALIZE` ends it. After a cancel of the wait the partition keeps its pending detach.
+    fn detach_concurrently(
+        &self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+    ) -> Result<Done, Error> {
+        let done = self.define_allowed(node, text, notices, role, false)?;
+        let marked =
+            self.transaction_id(false).and_then(|xid| self.catalog().detach_pending_by(xid));
+        let (Some((child, parent)), Node::AlterTableStmt(stmt)) = (marked, node) else {
+            return Ok(done);
+        };
+        // `ShareUpdateExclusiveLock` and `AccessExclusiveLock`.
+        const SHARE_UPDATE_EXCLUSIVE: u8 = 4;
+        const ACCESS_EXCLUSIVE: u8 = 8;
+        let reader = self.reader();
+        let locked = [parent, child];
+        let mut result = locked.iter().try_for_each(|&relation| {
+            reader.lock_relation_session(relation, SHARE_UPDATE_EXCLUSIVE)
+        });
+        drop(reader);
+        if result.is_ok() {
+            result = self.end_in_call(true, false);
+        }
+        if result.is_ok() {
+            result = self.reader().wait_lockers(&[parent], ACCESS_EXCLUSIVE);
+        }
+        let result = result.and_then(|()| {
+            let mut finalize = stmt.clone();
+            for cmd in finalize.cmds.iter_mut().flatten() {
+                if let Node::AlterTableCmd(cmd) = cmd
+                    && cmd.subtype == AlterTableType::AT_DetachPartition
+                {
+                    cmd.subtype = AlterTableType::AT_DetachPartitionFinalize;
+                    if let Some(Node::PartitionCmd(part)) = cmd.def.as_mut() {
+                        part.concurrent = false;
+                    }
+                }
+            }
+            self.define_allowed(&Node::AlterTableStmt(finalize), text, notices, role, false)
+        });
+        let reader = self.reader();
+        for relation in locked {
+            reader.unlock_relation_session(relation, SHARE_UPDATE_EXCLUSIVE);
+        }
+        result
+    }
+
+    /// The part of [`Connection::define_with`] after the checks of `PreventInTransactionBlock`.
+    fn define_allowed(
+        &self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+        role: u32,
+        call: bool,
+    ) -> Result<Done, Error> {
         if matches!(node, Node::TruncateStmt(_))
             && self.settings.borrow().get_of(guc::known!("transaction_read_only")).as_deref()
                 == Some("on")
@@ -1778,7 +1849,14 @@ impl Connection {
             return self.rename_tablespace(stmt, role);
         }
         let mut work = Catalog::clone(&self.catalog());
-        let mut defined = rupg_analyze::define(node, text, &self.reader(), &mut work, role);
+        let reader = self.reader();
+        if work.has_pending_detach() {
+            let view = reader.view();
+            work.omit_detached_here(|xid| view.is_none_or(|view| view.sees(xid)));
+        }
+        let mut defined = rupg_analyze::define(node, text, &reader, &mut work, role);
+        drop(reader);
+        work.keep_detached();
         if let Some(top) = &defined.top_level
             && defined.result.is_ok()
         {

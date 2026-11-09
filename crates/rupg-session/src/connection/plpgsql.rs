@@ -553,7 +553,7 @@ impl Connection {
     /// # Errors
     ///
     /// `55000` in a loop over a query that writes, and the errors of the deferred triggers at the commit.
-    fn end_in_call(&self, commit: bool, chain: bool) -> rupg_common::Result<()> {
+    pub(super) fn end_in_call(&self, commit: bool, chain: bool) -> rupg_common::Result<()> {
         let kept = chain.then(|| self.settings.borrow().characteristics());
         let result = if self.calls.pinned.borrow().iter().any(|(_, read_only)| !read_only) {
             Err(Error::new(

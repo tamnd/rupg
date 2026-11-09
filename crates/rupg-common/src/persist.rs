@@ -346,7 +346,7 @@ tuple!(A, B);
 tuple!(A, B, C);
 tuple!(A, B, C, D);
 
-/// Implements [`Persist`] for a struct with named fields. Each field must be named once, in the order of the bytes.
+/// Implements [`Persist`] for a struct with named fields. Each field must be named once, in the order of the bytes. The fields after `skip` are not in the bytes, and a read gives them their default.
 ///
 /// ```
 /// # use rupg_common::persist_struct;
@@ -355,6 +355,19 @@ tuple!(A, B, C, D);
 /// ```
 #[macro_export]
 macro_rules! persist_struct {
+    ($ty:ty { $($field:ident),* $(,)? } skip { $($skip:ident),* $(,)? }) => {
+        impl $crate::persist::Persist for $ty {
+            fn put(&self, out: &mut Vec<u8>) {
+                $($crate::persist::Persist::put(&self.$field, out);)*
+            }
+            fn take(input: &mut $crate::persist::Reader<'_>) -> $crate::Result<Self> {
+                Ok(Self {
+                    $($field: $crate::persist::Persist::take(input)?,)*
+                    $($skip: Default::default(),)*
+                })
+            }
+        }
+    };
     ($ty:ty { $($field:ident),* $(,)? }) => {
         impl $crate::persist::Persist for $ty {
             fn put(&self, out: &mut Vec<u8>) {

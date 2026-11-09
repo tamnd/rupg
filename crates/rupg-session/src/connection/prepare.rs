@@ -63,6 +63,7 @@ impl Connection {
         let types = rupg_analyze::param_types(&stmt.argtypes, &reader)?;
         let plan = query::plan(node, &reader, &Params { types, variable: true });
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+        let plan = plan.and_then(|plan| plan.lock_parsed(&reader).map(|()| plan));
         drop(reader);
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));

@@ -686,6 +686,25 @@ impl<'a> Reader<'a> {
         self.acquire(tag, mode, false, wait, RELATION)
     }
 
+    /// `LockRelationIdForSession`: the session holds the lock of the relation `relation` in `mode` after the end of the transaction, until [`Reader::unlock_relation_session`].
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    pub(crate) fn lock_relation_session(&self, relation: u32, mode: Mode) -> Result<()> {
+        let (_, store) = self.server()?;
+        let tag = Tag::Relation { database: database_oid(store, self.database), relation };
+        self.acquire(tag, mode, true, true, RELATION).map(drop)
+    }
+
+    /// `UnlockRelationIdForSession`.
+    pub(crate) fn unlock_relation_session(&self, relation: u32, mode: Mode) {
+        if let Ok((_, store)) = self.server() {
+            let tag = Tag::Relation { database: database_oid(store, self.database), relation };
+            store.locks().release(tag, self.pid, mode);
+        }
+    }
+
     /// `LockRelationOid` of the relations `relations` in `mode` until the end of the transaction. A weak mode takes the fast path of the session when it can. A session with no server takes no locks.
     ///
     /// # Errors
@@ -838,7 +857,7 @@ impl<'a> Reader<'a> {
     /// # Errors
     ///
     /// `57014` for a cancel and `55P03` at the end of `lock_timeout`.
-    fn wait_lockers(&self, relations: &[u32], mode: Mode) -> Result<()> {
+    pub(crate) fn wait_lockers(&self, relations: &[u32], mode: Mode) -> Result<()> {
         let Some((activity, store)) = self.activity else { return Ok(()) };
         let locks = store.locks();
         let tags: Vec<Tag> = relations
@@ -2133,6 +2152,10 @@ impl Env for Reader<'_> {
 
     fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {
         self.wait_lockers(relids, mode)
+    }
+
+    fn transaction_xid(&self) -> u32 {
+        self.conn.and_then(|conn| conn.transaction_id(true)).unwrap_or(1)
     }
 
     fn database(&self) -> String {

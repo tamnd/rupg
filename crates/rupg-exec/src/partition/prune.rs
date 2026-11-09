@@ -123,7 +123,7 @@ fn prune(
     out: &mut Vec<u32>,
 ) -> Result<()> {
     let catalog = catalog(session)?;
-    let d = Dispatch::new(rel, session)?;
+    let d = Dispatch::new(rel, false, session)?;
     let allowed = d.allowed(rel, root, clauses);
     for (part, keep) in d.parts.iter().zip(d.kept(&allowed, session)) {
         if !keep {

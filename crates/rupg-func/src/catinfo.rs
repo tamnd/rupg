@@ -176,7 +176,8 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 fn partition_parent(catalog: &Catalog, relid: u32) -> Option<u32> {
     let rel = catalog.relation(relid)?;
     match (&rel.partition_of, &rel.index) {
-        (Some(of), _) => Some(of.parent),
+        // `get_partition_ancestors` stops at a partition with a pending detach.
+        (Some(of), _) => (of.pending == 0).then_some(of.parent),
         (None, Some(info)) if info.parent != 0 => Some(info.parent),
         _ => None,
     }
@@ -198,7 +199,8 @@ fn tree_catalog<'s>(call: &Call<'s>, relid: u32) -> Option<&'s Catalog> {
     let catalog = call.session.catalog()?;
     let rel = catalog.relation(relid)?;
     let partitioned = matches!(rel.kind, RelKind::Partitioned | RelKind::PartitionedIndex);
-    (partitioned || partition_parent(catalog, relid).is_some()).then_some(catalog)
+    (partitioned || rel.partition_of.is_some() || partition_parent(catalog, relid).is_some())
+        .then_some(catalog)
 }
 
 /// `pg_partition_root(regclass)`: the top parent of the partition tree of a relation, or the relation when it has no parent. The result is null for a relation that cannot be in a partition tree.

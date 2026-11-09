@@ -68,6 +68,8 @@ struct Dispatch {
     /// The collator of each key column in a collation of ICU, which orders the bounds and the values of the key.
     collators: Vec<Option<rupg_func::Collator>>,
     parts: Vec<Part>,
+    /// The parts have the partitions with a pending detach that the statement leaves out, for the checks of their bounds.
+    with_detached: bool,
 }
 
 /// The partitioned tables that a statement routes rows into, read from the catalog at the first row that needs each one.
@@ -128,7 +130,8 @@ impl Router {
         let catalog = catalog(session)?;
         let (mut child, mut row) = (table, row.to_vec());
         while let Some(of) = &relation(catalog, child)?.partition_of {
-            let at = self.dispatch(of.parent, session)?;
+            // `RelationGetPartitionQual` reads the bound of the partition, which a partition with a pending detach keeps.
+            let at = self.dispatch_of(of.parent, of.pending != 0, session)?;
             let d = &self.dispatch[at];
             let Some(part) = d.parts.iter().find(|p| p.oid == child) else {
                 return Err(Error::internal(format!("relation {child} is not a partition")));
@@ -164,10 +167,22 @@ impl Router {
 
     /// The index of the dispatch of the partitioned table `oid`.
     fn dispatch(&mut self, oid: u32, session: &dyn Session) -> Result<usize> {
-        if let Some(at) = self.dispatch.iter().position(|d| d.oid == oid) {
+        self.dispatch_of(oid, false, session)
+    }
+
+    /// [`Router::dispatch`], with the partitions that have a pending detach when `with_detached` is true.
+    fn dispatch_of(
+        &mut self,
+        oid: u32,
+        with_detached: bool,
+        session: &dyn Session,
+    ) -> Result<usize> {
+        if let Some(at) =
+            self.dispatch.iter().position(|d| d.oid == oid && d.with_detached == with_detached)
+        {
             return Ok(at);
         }
-        let d = Dispatch::new(relation(catalog(session)?, oid)?, session)?;
+        let d = Dispatch::new(relation(catalog(session)?, oid)?, with_detached, session)?;
         self.dispatch.push(d);
         Ok(self.dispatch.len() - 1)
     }
@@ -175,7 +190,7 @@ impl Router {
 
 impl Dispatch {
     /// `RelationGetPartitionKey` and `RelationGetPartitionDesc` of a partitioned table.
-    fn new(rel: &Relation, session: &dyn Session) -> Result<Dispatch> {
+    fn new(rel: &Relation, with_detached: bool, session: &dyn Session) -> Result<Dispatch> {
         let catalog = catalog(session)?;
         let Some(key) = &rel.partition_key else {
             return Err(Error::internal(format!("relation {} is not partitioned", rel.oid)));
@@ -202,7 +217,12 @@ impl Dispatch {
             }
         }
         let mut parts = Vec::new();
-        for child in catalog.partitions(rel.oid) {
+        let children = if with_detached {
+            catalog.partitions_with_detached(rel.oid)
+        } else {
+            catalog.partitions(rel.oid)
+        };
+        for child in children {
             let Some(of) = &child.partition_of else { continue };
             let map = child
                 .columns
@@ -256,6 +276,7 @@ impl Dispatch {
             collations: key.collations.clone(),
             collators: key.collations.iter().map(|&c| rupg_func::collator(session, c)).collect(),
             parts,
+            with_detached,
         };
         d.sort()?;
         Ok(d)
@@ -476,7 +497,7 @@ fn rank(datum: &Datum) -> i8 {
 /// The errors of the compare of the bounds.
 pub fn leaves(oid: u32, session: &dyn Session) -> Result<Vec<u32>> {
     let catalog = catalog(session)?;
-    let d = Dispatch::new(relation(catalog, oid)?, session)?;
+    let d = Dispatch::new(relation(catalog, oid)?, false, session)?;
     let mut out = Vec::new();
     for part in &d.parts {
         if relation(catalog, part.oid)?.kind == RelKind::Partitioned {
@@ -563,7 +584,7 @@ pub(crate) fn satisfies_hash_partition(
     if rel.partition_key.as_ref().is_none_or(|k| k.strategy != PartStrategy::Hash) {
         return Err(invalid(format!("\"{}\" is not a hash partitioned table", rel.name)));
     }
-    let d = Dispatch::new(rel, session)?;
+    let d = Dispatch::new(rel, false, session)?;
     let keys = args.get(3..).unwrap_or_default();
     let key_types = types.get(3..).unwrap_or_default();
     let count = |provided: usize| {

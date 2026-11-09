@@ -45,11 +45,10 @@ pub fn vacuum_relations(
         let Node::VacuumRelation(vrel) = node else { continue };
         let Some(rv) = &vrel.relation else { continue };
         let relid = lookup(&an, rv)?;
+        // `expand_vacuum_rel` takes `AccessShareLock` for the lookup and lets it go before `vacuum_rel` locks each relation in a transaction of its own, so the statement waits only for a transaction that holds `AccessExclusiveLock`.
+        env.wait_for_lockers(&[relid], 1)?;
         let permitted = permitted(relid);
-        if permitted {
-            // `vacuum_rel` and `analyze_rel` take `ShareUpdateExclusiveLock`, which lets reads and writes go on.
-            env.relation_lock(relid, super::SHARE_UPDATE_EXCLUSIVE)?;
-        } else {
+        if !permitted {
             warnings.push(vacuum_denied(&class_name(env, relid), vacuum));
         }
         found.push((
