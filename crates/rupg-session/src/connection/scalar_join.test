@@ -1,0 +1,58 @@
+> CREATE TABLE sa (k int, g int, v int)
+CREATE TABLE
+> INSERT INTO sa SELECT i % 60, i % 7, i FROM generate_series(1, 300) i
+INSERT 0 300
+> CREATE TABLE sb (k int, w text)
+CREATE TABLE
+> INSERT INTO sb SELECT CASE WHEN i % 17 = 0 THEN NULL ELSE i % 50 END, 'w' || (i % 4) FROM generate_series(1, 200) i
+INSERT 0 200
+> CREATE TABLE sc (k int, g int, q numeric, b bigint)
+CREATE TABLE
+> INSERT INTO sc SELECT CASE WHEN i % 23 = 0 THEN NULL ELSE i % 80 END, i % 7, (i % 9)::numeric, (i % 45)::bigint FROM generate_series(1, 500) i
+INSERT 0 500
+> ANALYZE sa
+ANALYZE
+> SELECT count(*), sum(x.v) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q = (SELECT min(c.q) FROM sc c WHERE c.k = x.k)
+fields count:20:8:-1,sum:20:8:-1
+row 945,137990
+SELECT 1
+> SELECT count(*), sum(z.b) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q = (SELECT max(c.q) FROM sc c WHERE c.k = x.k AND c.g = z.g)
+fields count:20:8:-1,sum:1700:-1:-1
+row 5765,130640
+SELECT 1
+> SELECT count(*) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q = (SELECT min(c.q) FROM sc c WHERE c.k = x.k HAVING count(*) > 6)
+fields count:20:8:-1
+row 260
+SELECT 1
+> SELECT count(*) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.b = (SELECT max(c.b / (c.g - c.g)) FROM sc c WHERE c.k = x.k)
+fields count:20:8:-1
+ERROR 22012 division by zero
+> SELECT count(*) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q = (SELECT c.q FROM sc c WHERE c.k = x.k)
+fields count:20:8:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT count(*), sum(x.v) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q > (SELECT avg(c.q) FROM sc c WHERE c.k = z.k)
+fields count:20:8:-1,sum:20:8:-1
+row 2725,395430
+SELECT 1
+> SELECT x.k, y.w, z.q FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND x.g = 3 AND z.q = (SELECT min(c.q) FROM sc c, sb d WHERE c.k = d.k AND c.k = x.k AND d.w = 'w1') ORDER BY 1, 2, 3 LIMIT 12
+fields k@sa.1:23:4:-1,w@sb.2:25:-1:-1,q@sc.3:1700:-1:-1
+row 1,w1,0
+row 1,w1,0
+row 1,w3,0
+row 3,w1,0
+row 3,w3,0
+row 3,w3,0
+row 5,w1,0
+row 5,w1,0
+row 5,w3,0
+row 5,w3,0
+row 9,w1,0
+row 9,w1,0
+SELECT 12
+> SELECT count(*), sum(x.v) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND x.g = (SELECT count(*) FROM sc c WHERE c.k = y.k AND c.g = 2)
+fields count:20:8:-1,sum:20:8:-1
+row 923,144284
+SELECT 1
+> SELECT count(*) FROM sa x, sb y, sc z WHERE x.k = y.k AND y.k = z.k AND z.q = (SELECT min(c.q) FROM sc c WHERE c.k = x.k) AND x.v / (x.g - 3) > 0
+fields count:20:8:-1
+ERROR 22012 division by zero
