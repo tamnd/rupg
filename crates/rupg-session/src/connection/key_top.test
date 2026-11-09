@@ -1,0 +1,75 @@
+> CREATE TABLE k (i int, a int, b int, c int8, d date, n int, e int)
+CREATE TABLE
+> INSERT INTO k SELECT i, i % 7, i % 5, i % 11, date '2020-01-01' + i % 9, CASE WHEN i % 13 = 0 THEN NULL ELSE i % 4 END, i % 3 FROM generate_series(1, 100000) i
+INSERT 0 100000
+> CREATE TABLE big (i int, a int, b int)
+CREATE TABLE
+> INSERT INTO big SELECT i, i % 50, (i::int8 * 7919 % 1003)::int4 FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE k
+ANALYZE
+> ANALYZE big
+ANALYZE
+> SELECT a, b FROM k GROUP BY a, b ORDER BY b DESC LIMIT 3
+fields a@k.2:23:4:-1,b@k.3:23:4:-1
+row 3,4
+row 5,4
+row 4,4
+SELECT 3
+> SELECT a, b, count(*) FROM k GROUP BY a, b ORDER BY b LIMIT 4 OFFSET 2
+fields a@k.2:23:4:-1,b@k.3:23:4:-1,count:20:8:-1
+row 0,0,2857
+row 1,0,2857
+row 6,0,2857
+row 3,0,2857
+SELECT 4
+> SELECT c, a, sum(i) FROM k GROUP BY c, a ORDER BY c DESC LIMIT 5
+fields c@k.4:20:8:-1,a@k.2:23:4:-1,sum:20:8:-1
+row 10,6,64913629
+row 10,3,64927917
+row 10,1,64970784
+row 10,2,64899351
+row 10,5,64985073
+SELECT 5
+> SELECT d, a, e FROM k GROUP BY d, a, e ORDER BY d DESC LIMIT 7
+fields d@k.5:1082:4:-1,a@k.2:23:4:-1,e@k.7:23:4:-1
+row 2020-01-09,2,2
+row 2020-01-09,3,2
+row 2020-01-09,6,2
+row 2020-01-09,1,2
+row 2020-01-09,5,2
+row 2020-01-09,0,2
+row 2020-01-09,4,2
+SELECT 7
+> SELECT n, a FROM k GROUP BY n, a ORDER BY n DESC LIMIT 3
+fields n@k.6:23:4:-1,a@k.2:23:4:-1
+row NULL,0
+row NULL,4
+row NULL,6
+SELECT 3
+> SELECT a, b FROM big GROUP BY a, b ORDER BY b DESC LIMIT 3
+fields a@big.2:23:4:-1,b@big.3:23:4:-1
+row 47,1002
+row 5,1002
+row 30,1002
+SELECT 3
+> SELECT a, b, max(i) FROM big GROUP BY a, b ORDER BY b LIMIT 6 OFFSET 5
+fields a@big.2:23:4:-1,b@big.3:23:4:-1,max:23:4:-1
+row 3,0,251753
+row 5,0,285855
+row 12,0,254762
+row 48,0,266798
+row 39,0,263789
+row 28,0,276828
+SELECT 6
+> SELECT a, b FROM big WHERE i > 1000 GROUP BY a, b ORDER BY b DESC LIMIT 8
+fields a@big.2:23:4:-1,b@big.3:23:4:-1
+row 3,1002
+row 44,1002
+row 42,1002
+row 47,1002
+row 38,1002
+row 30,1002
+row 5,1002
+row 45,1002
+SELECT 8

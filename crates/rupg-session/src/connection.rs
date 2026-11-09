@@ -4566,6 +4566,12 @@ mod tests {
         big_stack(|| script_tasks(include_str!("connection/distinct_rows.test")));
     }
 
+    /// `ORDER BY` of one integer key of `GROUP BY` with `LIMIT` takes the groups of the result from the keys of the groups, and the scan reads the first rows of only these groups: keys of `int`, `bigint` and `date` in both orders, with `OFFSET`, other aggregates, a filter, equal keys at the end of the bounded heap, and a key with nulls, which reads the first rows of all the groups. `connection/key_top.test` has the rows of PostgreSQL 19 for the same queries.
+    #[test]
+    fn key_top() {
+        big_stack(|| script_tasks(include_str!("connection/key_top.test")));
+    }
+
     /// The tasks of the server give only the groups that can change the bounded heap of `ORDER BY` of one count with `LIMIT`, when the hash table of the plan spills and its groups go in the order of their first rows, and the counts at the end of the heap are equal: in both orders, with `OFFSET`, a filter, other aggregates and `count` of a column. The rows are the rows of the scan with no tasks, which reads all the groups.
     #[test]
     fn heap_groups_tasks() {
