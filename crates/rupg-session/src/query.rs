@@ -31,7 +31,7 @@ use rupg_wire::{Field, Portals, Statements};
 use crate::advisory::{EXCLUSIVE, Edge, Mode, ROW_EXCLUSIVE, Request, SHARE, Tag, mode_name};
 use crate::connection::{Activity, Connection, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
-use crate::heap::{RowLocked, View, tid_text};
+use crate::heap::{Heap, RowLocked, View, tid_text};
 use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
@@ -790,7 +790,10 @@ impl<'a> Reader<'a> {
                                 "while locking tuple {} in relation \"{name}\"",
                                 tid_text(tid)
                             );
-                            self.wait_xact(xid, holder, &context)?;
+                            let row = (view.database, relation, tid);
+                            self.wait_xact_while(xid, holder, &context, |heap| {
+                                heap.row_blocked(row, (holder, strength))
+                            })?;
                         }
                     }
                 }
@@ -810,6 +813,21 @@ impl<'a> Reader<'a> {
     ///
     /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
     pub(crate) fn wait_xact(&self, xid: u32, holder: u32, context: &str) -> Result<()> {
+        self.wait_xact_while(xid, holder, context, |_| true)
+    }
+
+    /// [`Reader::wait_xact`] that ends too when `still` gives false, as for a row lock that a rollback to a savepoint of `holder` takes away, which ends the wait for the subtransaction in `XactLockTableWait`.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Reader::wait_xact`].
+    pub(crate) fn wait_xact_while(
+        &self,
+        xid: u32,
+        holder: u32,
+        context: &str,
+        still: impl Fn(&Heap) -> bool,
+    ) -> Result<()> {
         let (activity, store) = self.server()?;
         let heap = store.heap();
         heap.wait(xid, holder);
@@ -823,7 +841,7 @@ impl<'a> Reader<'a> {
         let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
         let waiting = format!("waiting for ShareLock on transaction {holder}");
         let mut result = Ok(());
-        while heap.running(holder) {
+        while heap.running(holder) && still(heap) {
             if let Err(error) = rupg_func::Session::interrupted(self) {
                 result = Err(error.with_context(waiting).with_context(context));
                 break;

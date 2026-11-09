@@ -1,10 +1,10 @@
 //! The triggers of the foreign keys after a write, as `ri_triggers.c` makes them: the checks of `RI_FKey_check_ins` and `RI_FKey_check_upd`, the checks of `NO ACTION` and `RESTRICT`, and the actions of `CASCADE`, `SET NULL` and `SET DEFAULT`.
 //!
-//! PostgreSQL runs a query for each row that the statement wrote. rupg reads the other table one time for each foreign key and keeps its keys in a map by their hash. The checks come after the last row of the statement and see all the rows of the statement. In `READ COMMITTED` they also see the rows that other transactions committed before the check. The row locks of `FOR KEY SHARE` are not made yet, so a check does not wait for a write of another transaction that is in progress.
+//! PostgreSQL runs a query for each row that the statement wrote. rupg reads the other table one time for each foreign key and keeps its keys in a map by their hash. The checks come after the last row of the statement and see all the rows of the statement. In `READ COMMITTED` they also see the rows that other transactions committed before the check. The check of a new key locks the referenced row with `FOR KEY SHARE`, so it waits for a transaction in progress that deletes the row or changes its key, and then reads the keys again.
 //!
 //! An action runs its statement on the referencing table for each old key, as `ri_PerformCheck` runs it with SPI. SPI does not fire the triggers at the end of that statement, so its rows go to the end of the queue of the statement of the client, and the triggers fire in the order of `afterTriggerInvokeEvents`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
 
@@ -13,11 +13,14 @@ use rupg_catalog::RelKind;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_sql::nodes::Node;
-use rupg_types::{Numeric, Value, oid};
+use rupg_types::{
+    DATE_INFINITY, DATE_NEGATIVE_INFINITY, Numeric, TIMESTAMP_INFINITY,
+    TIMESTAMP_NEGATIVE_INFINITY, USECS_PER_DAY, Value, oid,
+};
 
 use super::deferred::Modes;
 use super::{Applied, Connection};
-use crate::heap::hash_value;
+use crate::heap::{KEY_SHARE, RowLocked, hash_value, tid_text};
 use crate::query;
 
 /// The rows of a write of a table with foreign keys, for the triggers of the foreign keys, `AfterTriggerEventList`.
@@ -109,6 +112,10 @@ struct State {
 /// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by the hash of the columns that the equality compares.
 struct Keys {
     keys: Vec<Vec<Value>>,
+    /// The ID of the version of the row of each key, which ends the row of the scan, or 0.
+    tids: Vec<u64>,
+    /// The keys whose versions have the lock of `FOR KEY SHARE` of the check, which the statement takes one time.
+    locked: HashSet<usize>,
     hashes: HashMap<u64, Vec<usize>>,
     /// The number of the columns of the equality: all the columns, or the columns before the period of a temporal foreign key.
     equal: usize,
@@ -124,8 +131,18 @@ impl Keys {
         period: bool,
     ) -> Keys {
         let equal = columns.len() - usize::from(period);
-        let mut keys = Keys { keys: Vec::with_capacity(rows.len()), hashes: HashMap::new(), equal };
+        let mut keys = Keys {
+            keys: Vec::with_capacity(rows.len()),
+            tids: Vec::with_capacity(rows.len()),
+            locked: HashSet::new(),
+            hashes: HashMap::new(),
+            equal,
+        };
         for row in rows {
+            let tid = match row.last() {
+                Some(&Value::Int8(tid)) => tid.cast_unsigned(),
+                _ => 0,
+            };
             let key: Option<Vec<Value>> = columns
                 .iter()
                 .zip(from.iter().zip(to))
@@ -136,6 +153,7 @@ impl Keys {
             let Some(key) = key else { continue };
             keys.hashes.entry(hash_key(&key[..equal], to)).or_default().push(keys.keys.len());
             keys.keys.push(key);
+            keys.tids.push(tid);
         }
         keys
     }
@@ -166,6 +184,16 @@ impl Keys {
             }
         }
         Ok(periods)
+    }
+
+    /// The place of the first key equal to `key`, with no period, or `None`.
+    fn find(&self, key: &[Value], types: &[u32]) -> Result<Option<usize>, Error> {
+        for &at in self.hashes.get(&hash_key(&key[..self.equal], types)).into_iter().flatten() {
+            if same(&self.keys[at], key, types)? {
+                return Ok(Some(at));
+            }
+        }
+        Ok(None)
     }
 
     /// The keys with the columns of the equality equal to those of `key`.
@@ -219,6 +247,20 @@ fn key_value(value: &Value, from: u32, to: u32) -> Value {
             _ => value.clone(),
         },
         Value::Numeric(v) if matches!(to, oid::FLOAT4 | oid::FLOAT8) => Value::Float8(v.to_f64()),
+        // `date_eq_timestamp` and `timestamp_eq_date`: a date compares as its midnight. A timestamp that is not a midnight equals no date and stays a timestamp, which no date key equals.
+        &Value::Date(date) if to == oid::TIMESTAMP => Value::Timestamp(match date {
+            DATE_NEGATIVE_INFINITY => TIMESTAMP_NEGATIVE_INFINITY,
+            DATE_INFINITY => TIMESTAMP_INFINITY,
+            date => i64::from(date) * USECS_PER_DAY,
+        }),
+        &Value::Timestamp(time) if to == oid::DATE => match time {
+            TIMESTAMP_NEGATIVE_INFINITY => Value::Date(DATE_NEGATIVE_INFINITY),
+            TIMESTAMP_INFINITY => Value::Date(DATE_INFINITY),
+            time => match i32::try_from(time / USECS_PER_DAY) {
+                Ok(date) if time % USECS_PER_DAY == 0 => Value::Date(date),
+                _ => value.clone(),
+            },
+        },
         // `rtrim1`: the cast of `bpchar` to `text` removes the spaces at the end.
         Value::Text(v) if rupg_func::base_type(from) == oid::BPCHAR && to != oid::BPCHAR => {
             Value::Text(v.trim_end_matches(' ').into())
@@ -416,18 +458,39 @@ impl Connection {
                 None => key_value(value, from, to),
             });
         }
-        let keys = state.other.get_or_insert_with(|| {
-            // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
-            let rows = self.table_rows(foreign.other);
-            Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types, foreign.period)
-        });
-        // For a temporal foreign key, `HAVING $n <@ range_agg(x1.r)`: the periods of the keys that overlap the period of the new key cover it.
-        let present = if foreign.period {
-            let last = probe.len() - 1;
-            let periods = keys.periods(&probe, &foreign.types)?;
-            rupg_func::period_covered(foreign.types[last], &probe[last], None, &periods)?
-        } else {
-            keys.has(&probe, &foreign.types)?
+        let present = loop {
+            let keys = state.other.get_or_insert_with(|| {
+                // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
+                let rows = self.table_rows(foreign.other);
+                Keys::of(
+                    rows,
+                    &foreign.other_columns,
+                    &foreign.types,
+                    &foreign.types,
+                    foreign.period,
+                )
+            });
+            // For a temporal foreign key, `HAVING $n <@ range_agg(x1.r)`: the periods of the keys that overlap the period of the new key cover it.
+            if foreign.period {
+                let last = probe.len() - 1;
+                let periods = keys.periods(&probe, &foreign.types)?;
+                break rupg_func::period_covered(
+                    foreign.types[last],
+                    &probe[last],
+                    None,
+                    &periods,
+                )?;
+            }
+            let Some(at) = keys.find(&probe, &foreign.types)? else { break false };
+            if batch.validation || keys.locked.contains(&at) {
+                break true;
+            }
+            if self.lock_referenced(foreign, keys.tids[at])? {
+                keys.locked.insert(at);
+                break true;
+            }
+            // A transaction that committed after the snapshot changed the row: the check reads the keys again with a new snapshot, and the latest version decides, as `TUPLE_LOCK_FLAG_FIND_LAST_VERSION` gives it.
+            state.other = None;
         };
         if !present {
             let shown = self.key_text(batch, foreign, key, &foreign.referencing_types)?;
@@ -437,6 +500,35 @@ impl Connection {
             )));
         }
         Ok(())
+    }
+
+    /// The lock of `FOR KEY SHARE OF x` of the query of `RI_FKey_check` on the version `tid` of the referenced row, which waits for a transaction in progress that deletes the row or changes its key. False when a transaction that committed after the snapshot changed the row. A partitioned table and a version with no ID take no lock.
+    ///
+    /// # Errors
+    ///
+    /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed, and the errors of [`query::Reader::wait_xact`].
+    fn lock_referenced(&self, foreign: &Foreign, tid: u64) -> Result<bool, Error> {
+        let table = self.catalog().relation(foreign.other).map(|r| (r.kind, r.name.clone()));
+        let Some((RelKind::Table, name)) = table else { return Ok(true) };
+        let view = self.view();
+        if tid == 0 || view.xid == 0 {
+            return Ok(true);
+        }
+        let heap = self.store.heap();
+        loop {
+            match heap.lock_row((foreign.other, tid), &view, (view.xid, KEY_SHARE))? {
+                RowLocked::Done | RowLocked::Gone => return Ok(true),
+                RowLocked::Again => return Ok(false),
+                RowLocked::Wait(holder) => {
+                    let context =
+                        format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
+                    let row = (view.database, foreign.other, tid);
+                    self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
+                        heap.row_blocked(row, (holder, KEY_SHARE))
+                    })?;
+                }
+            }
+        }
     }
 
     /// `ri_restrict`: no row of the referencing table can have an old key of the referenced table.

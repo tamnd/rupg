@@ -694,6 +694,7 @@ dependencies = [
  "icu_provider_blob",
  "icu_segmenter",
  "md-5",
+ "memchr",
  "rupg-analyze",
  "rupg-catalog",
  "rupg-column",
