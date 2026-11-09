@@ -4641,6 +4641,8 @@ fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
     let mut failed = vec![false; bits.len().div_ceil(CODE_WORDS)];
     let pattern = &pattern[..];
     let strings = dict.strings();
+    let infix = rupg_func::Infix::new(pattern, fold);
+    let infix = infix.as_ref();
     let jobs: Vec<Job<'_>> = bits
         .chunks_mut(CODE_WORDS)
         .zip(failed.iter_mut())
@@ -4648,6 +4650,26 @@ fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
         .map(|(n, (words, failed))| {
             Box::new(move || {
                 let first = n * CODE_WORDS * 64;
+                if let Some(infix) = infix {
+                    // One search of the bytes of all the codes of the job.
+                    let last = (first + words.len() * 64 - 1).min(codes);
+                    let (Ok(low), Ok(high)) = (u32::try_from(first.max(1)), u32::try_from(last))
+                    else {
+                        *failed = true;
+                        return;
+                    };
+                    infix.each(strings, low, high, |code| {
+                        let bit = code as usize - first;
+                        words[bit / 64] |= 1 << (bit % 64);
+                    });
+                    if negate {
+                        for code in first.max(1)..=last {
+                            let bit = code - first;
+                            words[bit / 64] ^= 1 << (bit % 64);
+                        }
+                    }
+                    return;
+                }
                 let mut folded = Vec::new();
                 for (w, word) in words.iter_mut().enumerate() {
                     for bit in 0..64 {
