@@ -252,9 +252,11 @@ fn command_lock(cmd: &AlterTableCmd) -> u8 {
         | AlterTableType::AT_ResetOptions
         | AlterTableType::AT_AttachPartition
         | AlterTableType::AT_DetachPartitionFinalize => SHARE_UPDATE_EXCLUSIVE,
-        AlterTableType::AT_DetachPartition if cmd.def.as_ref().is_some_and(|def| {
-            matches!(def, Node::PartitionCmd(part) if part.concurrent)
-        }) =>
+        AlterTableType::AT_DetachPartition
+            if cmd
+                .def
+                .as_ref()
+                .is_some_and(|def| matches!(def, Node::PartitionCmd(part) if part.concurrent)) =>
         {
             SHARE_UPDATE_EXCLUSIVE
         }
@@ -512,6 +514,14 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_DropNotNull => {
                 self.simple_permissions(target, cmd, TABLE)?;
+                // `get_partition_parent` of a partition with a pending detach.
+                if self.catalog.is_detach_pending(target.oid) {
+                    return Err(Error::new(
+                        SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                        format!("cannot alter partition \"{}\" with an incomplete detach", target.name),
+                    )
+                    .with_hint("Use ALTER TABLE ... DETACH PARTITION ... FINALIZE to complete the pending detach operation."));
+                }
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 passes.drops.push(DropCmd::NotNull(column));
             }

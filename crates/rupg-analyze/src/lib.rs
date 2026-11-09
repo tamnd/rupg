@@ -295,6 +295,10 @@ pub trait Env {
         let _ = (relids, mode);
         Ok(())
     }
+    /// The transaction ID of the transaction, which it gets if it has none, as `GetCurrentTransactionId` gives it.
+    fn transaction_xid(&self) -> u32 {
+        1
+    }
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None

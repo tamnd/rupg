@@ -992,12 +992,14 @@ fn add_scanned(query: &Query, reads: &mut (Vec<u32>, Vec<u32>)) {
     });
 }
 
-/// `expand_inherited_rtentry`: the children of `INHERITS` of the tables of `parents`, in the order of `find_all_inheritors`, which the statement locks with the mode of their parent. The partitions of a partitioned table are not in the list.
+/// `expand_inherited_rtentry`: the children of `INHERITS` and the partitions of the tables of `parents`, in the order of `find_all_inheritors`, which the statement locks with the mode of their parent. A partition that a concurrent `DETACH PARTITION` has detached for the snapshot of the statement is not in the list.
 pub(crate) fn inherited_relations(parents: &[u32], session: &dyn Session) -> Vec<u32> {
     let Some(catalog) = session.catalog() else { return Vec::new() };
     let mut children = Vec::new();
     for &parent in parents {
-        if catalog.relation(parent).is_none_or(|r| r.kind != rupg_catalog::RelKind::Table) {
+        if catalog.relation(parent).is_none_or(|r| {
+            !matches!(r.kind, rupg_catalog::RelKind::Table | rupg_catalog::RelKind::Partitioned)
+        }) {
             continue;
         }
         for child in catalog.all_inheritors(parent) {

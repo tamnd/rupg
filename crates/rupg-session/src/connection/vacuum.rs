@@ -352,69 +352,83 @@ impl Connection {
         let vacuum = stmt.is_vacuumcmd.then_some(&parsed);
         // `vacuum_rel` takes `ShareUpdateExclusiveLock`, and `AccessExclusiveLock` for `FULL`, which writes a new file.
         let mode = if vacuum.is_some_and(|parsed| parsed.full) { 8 } else { 4 };
+        // `use_own_xacts`: `VACUUM`, and `ANALYZE` outside of a transaction block, process each relation in a transaction of its own, so the lock of a relation goes before the next one. The new files of `VACUUM FULL` come with the end of the statement, which keeps its locks until then.
+        let own =
+            mode != 8 && (stmt.is_vacuumcmd || (!self.transaction.in_block() && !self.pipelining));
         self.in_vacuum.set(true);
         let result = self.vacuum_relations(
             (&catalog, &committed),
             (relids, &named),
             (vacuum, analyze),
-            mode,
+            (mode, own),
             notices,
         );
         self.in_vacuum.set(false);
         result.map(|()| Done::Tag(tag))
     }
 
-    /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest. A relation that went away while the statement waited for its lock is skipped, with a warning for one of `named`, the relations that the statement names, as `vacuum_open_relation` gives it.
+    /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`, which goes after each relation with `own`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest. A relation that went away while the statement waited for its lock is skipped, with a warning for one of `named`, the relations that the statement names, as `vacuum_open_relation` gives it.
     fn vacuum_relations(
         &self,
         (catalog, committed): (&Catalog, &Catalog),
         (relids, named): (Vec<Columns>, &[(u32, String)]),
         (vacuum, analyze): (Option<&Parsed>, bool),
-        mode: u8,
+        (mode, own): (u8, bool),
         notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         let reader = self.reader();
         for (relid, columns) in relids {
-            rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
-            if committed.relation(relid).is_some()
-                && self.committed_view().0.relation(relid).is_none()
-            {
-                if let Some((_, name)) = named.iter().find(|(named, _)| *named == relid) {
-                    let what = if vacuum.is_some() { "vacuum" } else { "analyze" };
-                    notices.push(Notice::warning(Error::new(
-                        SqlState::WARNING,
-                        format!("skipping {what} of \"{name}\" --- relation no longer exists"),
-                    )));
-                }
-                continue;
+            if own {
+                reader.lock_relation_session(relid, mode)?;
+            } else {
+                rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
             }
-            if let Some(parsed) = vacuum
-                && let Some(name) = parallel_temp(catalog, relid, parsed)
-            {
-                notices.push(Notice::warning(Error::new(SqlState::WARNING, format!(
-                    "disabling parallel option of vacuum on \"{name}\" --- cannot vacuum temporary tables in parallel"
-                ))));
+            let result = (|| {
+                if committed.relation(relid).is_some()
+                    && self.committed_view().0.relation(relid).is_none()
+                {
+                    if let Some((_, name)) = named.iter().find(|(named, _)| *named == relid) {
+                        let what = if vacuum.is_some() { "vacuum" } else { "analyze" };
+                        notices.push(Notice::warning(Error::new(
+                            SqlState::WARNING,
+                            format!("skipping {what} of \"{name}\" --- relation no longer exists"),
+                        )));
+                    }
+                    return Ok(());
+                }
+                if let Some(parsed) = vacuum
+                    && let Some(name) = parallel_temp(catalog, relid, parsed)
+                {
+                    notices.push(Notice::warning(Error::new(SqlState::WARNING, format!(
+                        "disabling parallel option of vacuum on \"{name}\" --- cannot vacuum temporary tables in parallel"
+                    ))));
+                }
+                let analyze = analyze.then_some(columns.as_slice());
+                // `vacuum_rel` runs as the owner of the relation with the `search_path` of `RestrictSearchPath`.
+                let owner = catalog.relation(relid).map_or(self.current_role(), |r| r.owner);
+                // `vacuum_rel` of `FULL` with no `PROCESS_MAIN` writes only the TOAST table again.
+                let full = vacuum.filter(|parsed| parsed.full).and_then(|parsed| {
+                    let rel = catalog.relation(relid)?;
+                    if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
+                        None
+                    } else if parsed.process_main {
+                        Some(relid)
+                    } else {
+                        (parsed.process_toast && rel.toast != 0).then_some(rel.toast)
+                    }
+                });
+                self.as_maintenance(owner, || {
+                    if let Some(target) = full {
+                        self.vacuum_full(catalog, target, notices)?;
+                    }
+                    self.relation_stats(&self.catalog(), relid, (vacuum, analyze))
+                })
+                .map(drop)
+            })();
+            if own {
+                reader.unlock_relation_session(relid, mode);
             }
-            let analyze = analyze.then_some(columns.as_slice());
-            // `vacuum_rel` runs as the owner of the relation with the `search_path` of `RestrictSearchPath`.
-            let owner = catalog.relation(relid).map_or(self.current_role(), |r| r.owner);
-            // `vacuum_rel` of `FULL` with no `PROCESS_MAIN` writes only the TOAST table again.
-            let full = vacuum.filter(|parsed| parsed.full).and_then(|parsed| {
-                let rel = catalog.relation(relid)?;
-                if !matches!(rel.kind, RelKind::Table | RelKind::MatView) {
-                    None
-                } else if parsed.process_main {
-                    Some(relid)
-                } else {
-                    (parsed.process_toast && rel.toast != 0).then_some(rel.toast)
-                }
-            });
-            self.as_maintenance(owner, || {
-                if let Some(target) = full {
-                    self.vacuum_full(catalog, target, notices)?;
-                }
-                self.relation_stats(&self.catalog(), relid, (vacuum, analyze))
-            })?;
+            result?;
         }
         Ok(())
     }

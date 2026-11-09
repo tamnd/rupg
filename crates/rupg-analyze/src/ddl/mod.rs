@@ -785,6 +785,10 @@ impl Env for SchemaEnv<'_> {
         self.env.wait_for_lockers(relids, mode)
     }
 
+    fn transaction_xid(&self) -> u32 {
+        self.env.transaction_xid()
+    }
+
     fn access_temp(&self) {
         self.env.access_temp();
     }

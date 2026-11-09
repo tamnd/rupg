@@ -442,6 +442,15 @@ impl Definer<'_, '_> {
                 {
                     self.an.env.relation_lock(index.table, super::ACCESS_EXCLUSIVE)?;
                 }
+                // `RangeVarCallbackForDropRelation` locks the parent of a partition that the statement names, also one with a pending detach.
+                if target.flags & flag::ORIGINAL != 0
+                    && let Some(of) = self
+                        .catalog
+                        .relation(object.oid)
+                        .and_then(|r| r.partition_of.as_ref().filter(|_| r.index.is_none()))
+                {
+                    self.an.env.relation_lock(of.parent, super::ACCESS_EXCLUSIVE)?;
+                }
                 self.check_not_in_use(object.oid, "DROP TABLE")?;
             }
         }

@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hasher};
+use std::sync::Arc;
 
 use rupg_analyze::{Action, Foreign, Params, Write, WriteKind};
 use rupg_catalog::RelKind;
@@ -603,12 +604,18 @@ impl Connection {
         let heap = self.store.heap();
         let view = self.view();
         let catalog = self.catalog();
+        // `ri_PerformCheck` with `detectNewRows` for a partitioned table: the partition directory of the query leaves out each partition with a pending detach that committed, as the latest snapshot sees it.
+        let catalog = match catalog.omit_detached(|_| true) {
+            Some(omitted) => Arc::new(omitted),
+            None => catalog,
+        };
         let Some(rel) = catalog.relation(table).filter(|r| r.kind == RelKind::Partitioned) else {
             return heap.rows(table, &view);
         };
         let mut rows = Vec::new();
         // The leaves in the order of a scan, or in the order of their OIDs when a compare of the bounds fails.
-        let leaves = rupg_exec::partition_leaves(table, &self.reader()).unwrap_or_else(|_| {
+        let reader = self.reader_without_view(Arc::clone(&catalog));
+        let leaves = rupg_exec::partition_leaves(table, &reader).unwrap_or_else(|_| {
             let mut leaves = Vec::new();
             let mut pending: Vec<u32> = catalog.partitions(table).iter().map(|p| p.oid).collect();
             while let Some(oid) = pending.pop() {

@@ -2043,6 +2043,17 @@ impl Plan {
         Ok(reads)
     }
 
+    /// The locks of the parser of `PREPARE`: the relations that the statement names, in the modes of [`Plan::start`], with no lock of their children, which the planner locks.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    pub fn lock_parsed(&self, session: &dyn Session) -> Result<()> {
+        let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
+        let mode = if self.lock_clause().is_some() { 2 } else { 1 };
+        session.lock_relations(&reads.0, mode, self.query.write.as_ref().map(|write| write.table))
+    }
+
     /// The locks and the checks of `ExecutorStart` with `EXEC_FLAG_EXPLAIN_ONLY`: `ExecCheckPermissions` and the checks of `EXECUTE` of `ExecInitFunc`, with no check of a read-only transaction or of a relation that has no data.
     ///
     /// # Errors

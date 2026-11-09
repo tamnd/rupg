@@ -2010,6 +2010,13 @@ pub(crate) struct View {
     pub(crate) sxact: u64,
 }
 
+impl View {
+    /// True when the view sees the changes of the transaction `xid`: its own, or one that committed before its snapshot.
+    pub(crate) fn sees(&self, xid: u32) -> bool {
+        (self.xid != 0 && xid == self.xid) || committed_before(xid, &self.snapshot)
+    }
+}
+
 /// A change of a row by `UPDATE` or `DELETE`: the ID of the version, and the new values, or `None` to delete it.
 pub(crate) type Change = (u64, Option<Vec<Value>>);
 

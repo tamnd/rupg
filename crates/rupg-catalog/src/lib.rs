@@ -480,6 +480,8 @@ pub struct PartitionOf {
     pub parent: u32,
     /// The bound.
     pub bound: PartitionBound,
+    /// `inhdetachpending`: the transaction that marked a pending detach of `DETACH PARTITION ... CONCURRENTLY`, or 0. A statement whose snapshot sees that transaction leaves the partition out of the partitions of the parent, as `find_inheritance_children_extended` omits it.
+    pub pending: u32,
 }
 
 /// The query of a view and its `_RETURN` rule.
@@ -1384,6 +1386,8 @@ pub struct Catalog {
     dropped_builtins: BTreeSet<ObjRef>,
     /// The tables that lost their last partition or child: `relhassubclass` stays true for them until the next `ANALYZE`, as only `acquire_inherited_sample_rows` clears it.
     kept_subclass: BTreeSet<u32>,
+    /// The partitions with a pending detach that the statement of this copy leaves out of the partitions of their parents, as [`Catalog::omit_detached`] gives them. Only a copy for one statement has any, and they are not stored.
+    omitted: BTreeSet<u32>,
 }
 
 impl Default for Catalog {
@@ -1504,6 +1508,7 @@ impl Catalog {
             uncommitted_labels: Vec::new(),
             dropped_builtins: BTreeSet::new(),
             kept_subclass: BTreeSet::new(),
+            omitted: BTreeSet::new(),
         }
     }
 
@@ -2472,7 +2477,7 @@ impl Catalog {
         let Some(rel) = self.relations.get_mut(&table) else {
             return Err(no_object("relation", table));
         };
-        rel.partition_of = Some(PartitionOf { parent, bound });
+        rel.partition_of = Some(PartitionOf { parent, bound, pending: 0 });
         self.depend(ObjRef::new(PG_CLASS, table), ObjRef::new(PG_CLASS, parent), DepKind::Auto);
         Ok(())
     }
@@ -2531,7 +2536,76 @@ impl Catalog {
 
     /// True when the table `parent` has a partition or a child, with no list of them.
     pub fn has_children(&self, parent: u32) -> bool {
-        self.relations.children_of(parent).next().is_some()
+        self.relations.children_of(parent).any(|r| !self.omitted.contains(&r.oid))
+    }
+
+    /// `MarkInheritDetached`: the partition `table` has a pending detach that the transaction `xid` marked, or none for 0.
+    pub fn set_detach_pending(&mut self, table: u32, xid: u32) -> Result<()> {
+        let rel = self.relation_mut(table)?;
+        if let Some(of) = rel.partition_of.as_mut() {
+            of.pending = xid;
+        }
+        Ok(())
+    }
+
+    /// The partition of the table `parent` with a pending detach, which a statement may leave out of its partitions.
+    pub fn detach_pending(&self, parent: u32) -> Option<&Relation> {
+        self.relations.pending().iter().find_map(|&(oid, _)| {
+            self.relations
+                .get(&oid)
+                .filter(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
+        })
+    }
+
+    /// The partition `table` has a pending detach.
+    pub fn is_detach_pending(&self, table: u32) -> bool {
+        self.relations.pending().iter().any(|&(oid, _)| oid == table)
+    }
+
+    /// `find_inheritance_children_extended` with `omit_detached`: a copy of the catalog for a statement that leaves out of the partitions of their parents each partition with a pending detach whose transaction `visible` says the snapshot of the statement sees. `None` when there is no such partition, and the statement uses the catalog itself.
+    #[must_use]
+    pub fn omit_detached(&self, visible: impl Fn(u32) -> bool) -> Option<Catalog> {
+        let omitted: BTreeSet<u32> = self
+            .relations
+            .pending()
+            .iter()
+            .filter(|&&(_, xid)| visible(xid))
+            .map(|&(oid, _)| oid)
+            .collect();
+        if omitted.is_empty() {
+            return None;
+        }
+        let mut copy = self.clone();
+        copy.omitted = omitted;
+        Some(copy)
+    }
+
+    /// [`Catalog::omit_detached`] in place, for the copy of the catalog that a definition changes. [`Catalog::keep_detached`] undoes it before the copy becomes the catalog of the transaction.
+    pub fn omit_detached_here(&mut self, visible: impl Fn(u32) -> bool) {
+        self.omitted = self
+            .relations
+            .pending()
+            .iter()
+            .filter(|&&(_, xid)| visible(xid))
+            .map(|&(oid, _)| oid)
+            .collect();
+    }
+
+    /// The partitions with a pending detach are again partitions of their parents, as a stored catalog has them.
+    pub fn keep_detached(&mut self) {
+        self.omitted.clear();
+    }
+
+    /// True when the catalog has a partition with a pending detach.
+    pub fn has_pending_detach(&self) -> bool {
+        !self.relations.pending().is_empty()
+    }
+
+    /// The partition that the transaction `xid` marked for a pending detach, and its parent.
+    pub fn detach_pending_by(&self, xid: u32) -> Option<(u32, u32)> {
+        let &(oid, _) = self.relations.pending().iter().find(|&&(_, by)| by == xid)?;
+        let parent = self.relations.get(&oid)?.partition_of.as_ref()?.parent;
+        Some((oid, parent))
     }
 
     /// `relhassubclass` of the table `parent`: true while it has a partition or a child, and after it lost them until the next `ANALYZE`.
@@ -2551,7 +2625,7 @@ impl Catalog {
 
     /// `find_inheritance_children`: the partitions of a table and the tables that inherit from it, in the order of their OIDs.
     pub fn children(&self, parent: u32) -> Vec<&Relation> {
-        self.relations.children_of(parent).collect()
+        self.relations.children_of(parent).filter(|r| !self.omitted.contains(&r.oid)).collect()
     }
 
     /// `find_all_inheritors` with no table itself: the children of the table, then the children of each of them in the same order, and so on. A table that inherits from two of them comes once.
@@ -2574,6 +2648,13 @@ impl Catalog {
 
     /// The partitions of a partitioned table, in the order of their OIDs.
     pub fn partitions(&self, parent: u32) -> Vec<&Relation> {
+        let mut partitions = self.partitions_with_detached(parent);
+        partitions.retain(|r| !self.omitted.contains(&r.oid));
+        partitions
+    }
+
+    /// [`Catalog::partitions`] with the partitions that the statement leaves out for their pending detach, as `find_inheritance_children_extended` gives them with no `omit_detached`.
+    pub fn partitions_with_detached(&self, parent: u32) -> Vec<&Relation> {
         self.relations
             .values()
             .filter(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
@@ -4740,7 +4821,7 @@ rupg_common::persist_enum!(PartStrategy { 0 => Hash, 1 => List, 2 => Range });
 rupg_common::persist_struct!(PartitionKey { strategy, attrs, classes, collations, exprs });
 rupg_common::persist_enum!(RangeDatum { 0 => MinValue, 1 => MaxValue, 2 => Value(a0) });
 rupg_common::persist_enum!(PartitionBound { 0 => Default, 1 => Hash { modulus, remainder }, 2 => List(a0), 3 => Range { lower, upper } });
-rupg_common::persist_struct!(PartitionOf { parent, bound });
+rupg_common::persist_struct!(PartitionOf { parent, bound, pending });
 rupg_common::persist_struct!(ViewInfo { rule, text, path, populated, action });
 rupg_common::persist_struct!(Type {
     oid,
@@ -4950,7 +5031,7 @@ rupg_common::persist_struct!(Catalog {
     uncommitted_labels,
     dropped_builtins,
     kept_subclass
-});
+} skip { omitted });
 
 #[cfg(test)]
 mod tests;

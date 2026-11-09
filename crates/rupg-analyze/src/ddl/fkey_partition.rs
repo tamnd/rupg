@@ -277,9 +277,23 @@ impl Definer<'_, '_> {
 
     /// Drops the clone `clone` of a foreign key with its triggers, as `DetachPartitionFinalize` and `tryAttachPartitionForeignKey` drop it after the clone and its triggers lose their parents.
     fn drop_fk_clone(&mut self, clone: u32) -> Result<()> {
-        let triggers: Vec<u32> =
-            self.catalog.triggers().filter(|t| t.constraint == clone).map(|t| t.oid).collect();
-        for trigger in triggers {
+        // `RemoveConstraintById` locks the table of the constraint and the table that it refers to.
+        if let Some(con) = self.catalog.constraint(clone) {
+            let (table, referenced) = (con.relation, con.foreign.as_ref().map(|f| f.table));
+            self.an.env.relation_lock(table, super::ACCESS_EXCLUSIVE)?;
+            if let Some(referenced) = referenced.filter(|r| *r != table) {
+                self.an.env.relation_lock(referenced, super::ACCESS_EXCLUSIVE)?;
+            }
+        }
+        let triggers: Vec<(u32, u32)> = self
+            .catalog
+            .triggers()
+            .filter(|t| t.constraint == clone)
+            .map(|t| (t.oid, t.relation))
+            .collect();
+        for (trigger, relation) in triggers {
+            // `RemoveTriggerById` locks the table of the trigger.
+            self.an.env.relation_lock(relation, super::ACCESS_EXCLUSIVE)?;
             self.catalog.clear_trigger_parent(trigger);
         }
         let object = ObjRef::new(PG_CONSTRAINT, clone);

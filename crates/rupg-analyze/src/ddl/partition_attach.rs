@@ -13,6 +13,10 @@ use super::drop::owner_word;
 use super::partition_index::same_definition;
 use super::{Definer, Found, PartitionCheck, not_yet, relkind_detail, relname};
 
+/// The hint of the errors of a partition with a pending detach.
+const FINALIZE_HINT: &str =
+    "Use ALTER TABLE ... DETACH PARTITION ... FINALIZE to complete the pending detach operation.";
+
 impl Definer<'_, '_> {
     /// `ATPrepCmd` and `ATExecCmd` for the partition subcommands of `ALTER TABLE` and `ALTER INDEX`. The grammar gives each of them as the only subcommand.
     pub(super) fn partition_command(&mut self, target: &Target, cmd: &AlterTableCmd) -> Result<()> {
@@ -478,7 +482,48 @@ impl Definer<'_, '_> {
             ));
         }
         let child = self.open_detached(target, rv)?;
+        self.an.env.relation_lock(
+            child,
+            if concurrent { super::SHARE_UPDATE_EXCLUSIVE } else { super::ACCESS_EXCLUSIVE },
+        )?;
         self.detach_checks(child);
+        if concurrent {
+            return self.mark_detached(target, child);
+        }
+        if self.catalog.is_detach_pending(child) {
+            let name = self.catalog.relation(child).map_or("", |r| r.name.as_str());
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("cannot detach partition \"{name}\""),
+            )
+            .with_detail(
+                "The partition is being detached concurrently or has an unfinished detach.",
+            )
+            .with_hint(FINALIZE_HINT));
+        }
+        self.detach_finalize(target, child)
+    }
+
+    /// `MarkInheritDetached`: the first transaction of `DETACH PARTITION ... CONCURRENTLY` marks the partition `child` with a pending detach, so that the statements whose snapshots see the commit of the transaction leave it out. A parent has at most one partition with a pending detach.
+    fn mark_detached(&mut self, target: &Target, child: u32) -> Result<()> {
+        if let Some(pending) = self.catalog.detach_pending(target.oid) {
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "partition \"{}\" already pending detach in partitioned table \"{}.{}\"",
+                    pending.name,
+                    self.schema_name(target.namespace),
+                    target.name
+                ),
+            )
+            .with_hint(FINALIZE_HINT));
+        }
+        let xid = self.an.env.transaction_xid();
+        self.catalog.set_detach_pending(child, xid)
+    }
+
+    /// `DetachPartitionFinalize`: the partition `child` of `target` becomes a table of its own.
+    fn detach_finalize(&mut self, target: &Target, child: u32) -> Result<()> {
         self.remove_inheritance(child, target.oid)?;
         // `DetachPartitionFinalize`: the columns of the partition lose their identity. The sequence stays with the parent.
         let identities: Vec<i16> = self.catalog.relation(child).map_or_else(Vec::new, |r| {
@@ -522,15 +567,20 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `ATExecDetachPartitionFinalize`: rupg has no pending detach, so a partition gives the error of `DeleteInheritsTuple`.
+    /// `ATExecDetachPartitionFinalize`: the detach of a partition with a pending detach ends, as the second transaction of `DETACH PARTITION ... CONCURRENTLY` ends it. A partition with no pending detach gives the error of `DeleteInheritsTuple`.
     fn detach_partition_finalize(&mut self, target: &Target, rv: &RangeVar) -> Result<()> {
         let child = self.open_detached(target, rv)?;
-        let name = self.catalog.relation(child).map_or("", |r| r.name.as_str());
-        Err(Error::new(
-            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-            format!("cannot complete detaching partition \"{name}\""),
-        )
-        .with_detail("There's no pending concurrent detach."))
+        self.an.env.relation_lock(child, super::ACCESS_EXCLUSIVE)?;
+        if !self.catalog.is_detach_pending(child) {
+            let name = self.catalog.relation(child).map_or("", |r| r.name.as_str());
+            return Err(Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("cannot complete detaching partition \"{name}\""),
+            )
+            .with_detail("There's no pending concurrent detach."));
+        }
+        self.detach_checks(child);
+        self.detach_finalize(target, child)
     }
 
     /// `table_openrv` for the partition of `DETACH PARTITION`, and the check of `RemoveInheritance` that it is a partition of the parent.

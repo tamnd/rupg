@@ -48,6 +48,8 @@ struct Maps {
     indexes: OidMap<u32, Vec<u32>>,
     /// The OIDs of the partitions of each table and of the tables that inherit from it, in their order.
     children: OidMap<u32, Vec<u32>>,
+    /// The partitions with a pending detach (`inhdetachpending`), with the transaction that marked them.
+    pending: Vec<(u32, u32)>,
 }
 
 /// The relations by OID.
@@ -69,6 +71,9 @@ impl Relations {
                     .or_insert(oid);
                 if let Some(info) = &rel.index {
                     maps.indexes.entry(info.table).or_default().push(oid);
+                }
+                if let Some(of) = rel.partition_of.as_ref().filter(|of| of.pending != 0) {
+                    maps.pending.push((oid, of.pending));
                 }
                 let parents =
                     rel.partition_of.iter().map(|p| p.parent).chain(rel.inherits.iter().copied());
@@ -93,6 +98,11 @@ impl Relations {
     pub(crate) fn indexes_of(&self, table: u32) -> impl Iterator<Item = &Relation> {
         let oids = self.maps().indexes.get(&table).map_or(&[][..], Vec::as_slice);
         oids.iter().filter_map(|oid| self.map.get(oid))
+    }
+
+    /// The partitions with a pending detach, each with the transaction that marked it.
+    pub(crate) fn pending(&self) -> &[(u32, u32)] {
+        &self.maps().pending
     }
 
     /// The partitions of the table `parent` and the tables that inherit from it, in the order of their OIDs.

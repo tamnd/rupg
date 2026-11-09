@@ -1028,7 +1028,10 @@ fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             row.set("inhrelid", oid(rel.oid))
                 .set("inhparent", oid(parent))
                 .set("inhseqno", Value::Int4(seqno))
-                .set("inhdetachpending", Value::Bool(false));
+                .set(
+                    "inhdetachpending",
+                    Value::Bool(rel.partition_of.as_ref().is_some_and(|of| of.pending != 0)),
+                );
             rows.push(row);
         }
     }
