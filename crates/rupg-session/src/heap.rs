@@ -1953,17 +1953,17 @@ impl Table {
                 if seen_before == Seen::Dead {
                     continue;
                 }
-                match map.key(other, &before.values) {
-                    Some(other) if map.same(values, other)? => {}
+                let earlier = match map.key(other, &before.values) {
+                    Some(earlier) if map.same(values, earlier)? => earlier,
                     _ => continue,
-                }
+                };
                 return Ok(Some(match (seen_before, seen) {
                     (Seen::Wait(holder), _) | (_, Seen::Wait(holder)) => {
                         Changed::WaitKey { holder, index, used: vec![version.tid] }
                     }
                     _ => Changed::Duplicate {
                         index,
-                        key: map.columns.iter().map(|&column| values[column].clone()).collect(),
+                        key: map.columns.iter().map(|&column| earlier[column].clone()).collect(),
                     },
                 }));
             }
@@ -4010,6 +4010,9 @@ impl Heap {
         derive: Derive<'_>,
     ) -> Result<Option<Changed>> {
         let table = (view.database, relation);
+        if let Some(checked) = self.check_live_build(table, view.xid, unique) {
+            return checked;
+        }
         let (mut guard, places) = self.lock_keys(table, unique, derive)?;
         let state = &mut *guard;
         let Some(rows) = state.tables.get(&table) else {
@@ -4022,6 +4025,65 @@ impl Heap {
             }
         }
         Ok(None)
+    }
+
+    /// [`Heap::check_build`] of unique keys of columns on a table whose versions are all live for the dirty snapshot, as after a load. The key of each version comes from the values of its columns, and the first version whose key an earlier version has is the duplicate, as [`Table::first_duplicate`] finds it, with the key of the earlier version. The check makes no map of the keys, so the frozen values of the versions stay in their columns. `None` when a key has an expression or a predicate, or when a version is deleted or a transaction in progress made it, which need [`Heap::check_build`].
+    fn check_live_build(
+        &self,
+        table: (u32, u32),
+        xid: u32,
+        unique: &[Unique],
+    ) -> Option<Result<Option<Changed>>> {
+        if unique.iter().any(|key| key.derived.is_some()) {
+            return None;
+        }
+        let state = self.state_read();
+        let rows = state.tables.meta(&table)?;
+        if rows.versions.iter().any(|version| dirty(version, xid, &state.running) != Seen::Live) {
+            return None;
+        }
+        for (index, key) in unique.iter().enumerate() {
+            // The map of the key with the key columns at the start of each key.
+            let map = KeyMap { columns: (0..key.columns.len()).collect(), ..KeyMap::of(key) };
+            let mut keys: Vec<Box<[Value]>> = Vec::new();
+            let mut hashes: HashMap<u64, Vec<usize>> = HashMap::new();
+            let mut found: Option<Result<Box<[Value]>>> = None;
+            rows.each_version_row(Some(&key.columns), |_, values| {
+                if found.is_some() {
+                    return;
+                }
+                let row: Box<[Value]> = key
+                    .columns
+                    .iter()
+                    .map(|&column| values.get(column).cloned().unwrap_or(Value::Null))
+                    .collect();
+                let Some(hash) = map.hash_key(&row) else { return };
+                let list = hashes.entry(hash).or_default();
+                for &other in list.iter() {
+                    match map.same(&keys[other], &row) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            found = Some(Ok(keys[other].clone()));
+                            return;
+                        }
+                        Err(error) => {
+                            found = Some(Err(error));
+                            return;
+                        }
+                    }
+                }
+                list.push(keys.len());
+                keys.push(row);
+            });
+            match found {
+                Some(Ok(key)) => {
+                    return Some(Ok(Some(Changed::Duplicate { index, key: key.into_vec() })));
+                }
+                Some(Err(error)) => return Some(Err(error)),
+                None => {}
+            }
+        }
+        Some(Ok(None))
     }
 
     /// The versions of the table `relation` that an exclusion constraint checks for the transaction `xid`, as a scan of the index with `SnapshotDirty` finds them, in the order of the IDs. A version that went before the command `command` is not in the list. The result is empty when the commands of `xid` from `command` on made no version of the table. With no command, the list has the live versions, as the build of a new index sees them.
