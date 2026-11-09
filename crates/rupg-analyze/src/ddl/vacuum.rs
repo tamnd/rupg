@@ -20,6 +20,8 @@ pub struct VacuumRel {
     pub inh: bool,
     /// The result of `vacuum_is_permitted_for_relation`. The statement skips a relation without it, but not its children.
     pub permitted: bool,
+    /// The name of the relation as the statement gives it, for the warning of `vacuum_open_relation`.
+    pub name: String,
 }
 
 /// `vacuum` for the relations `rels` of a `VacuumStmt`, after `ExecVacuum` has read the options. `permitted` is `vacuum_is_permitted_for_relation`, which `expand_vacuum_rel` checks after the lookup of each name. `vacuum` is true for `VACUUM`, and `analyze` is true for `ANALYZE` or for `VACUUM` with the option `ANALYZE`. The warnings for the relations that the statement skips go to `warnings`, also when a later relation gives an error. The result is the relations that the statement processes, in the order of the list.
@@ -50,7 +52,13 @@ pub fn vacuum_relations(
         } else {
             warnings.push(vacuum_denied(&class_name(env, relid), vacuum));
         }
-        found.push((relid, &vrel.va_cols, rv.inh, permitted));
+        found.push((
+            relid,
+            &vrel.va_cols,
+            rv.inh,
+            permitted,
+            rv.relname.clone().unwrap_or_default(),
+        ));
         if vacuum && !rv.inh && relkind(env, relid) == b'p' {
             let name = rv.relname.as_deref().unwrap_or_default();
             warnings.push(Error::new(
@@ -59,7 +67,7 @@ pub fn vacuum_relations(
             ));
         }
     }
-    for (relid, va_cols, inh, permitted) in found {
+    for (relid, va_cols, inh, permitted, name) in found {
         let columns = va_cols
             .iter()
             .flatten()
@@ -68,7 +76,7 @@ pub fn vacuum_relations(
                 _ => None,
             })
             .collect();
-        let rel = VacuumRel { relid, columns, inh, permitted };
+        let rel = VacuumRel { relid, columns, inh, permitted, name: name.into() };
         // `expand_vacuum_rel` adds the children of a relation that the role cannot maintain, and `vacuum_rel` checks each of them.
         if !permitted {
             done.push(rel);

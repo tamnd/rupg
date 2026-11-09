@@ -2023,7 +2023,15 @@ impl Plan {
         if self.row_security.is_some_and(|user| user != rupg_func::current_user_oid(session)) {
             return Err(not_yet("a plan of a query on a table with row security for another role"));
         }
-        // `AcquireExecutorLocks`: `RowShareLock` for a statement with `FOR UPDATE` or `FOR SHARE`, and `AccessShareLock` for the others.
+        let reads = self.lock_relations(session)?;
+        rupg_func::check_permissions(&self.query.perms, session)?;
+        rupg_func::check_execute(&self.query.funcs, session)?;
+        check_row_marks(&self.query, session)?;
+        scan::check_scannable(reads, session)
+    }
+
+    /// `AcquireExecutorLocks`: `RowShareLock` for a statement with `FOR UPDATE` or `FOR SHARE`, `AccessShareLock` for the others, and `RowExclusiveLock` on the table that the statement writes. The result is the relations that the statement reads.
+    fn lock_relations(&self, session: &dyn Session) -> Result<&[u32]> {
         let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
         let mode = if self.lock_clause().is_some() { 2 } else { 1 };
         let (reads, parents) = (&reads.0, &reads.1);
@@ -2032,18 +2040,17 @@ impl Plan {
         if !children.is_empty() {
             session.lock_relations(&children, mode, None)?;
         }
-        rupg_func::check_permissions(&self.query.perms, session)?;
-        rupg_func::check_execute(&self.query.funcs, session)?;
-        check_row_marks(&self.query, session)?;
-        scan::check_scannable(reads, session)
+        Ok(reads)
     }
 
-    /// The checks of `ExecutorStart` with `EXEC_FLAG_EXPLAIN_ONLY`: `ExecCheckPermissions` and the checks of `EXECUTE` of `ExecInitFunc`, with no check of a read-only transaction or of a relation that has no data.
+    /// The locks and the checks of `ExecutorStart` with `EXEC_FLAG_EXPLAIN_ONLY`: `ExecCheckPermissions` and the checks of `EXECUTE` of `ExecInitFunc`, with no check of a read-only transaction or of a relation that has no data.
     ///
     /// # Errors
     ///
     /// `42501` for a relation or a function that the role cannot use.
     pub fn start_explain(&self, session: &dyn Session) -> Result<()> {
+        // The parser, or `AcquireExecutorLocks` for a prepared statement, locks the relations as for a run.
+        self.lock_relations(session)?;
         rupg_func::check_permissions(&self.query.perms, session)?;
         rupg_func::check_execute(&self.query.funcs, session)
     }

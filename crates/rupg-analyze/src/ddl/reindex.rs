@@ -425,11 +425,24 @@ impl Definer<'_, '_> {
         alone: bool,
     ) -> Result<()> {
         let verbose = options.verbose;
+        let mut relids = Vec::new();
+        for &index in indexes {
+            let table = self.index_table(index).unwrap_or_default();
+            for relid in [table, index] {
+                self.an.env.relation_lock(relid, super::SHARE_UPDATE_EXCLUSIVE)?;
+                if !relids.contains(&relid) {
+                    relids.push(relid);
+                }
+            }
+        }
+        // The swap of the indexes and the drop of the old ones each wait for the transactions that use the relations, so that a transaction that came during the first wait holds up the second.
+        if !relids.is_empty() {
+            self.an.env.wait_for_lockers(&relids, super::ACCESS_EXCLUSIVE)?;
+            self.an.env.wait_for_lockers(&relids, super::ACCESS_EXCLUSIVE)?;
+        }
         for &index in indexes {
             // The new index takes the tablespace of `TABLESPACE`, except an index of a TOAST table.
             let table = self.index_table(index).unwrap_or_default();
-            self.an.env.relation_lock(table, super::SHARE_UPDATE_EXCLUSIVE)?;
-            self.an.env.relation_lock(index, super::SHARE_UPDATE_EXCLUSIVE)?;
             if let Some(tablespace) = options.tablespace_oid
                 && self.catalog.relation(table).is_some_and(|r| r.kind != RelKind::Toast)
             {

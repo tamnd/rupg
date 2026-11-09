@@ -286,6 +286,15 @@ pub trait Env {
         let _ = (relid, mode);
         Ok(())
     }
+    /// `WaitForLockersMultiple`: the wait for the end of each other transaction that holds a lock that conflicts with `mode` on a relation of `relids` when the wait starts. The transactions that lock the relations later do not hold up the wait. A session with no other sessions does not wait.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel and `55P03` at the end of `lock_timeout`.
+    fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {
+        let _ = (relids, mode);
+        Ok(())
+    }
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None

@@ -63,6 +63,8 @@ const SLEEP_SLICE_US: i64 = 10_000;
 const ADVISORY: (&str, &str) = ("Lock", "advisory");
 /// The wait event of a wait for the lock of a relation.
 const RELATION: (&str, &str) = ("Lock", "relation");
+/// The wait event of a wait for the end of the transaction of another session, as `VirtualXactLock` waits.
+const VIRTUAL_XID: (&str, &str) = ("Lock", "virtualxid");
 /// The wait event of a wait for the end of a transaction that changed a row.
 const TRANSACTION_ID: (&str, &str) = ("Lock", "transactionid");
 /// The wait event of a `DEFERRABLE` transaction that waits for a safe snapshot.
@@ -828,6 +830,47 @@ impl<'a> Reader<'a> {
         }
         activity.report_wait(None);
         heap.waited(xid);
+        result
+    }
+
+    /// `WaitForLockersMultiple`: the wait for the end of each other transaction that holds a lock that conflicts with `mode` on a relation of `relations` now, with the wait event `virtualxid`. `pg_blocking_pids` gives those sessions while the wait lasts.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel and `55P03` at the end of `lock_timeout`.
+    fn wait_lockers(&self, relations: &[u32], mode: Mode) -> Result<()> {
+        let Some((activity, store)) = self.activity else { return Ok(()) };
+        let locks = store.locks();
+        let tags: Vec<Tag> = relations
+            .iter()
+            .map(|&relation| Tag::Relation { database: activity.database(), relation })
+            .collect();
+        if !locks.watch(self.pid, &tags, mode) {
+            return Ok(());
+        }
+        activity.report_wait(Some(VIRTUAL_XID));
+        let limit = match self.timeout("lock_timeout") {
+            0 => None,
+            ms => Some(now(self.clock).saturating_add(ms * 1000)),
+        };
+        let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
+        let mut result = Ok(());
+        while !locks.watched(self.pid).is_empty() {
+            if let Err(error) = rupg_func::Session::interrupted(self) {
+                result = Err(error);
+                break;
+            }
+            if limit.is_some_and(|limit| now(self.clock) >= limit) {
+                result = Err(Error::new(
+                    SqlState::LOCK_NOT_AVAILABLE,
+                    "canceling statement due to lock timeout",
+                ));
+                break;
+            }
+            store.nap(slice);
+        }
+        activity.report_wait(None);
+        locks.unwatch(self.pid);
         result
     }
 
@@ -2086,6 +2129,10 @@ impl Env for Reader<'_> {
 
     fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
         self.take_locks(std::iter::once(relid), mode)
+    }
+
+    fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {
+        self.wait_lockers(relids, mode)
     }
 
     fn database(&self) -> String {

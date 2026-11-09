@@ -781,6 +781,10 @@ impl Env for SchemaEnv<'_> {
         self.env.relation_lock(relid, mode)
     }
 
+    fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {
+        self.env.wait_for_lockers(relids, mode)
+    }
+
     fn access_temp(&self) {
         self.env.access_temp();
     }
