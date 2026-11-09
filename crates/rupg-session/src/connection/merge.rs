@@ -68,6 +68,12 @@ impl Connection {
         let mut view = view.clone();
         let mut rows = rows;
         let (actions, applied) = loop {
+            if !info.instead && !self.lock_matched(info, (merge, fire), &view, &rows)? {
+                let reader = self.reader();
+                rows = plan.run(params, &reader)?;
+                view = reader.view().cloned().unwrap_or_default();
+                continue;
+            }
             let actions = self.merge_actions(plan, info, (merge, fire), params, &view, rows)?;
             let changes: Vec<Change> = actions
                 .iter()
@@ -231,6 +237,49 @@ impl Connection {
     }
 
     /// The action of each row of the join: the first clause of the kind of the row whose condition is true. Each row of the join has the columns of the target table, the ID of the version of the row of the target table, the marker of the source row and the carried values. The triggers `BEFORE ... FOR EACH ROW` of the action fire for the row, as `ExecMergeMatched` and `ExecMergeNotMatched` fire them, and a trigger that gives a null row skips the action.
+    /// `GetTupleForTrigger` for a `MERGE` of a table that is not partitioned: when an action `UPDATE` or `DELETE` of a clause `WHEN MATCHED` or `WHEN NOT MATCHED BY SOURCE` fires triggers `BEFORE ... FOR EACH ROW`, each row of the target that such a clause can take is locked before the conditions of the clauses choose its action, so that a trigger does not run on a row that a concurrent write changes. The result is false when a transaction that committed after the snapshot of `view` changed a row, and the join must run again with a new snapshot, so that the conditions see the new version of the row.
+    ///
+    /// # Errors
+    ///
+    /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed, and the errors of a wait.
+    fn lock_matched(
+        &self,
+        info: &Write,
+        (merge, fire): (&Merge, &MergeTriggers),
+        view: &View,
+        rows: &[Vec<Value>],
+    ) -> Result<bool, Error> {
+        let fires = |kind: MatchKind, command: MergeCommand| {
+            merge.clauses.iter().any(|c| c.kind == kind && c.command == command)
+                && fire.of(command).is_some_and(|t| t.before_rows())
+        };
+        let strength = |kind: MatchKind| {
+            if fires(kind, MergeCommand::Delete) {
+                Some(crate::heap::UPDATE)
+            } else if fires(kind, MergeCommand::Update) {
+                Some(crate::heap::NO_KEY_UPDATE)
+            } else {
+                None
+            }
+        };
+        let strengths = [strength(MatchKind::Matched), strength(MatchKind::NotMatchedBySource)];
+        if strengths.iter().all(Option::is_none) {
+            return Ok(true);
+        }
+        let width = info.width;
+        for row in rows {
+            let (Some(Value::Int8(tid)), Some(marker)) = (row.get(width), row.get(width + 1))
+            else {
+                continue;
+            };
+            let Some(strength) = strengths[usize::from(marker.is_null())] else { continue };
+            if !self.lock_trigger_row(view, (info.table, tid.cast_unsigned()), strength)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn merge_actions(
         &self,
         plan: &Plan,
@@ -408,7 +457,10 @@ impl Connection {
             if !self.change_leaves(&routing, groups, &view, false, &mut applied)? {
                 break;
             }
-            // The rows that this command changed stay as they are in the new run.
+            // The rows that this command changed stay as they are in the new run. The inserts wait for the end of the loop, so the new run gives them again.
+            for (seq, _, _) in inserts.drain(..) {
+                results[seq] = None;
+            }
             let reader = self.reader();
             rows = plan.run(params, &reader)?;
             view = reader.view().cloned().unwrap_or_default();

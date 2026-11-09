@@ -20,7 +20,7 @@ use internal::Internal;
 use super::Connection;
 use super::merge::Action;
 use super::upsert::{Upsert, Upserted};
-use crate::heap::{RowLocked, View, tid_text};
+use crate::heap::{RowLocked, RowStrength, View, tid_text};
 use crate::query::{Captured, Reader, Transition};
 use crate::utility::Notice;
 
@@ -487,7 +487,6 @@ impl Connection {
         };
         let catalog = self.catalog();
         let mut fires: Vec<(u32, bool)> = Vec::new();
-        let heap = self.store.heap();
         for row in rows {
             let at = row.len().wrapping_sub(if routed { 2 } else { 1 });
             let relation = match (routed, row.get(at)) {
@@ -508,27 +507,44 @@ impl Connection {
                     fire
                 }
             };
-            if !fire {
-                continue;
-            }
-            loop {
-                match heap.lock_row((relation, tid), view, (view.xid, strength))? {
-                    RowLocked::Done | RowLocked::Gone => break,
-                    RowLocked::Again => return Ok(false),
-                    RowLocked::Wait(holder) => {
-                        let name =
-                            catalog.relation(relation).map(|r| r.name.clone()).unwrap_or_default();
-                        let context =
-                            format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
-                        let locked = (view.database, relation, tid);
-                        self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
-                            heap.row_blocked(locked, (holder, strength))
-                        })?;
-                    }
-                }
+            if fire && !self.lock_trigger_row(view, (relation, tid), strength)? {
+                return Ok(false);
             }
         }
         Ok(true)
+    }
+
+    /// Locks a row of [`Connection::lock_for_triggers`] with `strength`, and waits for a transaction in progress that changed or locked it. The result is false when a transaction that committed after the snapshot of `view` changed the row.
+    ///
+    /// # Errors
+    ///
+    /// `40001` in `REPEATABLE READ` and `SERIALIZABLE` for a row that a transaction that committed after the snapshot changed, and the errors of a wait.
+    pub(super) fn lock_trigger_row(
+        &self,
+        view: &View,
+        (relation, tid): (u32, u64),
+        strength: RowStrength,
+    ) -> Result<bool, Error> {
+        let heap = self.store.heap();
+        loop {
+            match heap.lock_row((relation, tid), view, (view.xid, strength))? {
+                RowLocked::Done | RowLocked::Gone => return Ok(true),
+                RowLocked::Again => return Ok(false),
+                RowLocked::Wait(holder) => {
+                    let name = self
+                        .catalog()
+                        .relation(relation)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_default();
+                    let context =
+                        format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
+                    let locked = (view.database, relation, tid);
+                    self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
+                        heap.row_blocked(locked, (holder, strength))
+                    })?;
+                }
+            }
+        }
     }
 
     /// The rows of the plan of an `UPDATE` or a `DELETE` of a table that is not partitioned, after [`Connection::lock_for_triggers`] locked them. While a transaction that committed after the snapshot changed a row, the plan runs again with a new snapshot, and the write keeps its command.

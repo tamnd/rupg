@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `MERGE` locks each target row that an action `UPDATE` or `DELETE` with triggers `BEFORE ... FOR EACH ROW` can take before the triggers fire, and a row that a concurrent transaction changed makes the join run again, so the conditions of `WHEN` and the triggers see the new version. A `MERGE` of a partitioned table no longer inserts twice the rows of `WHEN NOT MATCHED` when it runs again, and a write that follows an update chain to a row that moved to another partition fails with `40001` (#1458).
 - An aggregate without `GROUP BY` and without grouping sets in a columnar scan does not run the cost-based planner to find the hash table of its groups, because its plan has no such table. A fully pruned `SELECT count(*) ... WHERE` uses 0.72M instructions in place of 0.97M, and ClickBench q3 uses 0.17M in place of 0.41M.
 - `pg_get_multixact_stats()` gives the number of the multixacts, of their members, the bytes of the members and the oldest multixact. A row lock of a version that another transaction or subtransaction locks too makes a new multixact of all the lockers, as `MultiXactIdExpand` does, and the numbers only grow, as rupg never truncates them (#1456).
 - A filter of a columnar scan tests a dictionary vector of integers on its dictionary, each value once, and a packed vector of at most 8 bits on each offset of its width once, and then a row looks up its code or its offset (spec/09 section 9.6). A vector where no value or every value passes is not unpacked.
