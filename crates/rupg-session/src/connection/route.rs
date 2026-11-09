@@ -432,6 +432,13 @@ impl Connection {
         let mut applied = Vec::new();
         let foreign = tree(&catalog, info.table).into_iter().any(|oid| has_foreign(&catalog, oid));
         loop {
+            // `GetTupleForTrigger` locks the rows of the leaves with triggers before the triggers fire.
+            if !self.lock_for_triggers(info, &done.view, &rows, true)? {
+                let reader = self.reader();
+                rows = plan.run(params, &reader)?;
+                done.view = reader.view().cloned().unwrap_or_default();
+                continue;
+            }
             let reader = self.reader();
             // The changes of each old leaf, in the order of its first row, with the item of each change.
             let mut groups: Vec<Group> = Vec::new();
@@ -736,6 +743,11 @@ impl Connection {
                 }
             }
             self.count_changes(leaf.oid, &changes, &made);
+            let moves: Vec<u64> =
+                items.iter().filter(|item| item.moves).map(|item| item.tid).collect();
+            if !moves.is_empty() {
+                heap.mark_moved(view.database, leaf.oid, view.xid, &moves);
+            }
             let items: Vec<Moved> = made.iter().filter_map(|&i| items.get(i).cloned()).collect();
             let fired = |item: &Moved| leaf.fire_of(item.event()).is_some_and(Triggers::after_rows);
             let olds = if keep || items.iter().any(fired) {

@@ -997,6 +997,7 @@ impl Connection {
             rows
         } else {
             self.before_statement(&triggers, info)?;
+            let rows = self.rows_for_triggers((plan, params), info, &mut view, rows)?;
             self.before_rows(plan, info, (&triggers, Some(&view)), rows)?
         };
         // The rows that `RETURNING` reads: the rows that the statement wrote.
@@ -1141,6 +1142,8 @@ impl Connection {
                             view = reader.view().cloned().unwrap_or_default();
                             view.command = command;
                             drop(reader);
+                            let rows =
+                                self.rows_for_triggers((plan, params), info, &mut view, rows)?;
                             let rows =
                                 self.before_rows(plan, info, (&triggers, Some(&view)), rows)?;
                             (changes, given) = row_changes(rows, info)?;
