@@ -5135,6 +5135,28 @@ fn values_of_words(words: &[u64], shapes: &[Shape], dicts: &[Dict]) -> Vec<Value
     values
 }
 
+/// The number of a key of a group in the order of the sort, from its null flag and its place: the null flag is above the place, so that a null comes after each value, or before each value for nulls first.
+#[inline]
+fn key_number(null: bool, place: u64, descending: bool, nulls_first: bool) -> u128 {
+    let place = if descending { !place } else { place };
+    match (null, nulls_first) {
+        (true, false) => 1_u128 << 64,
+        (true, true) => 0,
+        (false, false) => u128::from(place),
+        (false, true) => 1_u128 << 64 | u128::from(place),
+    }
+}
+
+/// How [`word_order`] finds the place of a key of a group in the order of the sort, so that a key of integers or of codes of a dictionary with an order reads the place from the words of the keys and keeps no place for each group.
+enum Place<'d> {
+    /// The word of the integer with its sign bit flipped, so that the words compare as unsigned numbers.
+    Int,
+    /// The place of the code in the order of the dictionary.
+    Order(&'d [u32]),
+    /// The place of each group.
+    Groups(Vec<u64>),
+}
+
 /// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the places of the codes of the groups in the order of their bytes for a few groups. `None` for a key of codes with no text.
 fn word_order(
     tasks: Option<&dyn Tasks>,
@@ -5148,13 +5170,10 @@ fn word_order(
     let width = shapes.len() + 1;
     let null = |g: usize, k: usize| words[g * width + shapes.len()] >> k & 1 == 1;
     /// The places of a key, true for descending, true for nulls first, and the key.
-    type PlaceKey = (Vec<u64>, bool, bool, usize);
-    let place_of = |&(k, descending, nulls_first): &(usize, bool, bool)| -> Option<PlaceKey> {
-        let key = words.chunks(width).map(|g| g[k]);
+    type PlaceKey<'d> = (Place<'d>, bool, bool, usize);
+    let place_of = |&(k, descending, nulls_first): &(usize, bool, bool)| -> Option<PlaceKey<'_>> {
         let by = match shapes[k] {
-            Shape::Int(_) => concat(on_parts(tasks, groups, |range| {
-                range.map(|g| words[g * width + k] ^ (1 << 63)).collect()
-            })),
+            Shape::Int(_) => Place::Int,
             Shape::Code(d) => {
                 let dict = match &dicts[d] {
                     Dict::Stored(stored) if stored.kind == Kind::Text => stored.dict.as_ref()?,
@@ -5162,30 +5181,44 @@ fn word_order(
                     Dict::Stored(_) => return None,
                 };
                 if dict.has_order() || groups.saturating_mul(4) >= dict.len() {
-                    let order = dict_order(dict, tasks);
-                    concat(on_parts(tasks, groups, |range| {
-                        range
-                            .map(|g| words[g * width + k] as usize)
-                            .map(|w| u64::from(order.get(w).copied().unwrap_or(0)))
-                            .collect()
-                    }))
+                    Place::Order(dict_order(dict, tasks))
                 } else {
-                    code_places(dict, key, |g| null(g, k))
+                    let key = words.chunks(width).map(|g| g[k]);
+                    Place::Groups(code_places(dict, key, |g| null(g, k)))
                 }
             }
         };
         Some((by, descending, nulls_first, k))
     };
     // Each key of a group is one number in the order of the sort, with the null flag above the place, and a sort of the numbers next to the groups reads no other memory.
-    let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey| {
-        let null = null(g, *k);
-        let place = if *descending { !places[g] } else { places[g] };
-        // A null is above each value, or below each value for nulls first.
-        match (null, *nulls_first) {
-            (true, false) => 1_u128 << 64,
-            (true, true) => 0,
-            (false, false) => u128::from(place),
-            (false, true) => 1_u128 << 64 | u128::from(place),
+    let number = |g: usize, (places, descending, nulls_first, k): &PlaceKey<'_>| {
+        let word = words[g * width + *k];
+        let place = match places {
+            Place::Int => word ^ (1 << 63),
+            Place::Order(order) => u64::from(order.get(word as usize).copied().unwrap_or(0)),
+            Place::Groups(places) => places[g],
+        };
+        key_number(null(g, *k), place, *descending, *nulls_first)
+    };
+    // The numbers of a key for a range of groups, with the choice of the kind of the place once for the range.
+    let column = |(places, descending, nulls_first, k): &PlaceKey<'_>,
+                  range: std::ops::Range<usize>,
+                  out: &mut Vec<u128>| {
+        let (k, descending, nulls_first) = (*k, *descending, *nulls_first);
+        let rows = words[range.start * width..range.end * width].chunks_exact(width);
+        let mask = |row: &[u64]| row[width - 1] >> k & 1 == 1;
+        match places {
+            Place::Int => out.extend(
+                rows.map(|row| key_number(mask(row), row[k] ^ (1 << 63), descending, nulls_first)),
+            ),
+            Place::Order(order) => out.extend(rows.map(|row| {
+                let place = u64::from(order.get(row[k] as usize).copied().unwrap_or(0));
+                key_number(mask(row), place, descending, nulls_first)
+            })),
+            Place::Groups(places) => out.extend(
+                rows.zip(&places[range])
+                    .map(|(row, &place)| key_number(mask(row), place, descending, nulls_first)),
+            ),
         }
     };
     // For the groups that change the heap of a top of counts, the first key alone gives a first part of the order, and only the groups of that part and the groups whose counts come before the top of its heap need all the keys.
@@ -5200,26 +5233,29 @@ fn word_order(
             let mut sorted = leads.clone();
             let (_, &mut last, _) = sorted.select_nth_unstable(prefix - 1);
             drop(sorted);
-            // The groups whose first key is at most the first key of the last group of the part are a first part of the order, since the order compares the first key first.
-            let rank = |g: usize| {
-                let c = i128::from(counts[g]);
-                if descending { c } else { -c }
-            };
-            let mut ranks: Vec<i128> =
-                (0..groups).filter(|&g| leads[g] <= last).map(rank).collect();
-            let (_, &mut top, _) = ranks.select_nth_unstable_by(bound - 1, |a, b| b.cmp(a));
-            drop(ranks);
-            let chosen: Vec<usize> =
-                (0..groups).filter(|&g| leads[g] <= last || rank(g) > top).collect();
-            let mut some = Vec::with_capacity(chosen.len() * width);
-            for &g in &chosen {
-                some.extend_from_slice(&words[g * width..(g + 1) * width]);
+            // The groups whose first key is at most the first key of the last group of the part are a first part of the order, since the order compares the first key first. When many groups have the first key of the last group, this part is much larger than `prefix`, and a sort of the part costs more than a selection by all the keys below.
+            let part: Vec<usize> = (0..groups).filter(|&g| leads[g] <= last).collect();
+            if part.len() <= prefix.saturating_mul(2) {
+                let rank = |g: usize| {
+                    let c = i128::from(counts[g]);
+                    if descending { c } else { -c }
+                };
+                let mut ranks: Vec<i128> = part.iter().map(|&g| rank(g)).collect();
+                let (_, &mut top, _) = ranks.select_nth_unstable_by(bound - 1, |a, b| b.cmp(a));
+                drop(ranks);
+                let chosen: Vec<usize> =
+                    (0..groups).filter(|&g| leads[g] <= last || rank(g) > top).collect();
+                let mut some = Vec::with_capacity(chosen.len() * width);
+                for &g in &chosen {
+                    some.extend_from_slice(&words[g * width..(g + 1) * width]);
+                }
+                let order =
+                    word_order(tasks, &some, shapes, dicts, natives, chosen.len(), Want::All)?;
+                return Some(order.into_iter().map(|i| chosen[i]).collect());
             }
-            let order = word_order(tasks, &some, shapes, dicts, natives, chosen.len(), Want::All)?;
-            return Some(order.into_iter().map(|i| chosen[i]).collect());
         }
     }
-    let places: Vec<PlaceKey> = natives.iter().map(place_of).collect::<Option<_>>()?;
+    let places: Vec<PlaceKey<'_>> = natives.iter().map(place_of).collect::<Option<_>>()?;
     let order = match places.as_slice() {
         [one] => {
             let numbers: Vec<(u128, u32)> =
@@ -5238,9 +5274,9 @@ fn word_order(
                 .collect()
         }
         _ => {
-            if let Some(order) =
-                packed_order(tasks, groups, places.len(), want, |g, p| number(g, &places[p]))
-            {
+            if let Some(order) = packed_order(tasks, groups, places.len(), want, |p, range, out| {
+                column(&places[p], range, out);
+            }) {
                 return Some(order);
             }
             let n = places.len();
@@ -5261,22 +5297,24 @@ fn word_order(
     Some(order)
 }
 
-/// The order of `groups` groups by `keys` numbers of each, when the numbers less their least value fit together in 128 bits. `number` gives the number of a key of a group. A sort of one number for each group compares no memory, and groups with equal numbers stay in their order.
+/// The order of `groups` groups by `keys` numbers of each, when the numbers less their least value fit together in 128 bits. `column` puts the numbers of a key for a range of groups into a vector, so that the work for one key is one loop with no choice for each group. A sort of one number for each group compares no memory, and groups with equal numbers stay in their order.
 fn packed_order(
     tasks: Option<&dyn Tasks>,
     groups: usize,
     keys: usize,
     want: Want<'_>,
-    number: impl Fn(usize, usize) -> u128 + Sync,
+    column: impl Fn(usize, std::ops::Range<usize>, &mut Vec<u128>) + Sync,
 ) -> Option<Vec<usize>> {
     let mut least = vec![u128::MAX; keys];
     let mut most = vec![0_u128; keys];
     for (low, high) in on_parts(tasks, groups, |range| {
         let mut low = vec![u128::MAX; keys];
         let mut high = vec![0_u128; keys];
-        for g in range {
-            for k in 0..keys {
-                let n = number(g, k);
+        let mut numbers = Vec::with_capacity(range.len());
+        for k in 0..keys {
+            numbers.clear();
+            column(k, range.clone(), &mut numbers);
+            for &n in &numbers {
                 low[k] = low[k].min(n);
                 high[k] = high[k].max(n);
             }
@@ -5295,19 +5333,21 @@ fn packed_order(
     }
     let (bits, least) = (&bits, &least);
     let numbers: Vec<(u128, u32)> = concat(on_parts(tasks, groups, |range| {
-        range
-            .map(|g| {
-                let packed = (0..keys).fold(0_u128, |packed, k| {
-                    // A key of no bits has one value and adds nothing.
-                    if bits[k] == 0 {
-                        packed
-                    } else {
-                        packed.checked_shl(bits[k]).unwrap_or(0) | (number(g, k) - least[k])
-                    }
-                });
-                (packed, g as u32)
-            })
-            .collect()
+        let mut packed = vec![0_u128; range.len()];
+        let mut numbers = Vec::with_capacity(range.len());
+        for k in 0..keys {
+            // A key of no bits has one value and adds nothing. A key of 128 bits is the only key with bits, so the packed numbers before it are 0.
+            if bits[k] == 0 {
+                continue;
+            }
+            numbers.clear();
+            column(k, range.clone(), &mut numbers);
+            let (shift, least) = (bits[k], least[k]);
+            for (p, &n) in packed.iter_mut().zip(&numbers) {
+                *p = p.checked_shl(shift).unwrap_or(0) | (n - least);
+            }
+        }
+        packed.into_iter().zip(range).map(|(p, g)| (p, g as u32)).collect()
     }));
     Some(
         first_of(numbers, want, |n| n.1 as usize, Ord::cmp)
@@ -5562,6 +5602,13 @@ mod tests {
 
     use super::*;
 
+    /// The column of numbers for [`packed_order`] from `number`, which gives the number of a key of a group.
+    fn column_of(
+        number: impl Fn(usize, usize) -> u128 + Sync,
+    ) -> impl Fn(usize, std::ops::Range<usize>, &mut Vec<u128>) + Sync {
+        move |k, range, out| out.extend(range.map(|g| number(g, k)))
+    }
+
     /// Floats whose low bits are zero go into many buckets of a small table.
     /// A packed sort gives the order of a sort of the keys one after another, with equal keys in the order of their groups.
     #[test]
@@ -5584,13 +5631,15 @@ mod tests {
                     .cmp(&numbers[b * keys..(b + 1) * keys])
                     .then(a.cmp(&b))
             });
-            match packed_order(None, groups, keys, Want::All, number) {
+            match packed_order(None, groups, keys, Want::All, column_of(number)) {
                 Some(order) => assert_eq!(order, sorted, "round {round}"),
                 None => assert_eq!(range, 1 << 40, "round {round}"),
             }
             // With a limit, the order is the first groups of the order of all.
             let limit = round as usize % 7 * groups / 5;
-            if let Some(order) = packed_order(None, groups, keys, Want::First(limit), number) {
+            if let Some(order) =
+                packed_order(None, groups, keys, Want::First(limit), column_of(number))
+            {
                 assert_eq!(order, sorted[..limit.min(groups)], "round {round} limit {limit}");
             }
         }
@@ -5605,11 +5654,61 @@ mod tests {
             .map(|i| u128::from((i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 50) % 900)
             .collect();
         let number = |g: usize, k: usize| numbers[g * 3 + k];
-        let one = packed_order(None, groups, 3, Want::All, number).unwrap();
-        let many = packed_order(Some(&tasks), groups, 3, Want::All, number).unwrap();
+        let one = packed_order(None, groups, 3, Want::All, column_of(number)).unwrap();
+        let many = packed_order(Some(&tasks), groups, 3, Want::All, column_of(number)).unwrap();
         assert_eq!(one, many);
-        let first = packed_order(Some(&tasks), groups, 3, Want::First(1000), number).unwrap();
+        let first =
+            packed_order(Some(&tasks), groups, 3, Want::First(1000), column_of(number)).unwrap();
         assert_eq!(first, one[..1000]);
+    }
+
+    /// The order of the words of three keys, which packs the numbers of the keys of each group into one number, is the order of a sort of the keys one after another, also with negative values, nulls and keys in descending order.
+    #[test]
+    fn a_word_order_of_many_keys_is_the_order_of_a_sort() {
+        let mut seed = 5_u64;
+        for round in 0..120_u32 {
+            let groups = 1 + (round as usize * 37) % 700;
+            let mut next = || {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                seed >> 20
+            };
+            // Two keys with few values and nulls, and a third key that is the place of the group, so that no two groups have the same keys.
+            let mut words = Vec::with_capacity(groups * 4);
+            for g in 0..groups {
+                let mask = if next() % 5 == 0 { next() % 4 } else { 0 };
+                let first = i64::try_from(next() % 7).unwrap() - 3;
+                words.extend([first as u64, next() % 4, g as u64, mask]);
+            }
+            let shapes = [Shape::Int(oid::INT8), Shape::Int(oid::INT8), Shape::Int(oid::INT8)];
+            let natives = [
+                (0, round % 2 == 0, round % 3 == 0),
+                (1, round % 5 < 2, round % 7 < 3),
+                (2, round % 4 == 1, false),
+            ];
+            let key = |g: usize, k: usize| {
+                let null = words[g * 4 + 3] >> k & 1 == 1;
+                (!null).then(|| words[g * 4 + k] as i64)
+            };
+            let mut sorted: Vec<usize> = (0..groups).collect();
+            sorted.sort_by(|&a, &b| {
+                natives
+                    .iter()
+                    .map(|&(k, descending, nulls_first)| match (key(a, k), key(b, k)) {
+                        (None, None) => std::cmp::Ordering::Equal,
+                        (None, Some(_)) if nulls_first => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (Some(_), None) if nulls_first => std::cmp::Ordering::Greater,
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (Some(x), Some(y)) if descending => y.cmp(&x),
+                        (Some(x), Some(y)) => x.cmp(&y),
+                    })
+                    .find(|o| o.is_ne())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let order =
+                word_order(None, &words, &shapes, &[], &natives, groups, Want::All).unwrap();
+            assert_eq!(order, sorted, "round {round}");
+        }
     }
 
     /// The order of the words of the keys for [`Want::Top`], which finds a first part of the order by the first key, keeps the same groups in the heap of a top of counts as the order of all the groups, also with equal first keys, nulls and keys in descending order.
@@ -5682,9 +5781,9 @@ mod tests {
                 }
                 heap.finish(&mut cmp).unwrap()
             };
-            let all = packed_order(None, groups, 1, Want::All, number).unwrap();
+            let all = packed_order(None, groups, 1, Want::All, column_of(number)).unwrap();
             let want = Want::Top { counts: &counts, descending, bound };
-            let top = packed_order(None, groups, 1, want, number).unwrap();
+            let top = packed_order(None, groups, 1, want, column_of(number)).unwrap();
             assert!(top.len() <= all.len(), "round {round}");
             assert_eq!(heap(top), heap(all), "round {round}");
         }
