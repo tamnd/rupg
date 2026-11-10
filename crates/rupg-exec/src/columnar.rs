@@ -283,6 +283,12 @@ fn float_word(v: f64) -> u64 {
     }
 }
 
+/// The value of the code `code` of the dictionary of the column `stored`.
+fn stored_value(stored: &Stored, code: u32) -> Value {
+    let dict = stored.dict.as_ref().map(|d| d.get(code)).unwrap_or_default();
+    stored.kind.bytes_value(dict)
+}
+
 /// The strings of a column of codes.
 enum Dict {
     /// The dictionary of a column of the table.
@@ -294,10 +300,7 @@ enum Dict {
 impl Dict {
     fn value(&self, code: u32) -> Value {
         match self {
-            Dict::Stored(stored) => {
-                let dict = stored.dict.as_ref().map(|d| d.get(code)).unwrap_or_default();
-                stored.kind.bytes_value(dict)
-            }
+            Dict::Stored(stored) => stored_value(stored, code),
             Dict::Own(dict) => Kind::Text.bytes_value(dict.get(code)),
         }
     }
@@ -1590,6 +1593,8 @@ enum States {
     Shift,
     /// The results of a call of [`Method::Row`] for each group.
     Done(Vec<Value>),
+    /// For `min` or `max` of a text column of codes, the column and the extreme code of each group, or `u32::MAX` for no code. The result of a group is the text of its code.
+    Text(Arc<Stored>, Vec<u32>),
 }
 
 /// The codes that the scan keeps for `min` or `max` of a column of codes.
@@ -1685,6 +1690,10 @@ impl Results<'_> {
                 states[g].map_or(Value::Null, |v| int_value(call.agg.args[0].ty, v))
             }
             (Method::Row(_), States::Done(done)) => done[g].clone(),
+            (Method::Row(_), States::Text(stored, best)) => match best[g] {
+                u32::MAX => Value::Null,
+                code => stored_value(stored, code),
+            },
             _ => return Err(Error::internal("an aggregate has another state")),
         })
     }
@@ -2641,6 +2650,58 @@ fn top_safe(query: &Query) -> bool {
         .all(|(t, target)| query.sort.iter().any(|s| s.target == t) || safe(&target.expr, query))
 }
 
+/// True when `HAVING` gives the same result for a group in each order of the groups: it calls only built-in functions that are not volatile, and reads no subquery.
+fn same_in_each_order(having: &Expr) -> bool {
+    let fixed = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.volatile != b'v');
+    having
+        .find(0, &mut |e, _| match &e.kind {
+            // The aggregates ran before `HAVING`.
+            ExprKind::Agg(_) => None,
+            ExprKind::Func(f) if !fixed(f.oid) => Some(()),
+            ExprKind::NullIf { equal: func, .. } | ExprKind::Distinct { equal: func, .. }
+                if !fixed(*func) =>
+            {
+                Some(())
+            }
+            ExprKind::CoerceViaIo(..) | ExprKind::SubLink(_) => Some(()),
+            _ => None,
+        })
+        .is_none()
+}
+
+/// The order of the groups `subset` of `group_keys`, as in the order of all the groups, from a sort of only these groups.
+fn subset_order(
+    query: &Query,
+    session: &dyn Session,
+    group_keys: &GroupKeys<'_>,
+    subset: &[usize],
+) -> Result<Vec<usize>> {
+    let order = match group_keys {
+        GroupKeys::Words { words, shapes, dicts } => {
+            let width = shapes.len() + 1;
+            let some: Vec<u64> =
+                subset.iter().flat_map(|&g| &words[g * width..(g + 1) * width]).copied().collect();
+            let keys = GroupKeys::Words { words: &some, shapes, dicts };
+            group_order(query, session, &keys, None, subset.len(), false, Want::All)?
+        }
+        GroupKeys::Values(values) => {
+            let width = query.group.len();
+            let some: Vec<Value> =
+                subset.iter().flat_map(|&g| &values[g * width..(g + 1) * width]).cloned().collect();
+            group_order(
+                query,
+                session,
+                &GroupKeys::Values(&some),
+                None,
+                subset.len(),
+                false,
+                Want::All,
+            )?
+        }
+    };
+    Ok(order.into_iter().map(|i| subset[i]).collect())
+}
+
 /// True when `HAVING` can run before the first rows of the groups: it reads only the results of the aggregates, constants and parameters, no target can fail, and each group gives one row. Then the groups that pass come first, and the scan reads the first rows of only those groups.
 fn having_first(query: &Query) -> bool {
     fn of_aggs(expr: &Expr) -> bool {
@@ -3465,6 +3526,14 @@ fn grouped(
                     .iter()
                     .map(|e| e.map_or(u32::MAX, |w| (w & 0xffff_ffff) as u32))
                     .collect();
+                // `min` or `max` of one text is the text, so the result of a group reads its text only when the projection reads the group.
+                if keep.max.is_some()
+                    && let Dict::Stored(stored) = &scan.exec.dicts[keep.dict]
+                    && stored.kind == Kind::Text
+                {
+                    call.states = States::Text(Arc::clone(stored), std::mem::take(&mut keep.best));
+                    continue;
+                }
                 call.states = States::Row(Vec::new());
                 grow(call, groups, 0, params, session, cache, &empty)?;
                 continue;
@@ -3955,7 +4024,60 @@ fn grouped(
         Some(ranked) if !heap => distinct_top(session, ranked, offset)?,
         _ => None,
     };
-    let mut order = if quick.is_some() {
+    // With no sort, the limit of the query takes the first groups, and the groups after them are not evaluated, as `LIMIT` over `HashAggregate` does.
+    let needed = match count {
+        Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
+            offset.saturating_add(count)
+        }
+        _ => usize::MAX,
+    };
+    // The reads of `HAVING` of only aggregates, and its run for each group of `order` up to the groups that the limit needs, as in the projection.
+    let having_read: Vec<*const Aggref> = match (having_first, &query.having) {
+        (true, Some(having)) => {
+            let mut read = Vec::new();
+            having.find(0, &mut |e, _| {
+                if let ExprKind::Agg(agg) = &e.kind {
+                    read.push(std::ptr::from_ref(&**agg));
+                }
+                None::<()>
+            });
+            read
+        }
+        _ => Vec::new(),
+    };
+    let having_groups = |having: &Expr, order: &mut dyn Iterator<Item = usize>| {
+        let mut eval = Eval::new(params, session, &empty, cache, &[]);
+        eval.tuple = &[scan::NONE];
+        let mut passed = Vec::new();
+        for (n, g) in order.enumerate() {
+            if passed.len() >= needed {
+                break;
+            }
+            crate::interrupt(session, n)?;
+            eval.group = Group { aggs: results.group(g, Some(&having_read))?, ..Group::default() };
+            if eval.eval(having)? == Value::Bool(true) {
+                passed.push(g);
+            }
+        }
+        Ok::<_, Error>(passed)
+    };
+    // A sort of the groups gives the groups that pass `HAVING` in the same order as a sort of only these groups. With no limit of the groups, the same groups pass in each order when `HAVING` gives the same result in each order, so `HAVING` runs first in the order of the first rows, and the sort has only the groups that pass. A `HAVING` that gives an error runs again in the order of the sort, which gives the error of the first group of that order.
+    let passed_first = match &query.having {
+        Some(having)
+            if having_first
+                && ranked.is_none()
+                && !heap
+                && needed == usize::MAX
+                && same_in_each_order(having)
+                && session.hash_tables(query).is_none_or(|t| t.group.is_none()) =>
+        {
+            having_groups(having, &mut (0..groups)).ok()
+        }
+        _ => None,
+    };
+    let mut order = if let Some(passed) = &passed_first {
+        subset_order(query, session, &keys_of_groups, passed)?
+    } else if quick.is_some() {
         Vec::new()
     } else if heap {
         // The groups that can change the heap of the sort, in the order of their first rows, which is the order of all the groups.
@@ -4000,37 +4122,11 @@ fn grouped(
         read_spots(scan, kept_columns, &spots, &wanted, &mut firsts)?;
         first_rows = Firsts::Of(wanted);
     }
-    // With no sort, the limit of the query takes the first groups, and the groups after them are not evaluated, as `LIMIT` over `HashAggregate` does.
-    let needed = match count {
-        Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
-            offset.saturating_add(count)
-        }
-        _ => usize::MAX,
-    };
     if having_first && let Some(having) = &query.having {
-        // `HAVING` runs once for each group in the order of the groups, up to the groups that the limit needs, as in the projection.
-        let mut read: Vec<*const Aggref> = Vec::new();
-        having.find(0, &mut |e, _| {
-            if let ExprKind::Agg(agg) = &e.kind {
-                read.push(std::ptr::from_ref(&**agg));
-            }
-            None::<()>
-        });
-        let mut eval = Eval::new(params, session, &empty, cache, &[]);
-        eval.tuple = &[scan::NONE];
-        let mut passed = Vec::new();
-        for (n, &g) in order.iter().enumerate() {
-            if passed.len() >= needed {
-                break;
-            }
-            crate::interrupt(session, n)?;
-            eval.group = Group { aggs: results.group(g, Some(&read))?, ..Group::default() };
-            if eval.eval(having)? == Value::Bool(true) {
-                passed.push(g);
-            }
+        // `HAVING` runs once for each group in the order of the groups, unless it ran before the sort.
+        if passed_first.is_none() {
+            order = having_groups(having, &mut order.iter().copied())?;
         }
-        drop(eval);
-        order = passed;
         let mut wanted = order.clone();
         wanted.sort_unstable();
         firsts = vec![Vec::new(); wanted.len()];
@@ -4958,7 +5054,7 @@ fn grow(
             s.resize(groups, None);
         }
         States::Distinct(s) => s.resize_with(groups, FxSet::default),
-        States::Shift | States::Done(_) => {}
+        States::Shift | States::Done(_) | States::Text(..) => {}
         States::Row(s) => {
             if let Method::Row(agg) = &call.method {
                 let eval = Eval::new(params, session, empty, cache, &[]);

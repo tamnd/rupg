@@ -65,3 +65,62 @@ SELECT 2
 fields currval:20:8:-1
 row 56
 SELECT 1
+> CREATE TABLE gt (k text, v text)
+CREATE TABLE
+> INSERT INTO gt SELECT 'k' || (i % 37), (i % 37) || '-' || i FROM generate_series(1, 300000) i
+INSERT 0 300000
+> ANALYZE gt
+ANALYZE
+> SELECT k, min(v), max(v) FROM gt GROUP BY k HAVING count(*) > 8108
+fields k@gt.1:25:-1:-1,min:25:-1:-1,max:25:-1:-1
+row k1,1-1,1-99975
+row k2,2-100013,2-99976
+row k3,3-100014,3-99977
+row k4,4-100015,4-99978
+SELECT 4
+> SET enable_hashagg = off
+SET
+> SELECT k, min(v), count(*) FROM gt GROUP BY k HAVING count(*) > 8108
+fields k@gt.1:25:-1:-1,min:25:-1:-1,count:20:8:-1
+row k1,1-1,8109
+row k2,2-100013,8109
+row k3,3-100014,8109
+row k4,4-100015,8109
+SELECT 4
+> SELECT k, count(*) FROM gt GROUP BY k HAVING max(v) > '30'
+fields k@gt.1:25:-1:-1,count:20:8:-1
+row k30,8108
+row k31,8108
+row k32,8108
+row k33,8108
+row k34,8108
+row k35,8108
+row k36,8108
+row k4,8109
+row k5,8108
+row k6,8108
+row k7,8108
+row k8,8108
+row k9,8108
+SELECT 13
+> SELECT k, min(v) AS m FROM gt GROUP BY k HAVING max(v) > '30' ORDER BY m DESC LIMIT 4
+fields k@gt.1:25:-1:-1,m:25:-1:-1
+row k9,9-100020
+row k8,8-100019
+row k7,7-100018
+row k6,6-100017
+SELECT 4
+> SELECT k FROM gt GROUP BY k HAVING count(*) > 9000
+fields k@gt.1:25:-1:-1
+SELECT 0
+> SELECT k FROM gt GROUP BY k HAVING CASE WHEN min(v) < '1' THEN 2147483647 + count(*)::int ELSE 1 / (count(*) - count(*))::int END > 0
+fields k@gt.1:25:-1:-1
+ERROR 22003 integer out of range
+> SELECT k FROM gt GROUP BY k HAVING CASE WHEN min(v) < '1' THEN 2147483647 + count(*)::int ELSE 1 END > 0
+fields k@gt.1:25:-1:-1
+ERROR 22003 integer out of range
+> SELECT k FROM gt GROUP BY k HAVING 1 / (count(*) - 8108) + (2147483647 + (count(*) - 8108)::int) > 0
+fields k@gt.1:25:-1:-1
+ERROR 22012 division by zero
+> RESET enable_hashagg
+RESET
