@@ -157,6 +157,12 @@ const UNKNOWN: u32 = u32::MAX;
 /// The bit of an item of [`Dfa::fast`] for a closure that has `Match`.
 const MATCHED: u32 = 1 << 31;
 
+/// The bit of an item of [`Dfa::fast`] that stops the loop of the known steps: the step goes to the state with no threads, or each character keeps the state, and the full loop does the work. [`UNKNOWN`] has the bit.
+const STOP: u32 = 1 << 30;
+
+/// The bits of an item of [`Dfa::fast`] that give the state.
+const STATE: u32 = STOP - 1;
+
 impl Dfa {
     fn intern(&mut self, mut pcs: Vec<usize>) -> u32 {
         pcs.sort_unstable();
@@ -164,7 +170,7 @@ impl Dfa {
         if let Some(&id) = self.ids.get(pcs.as_slice()) {
             return id;
         }
-        let id = u32::try_from(self.states.len()).unwrap_or(0) & !MATCHED;
+        let id = u32::try_from(self.states.len()).unwrap_or(0) & STATE;
         let pcs: Box<[usize]> = pcs.into();
         self.ids.insert(pcs.clone(), id);
         self.states.push(pcs);
@@ -447,28 +453,26 @@ impl Program {
         let mut pos = start;
         while pos < s.len() {
             if ends_only {
-                // The steps that the DFA knows for ASCII characters before the last character, with no other work. A step that keeps a state goes to the full loop when the state still learns or when each character keeps it, so that the walk can skip the characters.
+                // The steps that the DFA knows for ASCII characters before the last character, with no other work. An item with [`STOP`] goes to the full loop.
                 // An ASCII character is the last character when it is the last byte.
-                while pos + 1 < s.len() && (state != dead || dfa.restart) {
+                let last = s.len() - 1;
+                while pos < last {
                     let c = s[pos];
                     if c >= 128 {
                         break;
                     }
                     let known = dfa.fast[state as usize * 128 + c as usize];
-                    if known == UNKNOWN {
+                    if known & (STOP | MATCHED) == 0 {
+                        state = known;
+                        pos += 1;
+                        continue;
+                    }
+                    if known & STOP != 0 {
                         break;
                     }
-                    if known == state {
-                        let at = state as usize;
-                        if dfa.skips[at] < LEARN
-                            || (dfa.loops[at] == u128::MAX && dfa.same[at] == 3)
-                        {
-                            break;
-                        }
-                    }
-                    state = known & !MATCHED;
+                    state = known & STATE;
                     pos += 1;
-                    if known & MATCHED != 0 && hit(pos) {
+                    if hit(pos) {
                         return Some(pos);
                     }
                 }
@@ -518,10 +522,10 @@ impl Program {
                 matched
             } else if known == UNKNOWN {
                 let known = self.learn(dfa, state, c, key);
-                state = known & !MATCHED;
+                state = known & STATE;
                 known & MATCHED != 0
             } else {
-                state = known & !MATCHED;
+                state = known & STATE;
                 known & MATCHED != 0
             };
             if matched && hit(next) {
@@ -537,18 +541,28 @@ impl Program {
         let next = self.step(dfa, state, c);
         let (closed, matched) = self.closure(dfa, next, 0);
         let known = closed | if matched { MATCHED } else { 0 };
+        // The loop of the known steps stops at a step to the state with no threads.
+        let stop =
+            if !dfa.restart && dfa.ends.is_some_and(|(_, dead)| dead == closed) { STOP } else { 0 };
+        let at = state as usize;
         if c < 128 {
-            dfa.fast[state as usize * 128 + c as usize] = known;
+            dfa.fast[at * 128 + c as usize] = known | stop;
             if known == state {
-                dfa.loops[state as usize] |= 1 << c;
+                dfa.loops[at] |= 1 << c;
             }
         } else {
-            dfa.wide.insert((state, key), known);
+            dfa.wide.insert((state, key), known | stop);
             if key == WIDE && known == state {
-                dfa.same[state as usize] = 3;
+                dfa.same[at] = 3;
             }
         }
-        known
+        if known == state && dfa.loops[at] == u128::MAX && dfa.same[at] == 3 {
+            // Each character keeps the state, and the full loop goes to the last character at once.
+            for item in &mut dfa.fast[at * 128..at * 128 + 128] {
+                *item |= STOP;
+            }
+        }
+        known | stop
     }
 
     /// The items of a closed state for each ASCII character, and for the characters that are not ASCII when its sets give the same answer for each of them, so that a state that each character keeps is known.
