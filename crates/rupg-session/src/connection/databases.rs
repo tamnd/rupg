@@ -306,6 +306,7 @@ impl Connection {
         let Some(lease) = held.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
+        self.store.lock_database_rows(self.pid, [row.oid]);
         let mut work = Roles::clone(&lease.roles);
         work.databases.retain(|c| c.oid != row.oid);
         work.databases.push(rupg_analyze::database_change(row));

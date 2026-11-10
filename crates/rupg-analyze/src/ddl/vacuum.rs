@@ -33,7 +33,7 @@ pub fn vacuum_relations(
     rels: &List,
     env: &dyn Env,
     vacuum: bool,
-    analyze: bool,
+    (analyze, skip_locked): (bool, bool),
     permitted: &dyn Fn(u32) -> bool,
     warnings: &mut Vec<Error>,
 ) -> Result<Vec<VacuumRel>> {
@@ -45,8 +45,17 @@ pub fn vacuum_relations(
         let Node::VacuumRelation(vrel) = node else { continue };
         let Some(rv) = &vrel.relation else { continue };
         let relid = lookup(&an, rv)?;
-        // `expand_vacuum_rel` takes `AccessShareLock` for the lookup and lets it go before `vacuum_rel` locks each relation in a transaction of its own, so the statement waits only for a transaction that holds `AccessExclusiveLock`.
-        env.wait_for_lockers(&[relid], 1)?;
+        // `expand_vacuum_rel` takes `AccessShareLock` for the lookup and lets it go before `vacuum_rel` locks each relation in a transaction of its own, so the statement waits only for a transaction that holds `AccessExclusiveLock`. With `SKIP_LOCKED` the statement skips the relation instead, with a warning.
+        if skip_locked {
+            if !env.relation_lock_nowait(relid, 1)? {
+                let what = if vacuum { "vacuum" } else { "analyze" };
+                let name = rv.relname.as_deref().unwrap_or_default();
+                warnings.push(lock_not_available(what, name));
+                continue;
+            }
+        } else {
+            env.wait_for_lockers(&[relid], 1)?;
+        }
         let permitted = permitted(relid);
         if !permitted {
             warnings.push(vacuum_denied(&class_name(env, relid), vacuum));
@@ -126,6 +135,11 @@ fn check_columns(env: &dyn Env, relid: u32, rel: &str, va_cols: &List) -> Result
 }
 
 /// The warning of `vacuum_rel` or `analyze_rel` for a relation that is not a table.
+/// The warning of `expand_vacuum_rel` and `vacuum_open_relation` for a relation that `SKIP_LOCKED` skips, as `what`, `vacuum` or `analyze`.
+pub fn lock_not_available(what: &str, name: &str) -> Error {
+    Error::new(SqlState::WARNING, format!("skipping {what} of \"{name}\" --- lock not available"))
+}
+
 fn skipping(name: &str, what: &str) -> Error {
     Error::new(
         SqlState::WARNING,

@@ -1113,7 +1113,11 @@ impl Connection {
         let in_acl = |owner: u32, acl: Option<&[String]>| {
             owner != roleid && acl.is_some_and(|acl| rupg_analyze::acl_roles(acl).contains(&roleid))
         };
-        for (row, catalog) in self.store.catalogs() {
+        for (mut row, catalog) in self.store.catalogs() {
+            // The rows of `pg_database` with the changes of the transaction, as a `REVOKE` before the `DROP ROLE`.
+            if let Some(change) = work.databases.iter().find(|c| c.oid == row.oid) {
+                rupg_analyze::apply_database_change(change, &mut row);
+            }
             if row.owner == roleid {
                 objects.push((row.oid, PG_DATABASE, 0, b'o', format!("database {}", row.name)));
             }

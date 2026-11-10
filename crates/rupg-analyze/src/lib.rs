@@ -75,9 +75,9 @@ pub use ddl::{
     acl_dependents, acl_roles, apply_database_change, apply_tablespace_change, attnums,
     copy_filter, copy_insert, copy_relation, copy_target, database_change, define, find_library,
     function_body, function_body_for, function_script, function_sqlbody, has_refresh_index,
-    inline_body, is_definition, lock_table, object_address, owned_objects, policy_targets,
-    policy_tree, reindex_options, rewrite_insert, rule_tree, tablespace_change, tablespace_options,
-    trigger_when, vacuum_denied, vacuum_relations,
+    inline_body, is_definition, lock_not_available, lock_table, object_address, owned_objects,
+    policy_targets, policy_tree, reindex_options, rewrite_insert, rule_tree, tablespace_change,
+    tablespace_options, trigger_when, vacuum_denied, vacuum_relations,
 };
 pub use exclusion::{Exclusion, exclusions};
 pub use expr::{
@@ -285,6 +285,15 @@ pub trait Env {
     fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
         let _ = (relid, mode);
         Ok(())
+    }
+    /// `ConditionalLockRelationOid`: [`Env::relation_lock`] when no other transaction holds a mode that conflicts with `mode`, and else false with no wait. A session with no server takes no locks and gives true.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the lock manager.
+    fn relation_lock_nowait(&self, relid: u32, mode: u8) -> Result<bool> {
+        let _ = (relid, mode);
+        Ok(true)
     }
     /// `WaitForLockersMultiple`: the wait for the end of each other transaction that holds a lock that conflicts with `mode` on a relation of `relids` when the wait starts. The transactions that lock the relations later do not hold up the wait. A session with no other sessions does not wait.
     ///
