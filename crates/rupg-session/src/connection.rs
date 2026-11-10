@@ -1835,9 +1835,15 @@ impl Connection {
                 "cannot execute TRUNCATE TABLE in a read-only transaction",
             ));
         }
+        // The committed catalog before the wait for the lock of the catalog, when a commit of another transaction came during the wait.
+        let mut before_wait = None;
         if self.lease.borrow().is_none() {
+            let before = self.committed_view().0;
             let lease = self.lease_catalog()?;
             *self.lease.borrow_mut() = Some(lease);
+            if !Arc::ptr_eq(&before, &self.committed_view().0) {
+                before_wait = Some(before);
+            }
         }
         // A change of the catalog writes rows of the catalog, so the transaction gets an ID.
         self.transaction_id(true);
@@ -1874,6 +1880,16 @@ impl Connection {
             work.omit_detached_here(|xid| view.is_none_or(|view| view.sees(xid)));
         }
         let mut defined = rupg_analyze::define(node, text, &reader, &mut work, role);
+        if let Some(before) = before_wait
+            && let Err(error) = &defined.result
+            && let Some(class) = concurrently_dropped(node, error, &before, &self.catalog())
+        {
+            // `LockNotPinnedObject` of `recordDependencyOn`: PostgreSQL finds the objects of the statement before it waits for their locks, and an object that a concurrent `DROP` removed during the wait gives this error. The statement found its objects after the wait, so a missing object that the catalog before the wait has is one that went away during the wait.
+            defined.result = Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("referenced {class} was concurrently dropped"),
+            ));
+        }
         drop(reader);
         work.keep_detached();
         if let Some(top) = &defined.top_level
@@ -3377,6 +3393,51 @@ fn character_position(text: &str, at: usize) -> usize {
     text.as_bytes()[..end].iter().filter(|&&b| b & 0xc0 != 0x80).count() + (at - end) + 1
 }
 
+/// The class of `getObjectClassDescription` of the object that the error of the lookup of a name in a definition `node` does not find, when the catalog `before` the wait for the lock of the catalog has an object of the class and the name that the catalog `now` does not have: the object that a concurrent `DROP` removed, for the error of `LockNotPinnedObject`. `None` for another error.
+fn concurrently_dropped(
+    node: &Node,
+    error: &Error,
+    before: &Catalog,
+    now: &Catalog,
+) -> Option<&'static str> {
+    if matches!(node, Node::CreateExtensionStmt(_) | Node::AlterExtensionStmt(_)) {
+        return None;
+    }
+    let state = error.state();
+    let message = error.message().strip_suffix(" does not exist")?;
+    let (class, rest) = [
+        (SqlState::INVALID_SCHEMA_NAME, "schema"),
+        (SqlState::UNDEFINED_FUNCTION, "function"),
+        (SqlState::UNDEFINED_OBJECT, "type"),
+        (SqlState::UNDEFINED_OBJECT, "foreign-data wrapper"),
+        (SqlState::UNDEFINED_OBJECT, "server"),
+        (SqlState::UNDEFINED_OBJECT, "collation"),
+    ]
+    .into_iter()
+    .find_map(|(code, class)| {
+        let rest = message.strip_prefix(class)?.strip_prefix(' ')?;
+        (code == state).then_some((class, rest))
+    })?;
+    // The name of the message, with no arguments, no qualification and no quotes.
+    let name = rest.split('(').next().unwrap_or(rest).trim_matches('"');
+    let name = name.rsplit_once("\".\"").map_or(name, |(_, last)| last);
+    let name = name.rsplit_once('.').map_or(name, |(_, last)| last).trim_matches('"');
+    let objects = |catalog: &Catalog| -> Vec<u32> {
+        match class {
+            "schema" => catalog.schemas().filter(|o| o.name == name).map(|o| o.oid).collect(),
+            "function" => catalog.functions().filter(|o| o.name == name).map(|o| o.oid).collect(),
+            "type" => catalog.types().filter(|o| o.name == name).map(|o| o.oid).collect(),
+            "foreign-data wrapper" => {
+                catalog.fdws().filter(|o| o.name == name).map(|o| o.oid).collect()
+            }
+            "server" => catalog.servers().filter(|o| o.name == name).map(|o| o.oid).collect(),
+            _ => catalog.collations().filter(|o| o.name == name).map(|o| o.oid).collect(),
+        }
+    };
+    let now = objects(now);
+    objects(before).iter().any(|oid| !now.contains(oid)).then_some(class)
+}
+
 #[cfg(test)]
 mod tests {
     use rupg_wire::{Backend, CANCEL_KEY_LEN};
@@ -3384,6 +3445,23 @@ mod tests {
     use super::*;
 
     const PROTOCOL_3_0: u32 = 3 << 16;
+
+    #[test]
+    fn a_name_that_went_away_during_the_wait_was_concurrently_dropped() {
+        let sql = "CREATE FUNCTION s.f() RETURNS int AS 'select 1' LANGUAGE sql";
+        let (list, _) = rupg_sql::parse(sql).unwrap();
+        let (node, _) = statements(&list, sql)[0];
+        let now = crate::system::catalog();
+        let mut before = Catalog::clone(&now);
+        before.create_schema("s", 10).unwrap();
+        let missing = Error::new(SqlState::INVALID_SCHEMA_NAME, "schema \"s\" does not exist");
+        assert_eq!(concurrently_dropped(node, &missing, &before, &now), Some("schema"));
+        // A name that the catalog before the wait did not have either is only missing.
+        let never = Error::new(SqlState::INVALID_SCHEMA_NAME, "schema \"t\" does not exist");
+        assert_eq!(concurrently_dropped(node, &never, &before, &now), None);
+        let other = Error::new(SqlState::UNDEFINED_TABLE, "relation \"s\" does not exist");
+        assert_eq!(concurrently_dropped(node, &other, &before, &now), None);
+    }
 
     /// Runs the cases on a thread with the stack of a backend. The parser of a debug build needs more than the stack of a test thread.
     #[allow(clippy::disallowed_methods)] // A test thread, not a task of the engine.
