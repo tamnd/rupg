@@ -5,8 +5,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
 
-use rupg_func::{Backend, BackendState, Client, Process, Progress, RelationCounts, Ssl, Writes};
+use rupg_func::{
+    Backend, BackendState, Client, FunctionCounts, Process, Progress, RelationCounts, Ssl, Writes,
+};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
@@ -32,6 +35,87 @@ pub(crate) struct Pending {
     pub(crate) aborted: Writes,
     /// All the writes that did not roll back, which tell the writes of a subtransaction from the writes before it.
     all: Writes,
+}
+
+/// The sequential scans of one relation that a transaction counted, and the rows that they read.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Scans {
+    /// `numscans`.
+    pub(crate) scans: i64,
+    /// `tuples_returned`.
+    pub(crate) returned: i64,
+}
+
+/// The calls of one function that the session counted and did not report, `PgStat_FunctionCounts`, with the times as `instr_time`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Calls {
+    pub(crate) calls: i64,
+    pub(crate) total: Duration,
+    pub(crate) own: Duration,
+}
+
+impl Calls {
+    /// The counts as the statistics keep them, with the times in microseconds.
+    pub(crate) fn counts(&self) -> FunctionCounts {
+        let micros = |time: Duration| i64::try_from(time.as_micros()).unwrap_or(i64::MAX);
+        FunctionCounts {
+            calls: self.calls,
+            total: micros(self.total),
+            own: micros(self.own),
+            reset: None,
+        }
+    }
+}
+
+/// `stats_fetch_consistency`: how a transaction reads the counters of the statistics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Fetch {
+    /// `none`: each read reads the counters of the server.
+    None,
+    /// `cache`: the first read of an object keeps its counters for the transaction.
+    #[default]
+    Cache,
+    /// `snapshot`: the first read keeps the counters of all the objects of the database for the transaction.
+    Snapshot,
+}
+
+/// The counters of one kind of objects that a transaction read, as [`Fetch`] keeps them.
+#[derive(Debug, Default)]
+enum Kept<T> {
+    /// No read yet.
+    #[default]
+    Empty,
+    /// The counters of each object that the transaction read, or `None` for an object with no entry.
+    Cache(HashMap<u32, Option<T>>),
+    /// The counters of all the objects of the database.
+    Snapshot(Arc<HashMap<u32, T>>),
+}
+
+impl<T: Copy> Kept<T> {
+    /// `pgstat_fetch_entry`: the counters of the object `oid`, from what the transaction kept, or from `load` for an object that it did not read yet and for `stats_fetch_consistency = none`.
+    fn read(&mut self, oid: u32, fetch: Fetch, load: impl FnOnce() -> Option<T>) -> Option<T> {
+        match self {
+            Kept::Snapshot(all) => all.get(&oid).copied(),
+            _ if fetch == Fetch::None => load(),
+            Kept::Cache(cache) => *cache.entry(oid).or_insert_with(load),
+            Kept::Empty => {
+                let counts = load();
+                *self = Kept::Cache(HashMap::from([(oid, counts)]));
+                counts
+            }
+        }
+    }
+}
+
+/// What a transaction read of the cumulative statistics, which its end or `pg_stat_clear_snapshot` drops.
+#[derive(Debug, Default)]
+struct Reads {
+    relations: Kept<RelationCounts>,
+    functions: Kept<FunctionCounts>,
+    /// `blks_zeroed` of the SLRU `notify`, a statistic of a fixed amount, which `cache` also keeps.
+    notify_zeroed: Option<i64>,
+    /// True after the first read with `snapshot`, which took the counters of all the objects and the fixed statistics.
+    snapshot: bool,
 }
 
 /// The process ID of the first process of the server. The process IDs of the sessions start at 1001.
@@ -116,11 +200,15 @@ pub(crate) struct Activity {
     /// The OID of the database of the session.
     database: u32,
     /// The sequential scans of each relation that the transaction counted. The end of the transaction reports them to the store.
-    scans: RefCell<BTreeMap<u32, i64>>,
+    scans: RefCell<BTreeMap<u32, Scans>>,
     /// The rows that the transaction wrote in each relation. The end of the transaction reports them to the store.
     writes: RefCell<BTreeMap<u32, Pending>>,
-    /// The snapshot of the counters of the relations that the transaction reads, after its first read.
-    relations: RefCell<Option<Arc<HashMap<u32, RelationCounts>>>>,
+    /// The counters of the statistics that the transaction read.
+    reads: RefCell<Reads>,
+    /// The calls of each function that the session counted. The end of the transaction reports them to the store.
+    functions: RefCell<HashMap<u32, Calls>>,
+    /// `fcu->save_f_total_time`: for each counted call that runs, from the outer call in, the time of the counted calls that it made.
+    nested: RefCell<Vec<Duration>>,
     /// `debug_query_string`: the text of the message that runs, in full. It is `None` while the session waits for the client.
     pub(crate) query: Option<String>,
     /// The buffer of the last text of [`Activity::query`], which the next statement fills again with no new allocation.
@@ -175,12 +263,59 @@ impl Activity {
 
     /// `pgstat_count_heap_scan`: counts a sequential scan of a relation.
     pub(crate) fn count_scan(&self, relation: u32) {
-        *self.scans.borrow_mut().entry(relation).or_default() += 1;
+        self.scans.borrow_mut().entry(relation).or_default().scans += 1;
+    }
+
+    /// `pgstat_count_heap_getnext`: counts the rows that a sequential scan of a relation read.
+    pub(crate) fn count_returned(&self, relation: u32, rows: usize) {
+        self.scans.borrow_mut().entry(relation).or_default().returned += count(rows);
     }
 
     /// The sequential scans of a relation that the transaction counted.
     pub(crate) fn pending_scans(&self, relation: u32) -> i64 {
-        self.scans.borrow().get(&relation).copied().unwrap_or(0)
+        self.scans.borrow().get(&relation).map_or(0, |s| s.scans)
+    }
+
+    /// The rows that the sequential scans of the transaction read in a relation.
+    pub(crate) fn pending_returned(&self, relation: u32) -> i64 {
+        self.scans.borrow().get(&relation).map_or(0, |s| s.returned)
+    }
+
+    /// `pgstat_init_function_usage` and `pgstat_end_function_usage`: runs a call of the function `func` and counts it when it ends with no error. The time of the call counts in the total time of the counted call that made it, and not in its own time.
+    pub(crate) fn count_call<T>(
+        &self,
+        clock: &dyn rupg_platform::Clock,
+        func: u32,
+        call: impl FnOnce() -> T,
+        ok: fn(&T) -> bool,
+    ) -> T {
+        self.nested.borrow_mut().push(Duration::ZERO);
+        let start = clock.monotonic();
+        let result = call();
+        let total = clock.monotonic().saturating_sub(start);
+        let mut nested = self.nested.borrow_mut();
+        let inner = nested.pop().unwrap_or_default();
+        if ok(&result) {
+            if let Some(outer) = nested.last_mut() {
+                *outer += total;
+            }
+            let mut functions = self.functions.borrow_mut();
+            let calls = functions.entry(func).or_default();
+            calls.calls += 1;
+            calls.total += total;
+            calls.own += total.saturating_sub(inner);
+        }
+        result
+    }
+
+    /// The calls of a function that the session counted and did not report.
+    pub(crate) fn pending_function(&self, func: u32) -> Option<FunctionCounts> {
+        self.functions.borrow().get(&func).map(Calls::counts)
+    }
+
+    /// The calls of the functions that the session counted, which the end of the transaction reports.
+    pub(crate) fn take_functions(&self) -> HashMap<u32, Calls> {
+        self.functions.take()
     }
 
     /// `pgstat_count_heap_insert`, `pgstat_count_heap_update` and `pgstat_count_heap_delete`: counts the rows that a statement wrote in a relation.
@@ -226,17 +361,59 @@ impl Activity {
         self.writes.take()
     }
 
-    /// The counters of a relation from the snapshot of the transaction. The first read takes the snapshot.
-    pub(crate) fn relation_counts(&self, store: &Store, relation: u32) -> Option<RelationCounts> {
-        let mut snapshot = self.relations.borrow_mut();
-        let counts = snapshot.get_or_insert_with(|| Arc::new(store.relation_counts(self.database)));
-        counts.get(&relation).copied()
+    /// What the transaction read of the statistics. The first read with `snapshot` takes the counters of all the objects of the database and the fixed statistics, as `pgstat_build_snapshot`.
+    fn reads(&self, store: &Store, fetch: Fetch) -> std::cell::RefMut<'_, Reads> {
+        let mut reads = self.reads.borrow_mut();
+        if fetch == Fetch::Snapshot && !reads.snapshot {
+            reads.relations = Kept::Snapshot(Arc::new(store.relation_counts(self.database)));
+            reads.functions = Kept::Snapshot(Arc::new(store.all_function_counts(self.database)));
+            reads.notify_zeroed = Some(store.listeners().zeroed());
+            reads.snapshot = true;
+        }
+        reads
     }
 
-    /// `pgstat_clear_snapshot`: drops the snapshots of the table of the sessions and of the counters of the relations.
+    /// The counters of a relation as `fetch` reads them in the transaction.
+    pub(crate) fn relation_counts(
+        &self,
+        store: &Store,
+        relation: u32,
+        fetch: Fetch,
+    ) -> Option<RelationCounts> {
+        let mut reads = self.reads(store, fetch);
+        reads.relations.read(relation, fetch, || store.one_relation_counts(self.database, relation))
+    }
+
+    /// The counters of a function as `fetch` reads them in the transaction.
+    pub(crate) fn function_counts(
+        &self,
+        store: &Store,
+        func: u32,
+        fetch: Fetch,
+    ) -> Option<FunctionCounts> {
+        let mut reads = self.reads(store, fetch);
+        reads.functions.read(func, fetch, || store.function_counts(self.database, func))
+    }
+
+    /// `blks_zeroed` of the SLRU `notify` as `fetch` reads it in the transaction.
+    pub(crate) fn notify_zeroed(&self, store: &Store, fetch: Fetch) -> i64 {
+        let mut reads = self.reads(store, fetch);
+        match reads.notify_zeroed {
+            Some(zeroed) if fetch != Fetch::None || reads.snapshot => zeroed,
+            _ => {
+                let zeroed = store.listeners().zeroed();
+                if fetch != Fetch::None {
+                    reads.notify_zeroed = Some(zeroed);
+                }
+                zeroed
+            }
+        }
+    }
+
+    /// `pgstat_clear_snapshot`: drops the snapshots of the table of the sessions and of the counters of the relations and the functions.
     pub(crate) fn clear(&self) {
         self.snapshot.borrow_mut().take();
-        self.relations.borrow_mut().take();
+        self.reads.take();
     }
 }
 
@@ -452,6 +629,29 @@ impl Connection {
         self.known.borrow_mut().of(&self.settings.borrow()).counts
     }
 
+    /// `pgstat_track_functions`: 0 for `none`, 1 for `pl` and 2 for `all`.
+    pub(crate) fn functions_tracked(&self) -> u8 {
+        self.known.borrow_mut().of(&self.settings.borrow()).functions
+    }
+
+    /// `pgstat_fetch_consistency`.
+    pub(crate) fn fetch_consistency(&self) -> Fetch {
+        self.known.borrow_mut().of(&self.settings.borrow()).fetch
+    }
+
+    /// A call of the function `func` in a language that `track_functions` counts from the value `level`: 1 for PL/pgSQL and 2 for SQL.
+    pub(crate) fn tracked_call<T>(
+        &self,
+        func: u32,
+        level: u8,
+        call: impl FnOnce() -> rupg_common::Result<T>,
+    ) -> rupg_common::Result<T> {
+        if self.functions_tracked() < level {
+            return call();
+        }
+        self.activity.count_call(&*self.clock, func, call, rupg_common::Result::is_ok)
+    }
+
     /// `pgstat_track_activities`.
     fn tracked(&self) -> bool {
         self.known.borrow_mut().of(&self.settings.borrow()).tracked
@@ -471,6 +671,13 @@ impl Connection {
         let scans = self.activity.scans.take();
         if !scans.is_empty() {
             self.store.report_scans(self.database_oid, &scans, query::now(&*self.clock));
+        }
+        let functions = self.activity.take_functions();
+        if !functions.is_empty() {
+            let catalog = self.store.committed(self.database_oid);
+            self.store.report_functions(self.database_oid, &functions, |func| {
+                catalog.function(func).is_some()
+            });
         }
         self.report_transaction(None);
     }

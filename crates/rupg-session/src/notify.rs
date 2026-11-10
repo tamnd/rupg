@@ -1,6 +1,7 @@
 //! `LISTEN`, `UNLISTEN` and `NOTIFY`, as `async.c` runs them. A transaction keeps its actions and its notifications until it ends. At a commit the actions change the channels of the session, then each notification goes to the queue of each session of the database that listens. A session sends the notifications of its queue on the channels that it listens on before its next `ReadyForQuery` outside of a transaction block.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
@@ -92,11 +93,18 @@ struct Listener {
 #[derive(Debug, Default)]
 pub(crate) struct Listeners {
     table: Mutex<(BTreeMap<i32, Listener>, u64)>,
+    /// `blks_zeroed` of the SLRU `notify`: the pages of the queue that the entries started.
+    zeroed: AtomicI64,
 }
 
 impl Listeners {
     fn table(&self) -> MutexGuard<'_, (BTreeMap<i32, Listener>, u64)> {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `blks_zeroed` of the SLRU `notify`.
+    pub(crate) fn zeroed(&self) -> i64 {
+        self.zeroed.load(Ordering::Relaxed)
     }
 
     /// `asyncQueueUsage`: the part of the pages of the queue that the notifications use, from the page of `QUEUE_TAIL`, the first notification that a listener did not read, to the page of `QUEUE_HEAD`.
@@ -143,6 +151,9 @@ impl Listeners {
         if table.get(&pid).is_some_and(|l| l.channels.is_empty() && l.queue.is_empty()) {
             table.remove(&pid);
         }
+        // `asyncQueueAddEntries` zeroes the first page of the queue, and then each page that the head moves to.
+        let first = u64::from(*head == 0 && !pending.notifies.is_empty());
+        let start_page = *head / PAGE;
         for (channel, payload) in pending.notifies {
             // `asyncQueueAddEntries`: an entry has its length aligned to 8 bytes, and an entry that does not fit in the rest of a page goes at the start of the next page.
             let size = (ENTRY + (channel.len() + payload.len()) as u64).next_multiple_of(8);
@@ -161,6 +172,10 @@ impl Listeners {
                     });
                 }
             }
+        }
+        let pages = first + *head / PAGE - start_page;
+        if pages > 0 {
+            self.zeroed.fetch_add(i64::try_from(pages).unwrap_or(i64::MAX), Ordering::Relaxed);
         }
     }
 

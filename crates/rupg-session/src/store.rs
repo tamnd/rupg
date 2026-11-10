@@ -7,13 +7,13 @@ use std::time::Duration;
 
 use rupg_catalog::{Catalog, Database, SequenceData, Tablespace};
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::{Backend, RelationCounts};
+use rupg_func::{Backend, FunctionCounts, RelationCounts};
 use rupg_pgcatalog::roles::{DatabaseChange, Roles, TablespaceChange};
 use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
 use crate::auth::AuthFiles;
-use crate::connection::Pending;
+use crate::connection::{Calls, Pending, Scans};
 use crate::guc::Source;
 use crate::heap::Heap;
 use crate::notify::Listeners;
@@ -63,6 +63,8 @@ pub struct Store {
     changed: Mutex<HashMap<(u32, u32), SequenceData>>,
     /// The counters of the relations in the cumulative statistics, by the OID of the database and the OID of the relation.
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
+    /// The counters of the functions in the cumulative statistics, by the OID of the database and the OID of the function.
+    functions: Mutex<HashMap<(u32, u32), FunctionCounts>>,
     /// The rows of the tables.
     heap: Heap,
     /// The file of the image of the store, which a checkpoint writes, or `None` for a store with no file.
@@ -831,13 +833,80 @@ impl Store {
     }
 
     /// `pgstat_relation_flush_cb`: adds the sequential scans that a transaction counted to the counters of the relations of its database. `time` is the end of the transaction, which becomes `lastscan` when it is later than the last scan.
-    pub(crate) fn report_scans(&self, database: u32, scans: &BTreeMap<u32, i64>, time: i64) {
+    pub(crate) fn report_scans(&self, database: u32, scans: &BTreeMap<u32, Scans>, time: i64) {
         let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
-        for (&relation, &count) in scans {
+        for (&relation, scans) in scans {
             let counts = relations.entry((database, relation)).or_default();
-            counts.numscans += count;
-            counts.lastscan = Some(counts.lastscan.map_or(time, |last| last.max(time)));
+            counts.tuples_returned += scans.returned;
+            if scans.scans > 0 {
+                counts.numscans += scans.scans;
+                counts.lastscan = Some(counts.lastscan.map_or(time, |last| last.max(time)));
+            }
         }
+    }
+
+    /// `pgstat_function_flush_cb`: adds the calls that a session counted to the counters of the functions of its database. A function that `exists` does not tell, which a committed `DROP FUNCTION` dropped, gets no entry again.
+    pub(crate) fn report_functions(
+        &self,
+        database: u32,
+        calls: &HashMap<u32, Calls>,
+        exists: impl Fn(u32) -> bool,
+    ) {
+        let mut functions = self.functions.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&func, calls) in calls {
+            if !exists(func) {
+                continue;
+            }
+            let add = calls.counts();
+            let counts = functions.entry((database, func)).or_default();
+            counts.calls += add.calls;
+            counts.total += add.total;
+            counts.own += add.own;
+        }
+    }
+
+    /// The counters of a function of a database, or `None` for a function with no entry.
+    pub(crate) fn function_counts(&self, database: u32, func: u32) -> Option<FunctionCounts> {
+        let functions = self.functions.lock().unwrap_or_else(PoisonError::into_inner);
+        functions.get(&(database, func)).copied()
+    }
+
+    /// The counters of the functions of a database, for the snapshot of a transaction.
+    pub(crate) fn all_function_counts(&self, database: u32) -> HashMap<u32, FunctionCounts> {
+        let functions = self.functions.lock().unwrap_or_else(PoisonError::into_inner);
+        functions
+            .iter()
+            .filter(|((db, _), _)| *db == database)
+            .map(|(&(_, func), &c)| (func, c))
+            .collect()
+    }
+
+    /// `pgstat_reset_counters` for `None`: sets the counters of the relations and the functions of a database to 0 at `time`. `pgstat_reset` for an object: sets the counters of the relation or the function to 0, when it has an entry.
+    pub(crate) fn reset_counters(&self, database: u32, object: Option<u32>, time: i64) {
+        let chosen = |db: u32, oid: u32| db == database && object.is_none_or(|o| o == oid);
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&(db, oid), counts) in relations.iter_mut() {
+            if chosen(db, oid) {
+                *counts =
+                    RelationCounts { stat_reset_time: Some(time), ..RelationCounts::default() };
+            }
+        }
+        drop(relations);
+        let mut functions = self.functions.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&(db, oid), counts) in functions.iter_mut() {
+            if chosen(db, oid) {
+                *counts = FunctionCounts { reset: Some(time), ..FunctionCounts::default() };
+            }
+        }
+    }
+
+    /// `pgstat_drop_transactional` at the commit of a change of the catalog of a database: drops the counters of the relations and the functions that the catalog no longer has.
+    pub(crate) fn drop_counters(&self, database: u32, catalog: &Catalog) {
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        relations.retain(|&(db, oid), _| db != database || catalog.relation(oid).is_some());
+        drop(relations);
+        let mut functions = self.functions.lock().unwrap_or_else(PoisonError::into_inner);
+        functions.retain(|&(db, oid), _| db != database || catalog.function(oid).is_some());
     }
 
     /// `AtEOXact_PgStat_Relations` and `pgstat_relation_flush_cb`: adds the rows that a transaction wrote to the counters of the relations of its database. Each write counts, also after a rollback. A commit adds the rows that the transaction inserted to the live rows and its updates and deletes to the dead rows. A rollback adds the rows that it inserted and updated to the dead rows. After a `TRUNCATE` that committed, the live and the dead rows start again from 0.
@@ -908,6 +977,16 @@ impl Store {
         }
         counts.last_analyze_time = Some(time);
         counts.analyze_count += 1;
+    }
+
+    /// The counters of a relation of a database, or `None` for a relation with no entry.
+    pub(crate) fn one_relation_counts(
+        &self,
+        database: u32,
+        relation: u32,
+    ) -> Option<RelationCounts> {
+        let relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        relations.get(&(database, relation)).copied()
     }
 
     /// The counters of the relations of a database, for the snapshot of a transaction.

@@ -1,6 +1,6 @@
 //! The functions of the cumulative statistics for one object, from `pgstatfuncs.c`: the counters of a relation or an index, of a function and of a database, and the `xact` forms that read the counts of the transaction.
 //!
-//! rupg keeps the sequential scans of a relation, their count `numscans` and the time of the last one `lastscan`, and the counters of the rows that the transactions wrote: `tuples_inserted`, `tuples_updated`, `tuples_deleted`, `live_tuples`, `dead_tuples`, `mod_since_analyze` and `ins_since_vacuum`, and the time and the count of the `VACUUM` and the `ANALYZE` commands of a relation. The other functions give the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp and for each value of a function. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
+//! rupg keeps the sequential scans of a relation, their count `numscans`, the time of the last one `lastscan` and the rows that they read `tuples_returned`, the calls of a function and their times, the time of the last reset of the counters of an object, and the counters of the rows that the transactions wrote: `tuples_inserted`, `tuples_updated`, `tuples_deleted`, `live_tuples`, `dead_tuples`, `mod_since_analyze` and `ins_since_vacuum`, and the time and the count of the `VACUUM` and the `ANALYZE` commands of a relation. The other functions give the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp. A function has an entry after its first counted call, which `track_functions` decides. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
 
 use rupg_common::Result;
 use rupg_types::Value;
@@ -83,6 +83,8 @@ pub struct RelationCounts {
     pub numscans: i64,
     /// `lastscan`: the end of the last transaction that scanned the relation, in microseconds since 2000-01-01 UTC, or `None` before the first scan.
     pub lastscan: Option<i64>,
+    /// `tuples_returned`: the rows that the sequential scans of the relation read.
+    pub tuples_returned: i64,
     /// `tuples_inserted`, `tuples_updated` and `tuples_deleted`: the rows that the transactions wrote, also the transactions that rolled back.
     pub written: Writes,
     /// `live_tuples`: the rows that the committed transactions inserted and did not delete.
@@ -101,6 +103,21 @@ pub struct RelationCounts {
     pub last_analyze_time: Option<i64>,
     /// `analyze_count`: the count of the `ANALYZE` commands that processed the relation.
     pub analyze_count: i64,
+    /// `stat_reset_time`: the time of the last reset of the counters of the relation, or `None` before the first one.
+    pub stat_reset_time: Option<i64>,
+}
+
+/// The counters of a function in the statistics, `PgStat_StatFuncEntry`, or the calls of a session that it did not report yet, `PgStat_FunctionCounts`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FunctionCounts {
+    /// `numcalls`: the calls that ended with no error.
+    pub calls: i64,
+    /// `total_time`: the time of the calls in microseconds, with the time of the calls that they made.
+    pub total: i64,
+    /// `self_time`: the time of the calls in microseconds, without the time of the counted calls that they made.
+    pub own: i64,
+    /// `stat_reset_timestamp`: the time of the last reset of the counters of the function, or `None` before the first one.
+    pub reset: Option<i64>,
 }
 
 /// The rows that a transaction inserted, updated and deleted in one relation, as `pgstat_count_heap_insert`, `pgstat_count_heap_update` and `pgstat_count_heap_delete` count them.
@@ -261,6 +278,90 @@ fn xact_deleted(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     xact_counter(call, args, |w| w.deleted)
 }
 
+/// `pg_stat_get_tuples_returned`: the rows that the sequential scans of a relation read.
+fn tuples_returned(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_counter(call, args, |c| c.tuples_returned)
+}
+
+/// `pg_stat_get_xact_tuples_returned`: the rows that the sequential scans of the transaction read.
+fn xact_returned(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Int8(call.session.pending_returned(object(args)?)))
+}
+
+/// `pg_stat_get_stat_reset_time`: the time of the last reset of the counters of a relation, or null.
+fn relation_reset_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    relation_stamp(call, args, |c| c.stat_reset_time)
+}
+
+/// A value of the counters of a function, from the statistics or from the calls that the session did not report, or null for a function with no entry.
+fn function_value(
+    call: &Call<'_>,
+    args: &[Value],
+    pending: bool,
+    read: fn(&FunctionCounts) -> Value,
+) -> Result<Value> {
+    let func = object(args)?;
+    let counts = if pending {
+        call.session.pending_function(func)
+    } else {
+        call.session.function_counts(func)
+    };
+    Ok(counts.as_ref().map_or(Value::Null, read))
+}
+
+/// A time in microseconds as milliseconds.
+#[expect(clippy::cast_precision_loss, reason = "a time as float8, as PostgreSQL gives it")]
+fn millis(micros: i64) -> Value {
+    Value::Float8(micros as f64 / 1000.0)
+}
+
+/// `pg_stat_get_function_calls`.
+fn function_calls(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, false, |c| Value::Int8(c.calls))
+}
+
+/// `pg_stat_get_function_total_time`, in milliseconds.
+fn function_total_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, false, |c| millis(c.total))
+}
+
+/// `pg_stat_get_function_self_time`, in milliseconds.
+fn function_self_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, false, |c| millis(c.own))
+}
+
+/// `pg_stat_get_function_stat_reset_time`.
+fn function_reset_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, false, |c| c.reset.map_or(Value::Null, Value::TimestampTz))
+}
+
+/// `pg_stat_get_xact_function_calls`.
+fn xact_function_calls(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, true, |c| Value::Int8(c.calls))
+}
+
+/// `pg_stat_get_xact_function_total_time`.
+fn xact_function_total_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, true, |c| millis(c.total))
+}
+
+/// `pg_stat_get_xact_function_self_time`.
+fn xact_function_self_time(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    function_value(call, args, true, |c| millis(c.own))
+}
+
+/// `pg_stat_reset`: sets the counters of the relations and the functions of the database of the session to 0. The result is `void`.
+fn reset(call: &Call<'_>, _: &[Value]) -> Result<Value> {
+    call.session.reset_counters(None);
+    Ok(Value::text(""))
+}
+
+/// `pg_stat_reset_single_table_counters` and `pg_stat_reset_single_function_counters`: sets the counters of one object to 0, when it has an entry. The result is `void`.
+fn reset_single(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    call.session.reset_counters(Some(object(args)?));
+    Ok(Value::text(""))
+}
+
 /// A total time of an object with no entry.
 fn total_time(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     object(args)?;
@@ -289,8 +390,13 @@ fn force_next_flush(_: &Call<'_>, _: &[Value]) -> Result<Value> {
 
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
-    if src == "pg_stat_force_next_flush" {
-        return Some(force_next_flush);
+    match src {
+        "pg_stat_force_next_flush" => return Some(force_next_flush),
+        "pg_stat_reset" => return Some(reset),
+        "pg_stat_reset_single_table_counters" | "pg_stat_reset_single_function_counters" => {
+            return Some(reset_single);
+        }
+        _ => {}
     }
     let name = src.strip_prefix("pg_stat_get_")?;
     if let Some(name) = name.strip_prefix("db_") {
@@ -304,8 +410,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     }
     if let Some(name) = name.strip_prefix("xact_") {
         return Some(match name {
-            "function_calls" | "function_total_time" | "function_self_time" => none,
+            "function_calls" => xact_function_calls,
+            "function_total_time" => xact_function_total_time,
+            "function_self_time" => xact_function_self_time,
             "numscans" => xact_numscans,
+            "tuples_returned" => xact_returned,
             "tuples_inserted" => xact_inserted,
             "tuples_updated" => xact_updated,
             "tuples_deleted" => xact_deleted,
@@ -314,9 +423,13 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         });
     }
     Some(match name {
-        "function_calls" | "function_total_time" | "function_self_time" => none,
-        "function_stat_reset_time" => none,
+        "function_calls" => function_calls,
+        "function_total_time" => function_total_time,
+        "function_self_time" => function_self_time,
+        "function_stat_reset_time" => function_reset_time,
         "numscans" => numscans,
+        "tuples_returned" => tuples_returned,
+        "stat_reset_time" => relation_reset_time,
         "lastscan" => lastscan,
         "tuples_inserted" => tuples_inserted,
         "tuples_updated" => tuples_updated,

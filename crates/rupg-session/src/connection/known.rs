@@ -1,5 +1,6 @@
 //! The values of the settings that each statement reads, kept for one [`Settings::generation`], so that the path of a statement does not look up the settings again while no value changed.
 
+use super::activity::Fetch;
 use crate::guc::{self, Setting, Settings};
 
 /// The value of `off` in `synchronous_commit_options`.
@@ -15,6 +16,10 @@ pub(super) struct Known {
     pub(super) tracked: bool,
     /// `track_counts`.
     pub(super) counts: bool,
+    /// `track_functions`: 0 for `none`, 1 for `pl` and 2 for `all`.
+    pub(super) functions: u8,
+    /// `stats_fetch_consistency`.
+    pub(super) fetch: Fetch,
     /// True when `compute_query_id` is `on` or `regress`.
     pub(super) query_id: bool,
     /// `track_activity_query_size - 1`, the most bytes of the text of a statement in the table.
@@ -59,6 +64,16 @@ impl Known {
             application: super::activity::application_name(settings),
             tracked: !off(guc::known!("track_activities")),
             counts: !off(guc::known!("track_counts")),
+            functions: match settings.get_of(guc::known!("track_functions")).as_deref() {
+                Some("pl") => 1,
+                Some("all") => 2,
+                _ => 0,
+            },
+            fetch: match settings.get_of(guc::known!("stats_fetch_consistency")).as_deref() {
+                Some("none") => Fetch::None,
+                Some("snapshot") => Fetch::Snapshot,
+                _ => Fetch::Cache,
+            },
             query_id: matches!(
                 settings.get_of(guc::known!("compute_query_id")).as_deref(),
                 Some("on" | "regress")
