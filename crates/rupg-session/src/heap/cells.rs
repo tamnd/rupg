@@ -128,8 +128,39 @@ impl Frozen {
     }
 }
 
+/// The length of each version of the rows `cells` with no nulls before the toaster, with the types of fixed length `fixed` and the storage `storage` of the columns of the table. A `numeric` value is a `varlena` value whose length comes from its digits.
+fn cell_lens(
+    cells: &Cells,
+    fixed: &[pages::Fixed],
+    storage: &[pages::Storage],
+) -> Option<Vec<usize>> {
+    let numeric: Vec<Option<Vec<usize>>> = cells
+        .columns
+        .iter()
+        .map(|(kind, values)| match (kind, values) {
+            (Kind::Numeric(scale), Values::Ints(values)) => Some(numeric_ends(*scale, values)),
+            _ => None,
+        })
+        .collect();
+    let columns =
+        cells.columns.iter().zip(&numeric).map(|((kind, values), numeric)| match values {
+            Values::Bytes(_, ends) => (width(*kind), Some(&ends[..])),
+            Values::Ints(_) => (width(*kind), numeric.as_deref()),
+        });
+    plain_lens(columns, cells.rows, fixed, storage)
+}
+
 impl Heap {
-    /// [`Heap::insert`] of the rows of a load as cells, from the row `start` up to the first row that is longer than `TOAST_TUPLE_THRESHOLD`, for a table with no unique key. The versions that went in as values go into the encoded columns first. The values go into the encoded columns of the table on the threads of the server, and each new version has no values. The result is the number of rows, which is zero when the row `start` is long, so that the caller inserts that row as values for the toaster. `None` when the table cannot take the cells, with the heap as it was, so that the caller inserts the rows as values.
+    /// The length of the version of each row of `cells` in the table `key`, and true for a row that is longer than `TOAST_TUPLE_THRESHOLD`, which the toaster takes. `None` when the table cannot take the cells.
+    pub(crate) fn cell_sizes(&self, key: (u32, u32), cells: &Cells) -> Option<Vec<(usize, bool)>> {
+        let mut state = self.state();
+        let State { tables, .. } = &mut *state;
+        let table = tables.append(key);
+        let lens = cell_lens(cells, &table.fixed, &table.storage)?;
+        Some(lens.into_iter().map(|len| (max_align(len), len > TOAST_THRESHOLD)).collect())
+    }
+
+    /// [`Heap::insert_copy`] of the rows of a load as cells, each with the length of its version and of its line in `sized`, from the row `start` up to the first row that is longer than `TOAST_TUPLE_THRESHOLD`, for a table with no unique key. The versions that went in as values go into the encoded columns first. The values go into the encoded columns of the table on the threads of the server, and each new version has no values. The result is the number of rows, which is zero when the row `start` is long, so that the caller inserts that row as values for the toaster. `None` when the table cannot take the cells, with the heap as it was, so that the caller inserts the rows as values.
     ///
     /// # Errors
     ///
@@ -139,9 +170,12 @@ impl Heap {
         relation: u32,
         view: &View,
         cells: &Cells,
-        start: usize,
+        (start, sized): (usize, &[(usize, usize)]),
+        use_fsm: bool,
     ) -> Result<Option<u64>> {
-        if start >= cells.rows || cells.columns.iter().any(|(_, values)| values.len() != cells.rows)
+        if start >= cells.rows
+            || sized.len() != cells.rows
+            || cells.columns.iter().any(|(_, values)| values.len() != cells.rows)
         {
             return Ok(None);
         }
@@ -154,21 +188,7 @@ impl Heap {
         if !table.keys.is_empty() {
             return Ok(None);
         }
-        // A `numeric` value is a `varlena` value whose length comes from its digits.
-        let numeric: Vec<Option<Vec<usize>>> = cells
-            .columns
-            .iter()
-            .map(|(kind, values)| match (kind, values) {
-                (Kind::Numeric(scale), Values::Ints(values)) => Some(numeric_ends(*scale, values)),
-                _ => None,
-            })
-            .collect();
-        let columns =
-            cells.columns.iter().zip(&numeric).map(|((kind, values), numeric)| match values {
-                Values::Bytes(_, ends) => (width(*kind), Some(&ends[..])),
-                Values::Ints(_) => (width(*kind), numeric.as_deref()),
-            });
-        let Some(lens) = plain_lens(columns, cells.rows, &table.fixed, &table.storage) else {
+        let Some(lens) = cell_lens(cells, &table.fixed, &table.storage) else {
             return Ok(None);
         };
         let end = lens[start..]
@@ -224,13 +244,12 @@ impl Heap {
             }
             from = to;
         }
-        // `RelationGetBufferForTuple` with the `BulkInsertState` of the statement, as `Table::add` places each version.
-        let bulk = table.bulk.filter(|&made| made == (xmin, cmin));
+        // `heap_multi_insert` with the `BulkInsertState` of the copy places the versions of each batch of the copy.
+        let rows = (&sized[start..end], &sized[end..]);
+        let places = table.pages.place_copy(rows, (xmin, cmin), use_fsm, table.save_free);
         let mut ids = Vec::with_capacity(end - start);
         let mut moved = false;
-        for (row, &len) in (first..).zip(&lens[start..end]) {
-            let len = max_align(len);
-            let (page, slot) = table.pages.place(len, None, bulk, table.save_free);
+        for ((row, &(len, _)), (page, slot)) in (first..).zip(&sized[start..end]).zip(places) {
             let tid = pages::tid(table.pages.generation, page, slot);
             table.made += 1;
             let len = u16::try_from(len).unwrap_or(u16::MAX);

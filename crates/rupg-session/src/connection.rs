@@ -1220,9 +1220,9 @@ impl Connection {
         conflict: Changed,
     ) -> Result<Vec<u64>, Error> {
         match conflict {
-            Changed::WaitKey { holder, index, used } => {
+            Changed::WaitKey { holder, index, used, waits } => {
                 let name = info.unique.get(index).map_or("", |key| key.name.as_str());
-                let tid = tid_text(used.last().copied().unwrap_or_default());
+                let tid = tid_text(waits);
                 let context = format!("while inserting index tuple {tid} in relation \"{name}\"");
                 self.reader().wait_xact(view.xid, holder, &context)?;
                 Ok(used)
