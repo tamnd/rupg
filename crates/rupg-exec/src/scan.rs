@@ -294,7 +294,7 @@ impl Tables {
                 names = names.map(|n| (0..n.len()).filter(live).map(|i| n[i].clone()).collect());
                 types.retain(|&t| t != 0);
             }
-            return Value::Record(Box::new(Record { types, values, names }));
+            return Value::Record(Box::new(Record::named(types, values, names)));
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);
         let Some(column) = self.place(var.relation, column) else { return Value::Null };

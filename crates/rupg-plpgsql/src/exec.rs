@@ -2163,7 +2163,7 @@ impl Exec<'_> {
                     Ok(())
                 }
                 Value::Record(record) => {
-                    let Record { types, values, names } = *record;
+                    let Record { types, values, names, .. } = *record;
                     let columns: Vec<Field> = match names {
                         Some(names) => types
                             .iter()

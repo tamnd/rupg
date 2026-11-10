@@ -10,6 +10,7 @@ mod error;
 mod generated;
 mod ids;
 pub mod persist;
+pub mod row_clock;
 mod sort;
 mod sqlstate;
 

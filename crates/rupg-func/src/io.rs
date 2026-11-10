@@ -294,6 +294,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         return multirange_out(ty, ranges, session, out);
     }
     if let Value::Record(record) = value {
+        check_row_type(ty, record, session)?;
         return record_out(record, session, out);
     }
     if let Value::TsVector(lexemes) = value {
@@ -495,6 +496,39 @@ fn record_out(record: &Record, session: &dyn Session, out: &mut Vec<u8>) -> Resu
         out.push(b'"');
     }
     out.push(b')');
+    Ok(())
+}
+
+/// The check that a composite datum is read with the row type that formed it: after `ALTER TABLE ... ALTER COLUMN ... TYPE` or `ALTER TYPE ... ALTER ATTRIBUTE ... TYPE`, a value that was formed before, such as a constant of a cached plan, a row of a cursor or a variable of a function, cannot be read with the new row type. The row type is the one of the latest catalog, as `AcceptInvalidationMessages` gives it after a lock that waited for the `ALTER`. A record that a function formed again from the fields of an old value, such as a variable of PL/pgSQL, keeps the old types of the fields.
+///
+/// # Errors
+///
+/// `42804` for a record formed before a column of the row type changed type, or with a field whose type is not the type of the column.
+pub fn check_row_type(ty: u32, record: &Record, session: &dyn Session) -> Result<()> {
+    if ty == oid::RECORD {
+        return Ok(());
+    }
+    let Some(relid) = builtin::type_by_oid(ty).map(|row| row.relid).filter(|&relid| relid != 0)
+    else {
+        return Ok(());
+    };
+    let latest = session.latest_catalog();
+    let Some(catalog) = latest.as_deref().or_else(|| session.catalog()) else { return Ok(()) };
+    let Some(rel) = catalog.relation(relid) else { return Ok(()) };
+    // A row type with another number of columns, after `ADD COLUMN` or `DROP COLUMN`, reads the fields that it has, and a row type with a dropped column may have a new column where the record has the field of the dropped one.
+    let changed = !rel.columns.iter().any(|c| c.dropped)
+        && rel.columns.len() == record.types.len()
+        && rel.columns.iter().zip(&record.types).any(|(column, &field)| {
+            field != oid::UNKNOWN && base_type(column.ty) != base_type(field)
+        });
+    let formed_before =
+        record.formed < rupg_common::row_clock::now() && catalog.row_altered(relid) > record.formed;
+    if changed || formed_before {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "row type of datum tuple was altered after the datum's creation",
+        ));
+    }
     Ok(())
 }
 

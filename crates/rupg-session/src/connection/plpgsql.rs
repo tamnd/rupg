@@ -628,6 +628,8 @@ impl Connection {
             }
         } else if let Some(done) = self.async_statement(node) {
             done.map(|_| 0)
+        } else if let Node::LockStmt(stmt) = node {
+            self.lock(stmt, false).map(|_| 0)
         } else if let Node::CreatedbStmt(_) = node {
             Err(self.prevent_in_call("CREATE DATABASE"))
         } else if let Node::DropdbStmt(_) = node {

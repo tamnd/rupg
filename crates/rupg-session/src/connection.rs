@@ -2232,9 +2232,11 @@ impl Connection {
         Ok(())
     }
 
-    /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`, and the locks of the relations in the mode of the statement. The transaction holds the locks until it ends.
-    fn lock(&self, stmt: &LockStmt) -> Result<Done, Error> {
-        utility::require_block(&self.transaction, "LOCK TABLE")?;
+    /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`, and the locks of the relations in the mode of the statement. The transaction holds the locks until it ends. `top_level` is false for a statement of a function, which `CheckTransactionBlock` lets run outside a block.
+    fn lock(&self, stmt: &LockStmt, top_level: bool) -> Result<Done, Error> {
+        if top_level {
+            utility::require_block(&self.transaction, "LOCK TABLE")?;
+        }
         let reader = self.reader();
         let mode = u8::try_from(stmt.mode).unwrap_or(8);
         let mut allowed =
@@ -2636,7 +2638,7 @@ impl Connection {
                 self.define(node, statement, &mut notices)
             } else if let Node::LockStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
-                self.lock(stmt)
+                self.lock(stmt, true)
             } else if let Some(done) = self.async_statement(node) {
                 drop(self.portals.get_mut().close(b""));
                 done
@@ -6395,6 +6397,12 @@ mod tests {
     #[test]
     fn record_array() {
         big_stack(|| script(include_str!("connection/record_array.test")));
+    }
+
+    /// A composite datum formed before `ALTER TABLE ... ALTER COLUMN ... TYPE`, in a holdable cursor and in a variable of PL/pgSQL, gives an error when it is read, also after a change to the type that the column had, and `LOCK` runs in a function outside a transaction block. `connection/row_type_altered.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_type_altered() {
+        big_stack(|| script(include_str!("connection/row_type_altered.test")));
     }
 
     /// An expression in `FROM` that gives a composite type: casts, `COALESCE` and `NULLIF`, the row type of a table, a nested composite type, aliases of the columns, the errors for too many aliases and a column definition list, a null value, `WITH ORDINALITY`, `ROWS FROM`, `LATERAL`, and the text of views with casts of rows. `connection/composite_from.test` is the output of PostgreSQL 19 for the same script in a new database.
