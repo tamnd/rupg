@@ -4504,7 +4504,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_limit_stops.test")));
     }
 
-    /// A grouped vector scan runs a `HAVING` of only aggregates before it reads the first rows of the groups. `HAVING` runs once for each group up to the groups that `LIMIT` needs, as in Postgres, so the same groups pass and give the same errors. A volatile `HAVING`, such as a call of `nextval`, goes to the engine of rows, which also calls it once for each group.
+    /// A grouped vector scan runs a `HAVING` of only aggregates before it reads the first rows of the groups. `HAVING` runs once for each group up to the groups that `LIMIT` needs, as in Postgres, so the same groups pass and give the same errors. A volatile `HAVING`, such as a call of `nextval`, goes to the engine of rows, which also calls it once for each group. With a sort of the groups and no limit, `HAVING` runs before the sort and the sort has only the groups that pass, with the order of Postgres, `min` and `max` of a text, and the error of the first group of the sort when the groups give different errors.
     #[test]
     fn group_having_first() {
         big_stack(|| script_tasks(include_str!("connection/group_having_first.test")));
