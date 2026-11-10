@@ -5829,7 +5829,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/type_alter.test")));
     }
 
-    /// `ALTER TYPE` with `ADD ATTRIBUTE`, `DROP ATTRIBUTE`, `ALTER ATTRIBUTE` and `RENAME ATTRIBUTE` for composite types: the stored values that get a null for a new attribute and lose a dropped one, also in arrays, domains and other composite types, the columns that stop a change of the type of an attribute, and the errors for types that would hold themselves. `connection/type_attribute.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `ALTER TYPE` with `ADD ATTRIBUTE`, `DROP ATTRIBUTE`, `ALTER ATTRIBUTE` and `RENAME ATTRIBUTE` for composite types: the stored values that get a null for a new attribute and lose a dropped one, also in arrays, domains and other composite types, the columns that stop a change of the type of an attribute, the defaults of the arguments of a function and the query of a view that stop it as PostgreSQL 19 does, and the errors for types that would hold themselves. `connection/type_attribute.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn type_attribute() {
         big_stack(|| script(include_str!("connection/type_attribute.test")));
