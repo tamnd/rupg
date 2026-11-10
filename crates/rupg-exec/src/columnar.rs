@@ -3660,7 +3660,8 @@ fn grouped(
                     }
                     ids.push(id);
                 }
-                seen += sel.len();
+                // The rows of the table up to the end of this batch, also the rows that the conditions or the zones took out, so that the rate of new groups is a rate for each row of the table and not for each row that passes.
+                seen = batch.segment * ROWS + batch.vector * VECTOR + batch.rows;
                 // When the next batch can fill the map, the map makes room for the groups that the rate of new groups gives, so it does not grow many times.
                 if map.room() < sel.len() {
                     let rate = (groups * rows / seen.max(1)).min(rows);
