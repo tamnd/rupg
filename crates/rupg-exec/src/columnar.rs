@@ -3372,8 +3372,9 @@ fn grouped(
         _ => None,
     };
     let mut found = None;
-    if let Some((tasks, (plan, derived, dicts))) = parallel {
+    if let Some((tasks, (mut plan, derived, dicts))) = parallel {
         session.interrupted()?;
+        plan.groups = session_groups(session, query);
         // The words of a key from a map are codes of its own dictionary.
         for (k, dict) in dicts {
             scan.exec.dicts.push(Dict::Own(Box::new(dict)));
@@ -4488,7 +4489,7 @@ fn parallel_plan(
             _ => code_map(exec, tasks, from, kind)?,
         });
     }
-    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps }, derived, dicts))
+    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps, groups: 0 }, derived, dicts))
 }
 
 /// The plan of [`groups::run`] of [`parallel_plan`], the keys that come from the words of other keys, and the dictionary of each key, by its place in the keys, whose codes a map of [`key_map`] gives.

@@ -14,8 +14,10 @@ use rupg_summary::zone::{Test, Verdict, has_code};
 
 use super::{Decoded, DecodedData, FxMap, WordTable, decode, passes};
 
-/// The number of parts of the hashes of the keys.
+/// The most parts of the hashes of the keys, and the parts of a scan with no estimate of its groups.
 const PARTS: usize = 256;
+/// The number of groups of a part of a scan by the estimate of the groups, as [`parts_for`] gives the parts.
+const PART_GROUPS: usize = 4096;
 
 /// The most groups of the table of a task before the task moves the groups into the buffers of the parts. The table then fits in the cache of one core.
 const LOCAL: usize = 1 << 13;
@@ -205,6 +207,8 @@ pub(super) struct Plan {
     pub(super) filters: Vec<(usize, Test)>,
     /// The columns of integers that the scan computes from columns of codes. The place of a map is the number of the stored columns plus its index here, and a key or a fold reads it as a stored column of integers.
     pub(super) maps: Vec<Map>,
+    /// The number of groups of the scan by the estimate of the plan, or 0 for no estimate. The scan puts the groups into fewer parts for fewer groups.
+    pub(super) groups: usize,
 }
 
 /// A column of integers from a column of codes: the value of a row is the value of its code, and a row with a null code is null. The values are not negative.
@@ -551,10 +555,18 @@ pub(super) fn int(decoded: &Decoded, i: usize) -> i64 {
     }
 }
 
-/// The part of the hashes of a key with the hash `hash`. The multiply makes the bits of the part other bits than the low bits that the tables read.
+/// The part of the hashes of a key with the hash `hash`, of `parts` parts, which is a power of two more than 1. The multiply makes the bits of the part other bits than the low bits that the tables read.
 #[inline]
-fn part_of(hash: u64) -> usize {
-    (hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - PARTS.trailing_zeros())) as usize
+fn part_of(hash: u64, parts: usize) -> usize {
+    (hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - parts.trailing_zeros())) as usize
+}
+
+/// The number of parts of the groups of a scan on `jobs` tasks, for the estimate `groups` of its number of groups. A part has about [`PART_GROUPS`] groups, so that the table of the merge of a part stays in the cache of a core. There is a part for each task at least, so that each task merges a part, and [`PARTS`] parts for no estimate. Each part costs each task the buffers of the part, and the merge of the part costs a table, so a scan of few groups uses few parts.
+fn parts_for(groups: usize, jobs: usize) -> usize {
+    if groups == 0 {
+        return PARTS;
+    }
+    groups.div_ceil(PART_GROUPS).max(jobs).next_power_of_two().clamp(2, PARTS)
 }
 
 /// The part of the state of `fold` that the row `i` gives, from the decoded columns `decoded`.
@@ -631,7 +643,7 @@ fn push_direct<const W: usize>(
             run.1 += 1;
             continue;
         }
-        let p = if parts.len() == 1 { 0 } else { part_of(WordTable::<W>::hash(key)) };
+        let p = if parts.len() == 1 { 0 } else { part_of(WordTable::<W>::hash(key), parts.len()) };
         parts[p].push(key, base + sel[n] as u64);
         runs.push((n as u32, 1, p as u8));
     }
@@ -680,7 +692,7 @@ fn flush<const W: usize>(local: &mut Buf, table: &mut WordTable<W>, parts: &mut 
         let part = if parts.len() == 1 {
             &mut parts[0]
         } else {
-            &mut parts[part_of(WordTable::<W>::hash(&key))]
+            &mut parts[part_of(WordTable::<W>::hash(&key), parts.len())]
         };
         part.push(&key, local.firsts[g]);
         for (to, from) in part.states.iter_mut().zip(&local.states) {
@@ -917,7 +929,7 @@ pub(super) fn distinct(
                             let v = int(&d, i) as u64;
                             // In ClickBench, 82% of the rows have the `UserID` of the row before them.
                             if previous != Some(v) {
-                                parts[part_of(v)].push(v);
+                                parts[part_of(v, PARTS)].push(v);
                                 previous = Some(v);
                             }
                         }
@@ -1027,7 +1039,7 @@ pub(super) fn distinct_groups(
                                 None => null_first = null_first.or(Some(row)),
                             }
                             match (group, value) {
-                                (Some(group), Some(v)) => parts[part_of(v)].push((group, v)),
+                                (Some(group), Some(v)) => parts[part_of(v, PARTS)].push((group, v)),
                                 (None, Some(v)) => nulls.push(v),
                                 (_, None) => {}
                             }
@@ -1280,10 +1292,11 @@ fn scan_run<const W: usize>(
     places: &[usize],
     units: &[(usize, usize)],
     rows: usize,
+    count: usize,
 ) -> Result<Run> {
     let width = plan.keys.len();
     // With no keys the scan has one group, so one part holds it.
-    let count = if width == 0 { 1 } else { PARTS };
+    let count = if width == 0 { 1 } else { count };
     let mut parts: Vec<Buf> = (0..count).map(|_| Buf::new(&plan.folds, pack.width)).collect();
     let mut extremes: Vec<Option<(i64, i64)>> = vec![None; plan.bases];
     let first_base = plan.folds.len() - plan.bases;
@@ -1363,7 +1376,7 @@ fn scan_run<const W: usize>(
             folded = 0;
             if direct {
                 // Each part gets about its share of the rows that are left, so its buffers do not grow many times.
-                let more = (units.len() - n) * VECTOR / PARTS;
+                let more = (units.len() - n) * VECTOR / parts.len();
                 for part in &mut parts {
                     part.reserve(more + more / 8);
                 }
@@ -1677,6 +1690,7 @@ fn lean_plan(plan: &Plan, top: &Top) -> Option<Plan> {
         bases: 0,
         filters: plan.filters.clone(),
         maps: plan.maps.clone(),
+        groups: plan.groups,
     })
 }
 
@@ -1867,6 +1881,7 @@ fn grouped(
     }
     let jobs = tasks.parallelism().min(rows / TASK_ROWS).clamp(1, units.len());
     let chunk = units.len().div_ceil(jobs);
+    let count = parts_for(plan.groups, jobs);
     let pack = Pack::new(stored, plan);
     let packed = pack.width;
     let mut runs: Vec<Option<Result<Run>>> = Vec::new();
@@ -1879,10 +1894,10 @@ fn grouped(
             Box::new(move || {
                 // A key of fewer words has smaller slots, so more of the table stays in the cache, and a probe hashes and compares fewer words.
                 *out = Some(match packed {
-                    1 => scan_run::<1>(stored, plan, pack, places, units, rows),
-                    2 => scan_run::<2>(stored, plan, pack, places, units, rows),
-                    3 | 4 => scan_run::<4>(stored, plan, pack, places, units, rows),
-                    _ => scan_run::<8>(stored, plan, pack, places, units, rows),
+                    1 => scan_run::<1>(stored, plan, pack, places, units, rows, count),
+                    2 => scan_run::<2>(stored, plan, pack, places, units, rows, count),
+                    3 | 4 => scan_run::<4>(stored, plan, pack, places, units, rows, count),
+                    _ => scan_run::<8>(stored, plan, pack, places, units, rows, count),
                 });
             }) as Job<'_>
         })
@@ -1891,7 +1906,7 @@ fn grouped(
     let runs: Vec<Run> = runs.into_iter().flatten().collect::<Result<_>>()?;
     let mut extremes = vec![None; plan.bases];
     let mut last = None;
-    let count = runs.first().map_or(PARTS, |run| run.parts.len());
+    let count = runs.first().map_or(count, |run| run.parts.len());
     let mut by_part: Vec<Vec<Buf>> = (0..count).map(|_| Vec::with_capacity(runs.len())).collect();
     for run in runs {
         for (e, r) in extremes.iter_mut().zip(&run.extremes) {
