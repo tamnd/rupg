@@ -2136,11 +2136,25 @@ impl Plan {
         let reads = self.reads.get_or_init(|| scan::scanned_relations(&self.query));
         let mode = if self.lock_clause().is_some() { 2 } else { 1 };
         let (reads, parents) = (&reads.0, &reads.1);
-        session.lock_relations(reads, mode, self.query.write.as_ref().map(|write| write.table))?;
+        let write = self.query.write.as_ref().map(|write| write.table);
+        session.lock_relations(reads, mode, write)?;
         let children = scan::inherited_relations(parents, session);
         if !children.is_empty() {
             session.lock_relations(&children, mode, None)?;
             check_children(parents, session)?;
+        }
+        // `get_relation_info` opens each index of each table of the plan in the mode of its table, and `ExecOpenIndices` the indexes of the table that the statement writes in `RowExclusiveLock`.
+        if let Some(catalog) = session.catalog() {
+            let indexes = |tables: &mut dyn Iterator<Item = &u32>| -> Vec<u32> {
+                tables.flat_map(|&table| catalog.indexes_of(table).map(|index| index.oid)).collect()
+            };
+            if let Some(table) = write {
+                session.lock_relations(&indexes(&mut std::iter::once(&table)), 3, None)?;
+            }
+            let read = indexes(&mut reads.iter().chain(&children).filter(|&&r| Some(r) != write));
+            if !read.is_empty() {
+                session.lock_relations(&read, mode, None)?;
+            }
         }
         Ok(reads)
     }
