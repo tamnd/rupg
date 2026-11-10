@@ -2,7 +2,7 @@
 
 use rupg_column::segment::Kind;
 use rupg_platform::{Job, Tasks};
-use rupg_types::oid;
+use rupg_types::{Value, oid};
 
 use super::{Row, find};
 use crate::heap::{Cells, Values};
@@ -27,6 +27,11 @@ pub(super) enum Parse {
     Text,
     Varchar(i32),
     Bpchar(i32),
+    /// `numeric` with the type modifier `typmod`, whose values are each an integer count of `10^-scale`.
+    Numeric {
+        typmod: i32,
+        scale: u8,
+    },
 }
 
 impl Parse {
@@ -41,6 +46,7 @@ impl Parse {
             oid::TEXT => Parse::Text,
             oid::VARCHAR => Parse::Varchar(typmod),
             oid::BPCHAR => Parse::Bpchar(typmod),
+            oid::NUMERIC => Parse::Numeric { typmod, scale: numeric_scale(typmod)? },
             _ => return None,
         })
     }
@@ -54,6 +60,7 @@ impl Parse {
             Parse::Date => Kind::Date,
             Parse::Timestamp => Kind::Timestamp,
             Parse::Text | Parse::Varchar(_) | Parse::Bpchar(_) => Kind::Text,
+            Parse::Numeric { scale, .. } => Kind::Numeric(scale),
         }
     }
 
@@ -114,9 +121,33 @@ impl Parse {
                     })
                     .is_ok()
             }
+            (Parse::Numeric { typmod, scale }, Values::Ints(values)) => {
+                let Some(text) = text() else { return false };
+                let Ok(n) = rupg_types::numeric_in(text, typmod) else { return false };
+                // A special value has no integer, and goes to the input function.
+                match Kind::Numeric(scale).int_of(&Value::Numeric(n)) {
+                    Some(n) => {
+                        values.push(n);
+                        true
+                    }
+                    None => false,
+                }
+            }
             _ => false,
         }
     }
+}
+
+/// The scale of a `numeric` column with the type modifier `typmod`, when each value of the column is an integer count of `10^-scale` that fits in an `i64`: a precision of up to 18 digits, and a scale from 0 up to the precision. `None` for another type modifier, such as none or a negative scale.
+fn numeric_scale(typmod: i32) -> Option<u8> {
+    // `make_numeric_typmod`: `((precision << 16) | (scale & 0x7ff)) + VARHDRSZ`, with the scale as a signed number of 11 bits.
+    let bits = typmod.checked_sub(4).filter(|bits| *bits >= 0)?;
+    let precision = (bits >> 16) & 0xffff;
+    let scale = ((bits & 0x7ff) ^ 1024) - 1024;
+    if precision > 18 || !(0..=precision).contains(&scale) {
+        return None;
+    }
+    u8::try_from(scale).ok()
 }
 
 /// The value of a field of up to 18 ASCII digits after an optional minus sign, which `pg_strtoint64_safe` reads the same way, or `None` for another form, which goes to the input function.

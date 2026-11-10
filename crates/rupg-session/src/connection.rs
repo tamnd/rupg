@@ -7824,7 +7824,7 @@ mod tests {
         });
     }
 
-    /// A bulk load of `COPY FROM` puts its rows into the encoded columns on the threads of the server, with the values and the places of a load of values: rows of many lengths, so that some rows go into an earlier page with free space, rows that the toaster takes, and a batch with a field that only the input function reads.
+    /// A bulk load of `COPY FROM` puts its rows into the encoded columns on the threads of the server, with the values and the places of a load of values: rows of many lengths, so that some rows go into an earlier page with free space, rows that the toaster takes, `numeric` values that round, and a batch with a field that only the input function reads.
     #[test]
     fn a_bulk_load_has_the_rows_and_places_of_a_load_of_values() {
         big_stack(|| {
@@ -7833,7 +7833,7 @@ mod tests {
             let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
                 send(c, &query(sql)).into_iter().filter(|l| l.starts_with("row ")).collect()
             };
-            let columns = "i2 int2 NOT NULL, i4 int4 NOT NULL, i8 int8 NOT NULL, d date NOT NULL, ts timestamp NOT NULL, t text NOT NULL, v varchar(6) NOT NULL, c char(2) NOT NULL";
+            let columns = "i2 int2 NOT NULL, i4 int4 NOT NULL, i8 int8 NOT NULL, d date NOT NULL, ts timestamp NOT NULL, t text NOT NULL, v varchar(6) NOT NULL, c char(2) NOT NULL, n numeric(12,3) NOT NULL";
             send(&mut c, &query(&format!("CREATE TABLE bulk ({columns})")));
             // A check constraint sends each row through the plan of the copy.
             send(&mut c, &query(&format!("CREATE TABLE plain ({columns}, CHECK (i2 > -200))")));
@@ -7850,8 +7850,19 @@ mod tests {
                     let char = if i % 3 == 0 { "a" } else { "b " };
                     // A quote in a quoted field is two quotes.
                     let text = if i % 7 == 0 { format!("q\"\"{text}") } else { text };
+                    // A `numeric` value rounds to the scale of the column.
+                    let n = match i % 11 {
+                        0 => format!("{i}"),
+                        1 => format!("-{i}.5"),
+                        2 => "-0".to_string(),
+                        3 => format!("{}.0005", i % 1_000),
+                        4 => "1.5e3".to_string(),
+                        5 => format!("-{}.12345", i % 100),
+                        6 => format!("{}.", i / 3),
+                        _ => format!("{}.{:03}", i * 13, i % 1_000),
+                    };
                     format!(
-                        "< {},{},{},2013-{month:02}-{day:02},{ts},\"t{text}\",v{}  ,{char}",
+                        "< {},{},{},2013-{month:02}-{day:02},{ts},\"t{text}\",v{}  ,{char},{n}",
                         i % 300 - 150,
                         i * 7,
                         i * 1_000_003,
@@ -7890,16 +7901,18 @@ mod tests {
             );
             send(&mut c, &query("COMMIT"));
             assert_eq!(all(&mut c, "bulk"), loaded);
-            let sums = "SELECT sum(i2), sum(i4), sum(i8), max(d), max(ts), sum(length(t)), max(v), count(DISTINCT c) FROM bulk";
+            let sums = "SELECT sum(i2), sum(i4), sum(i8), max(d), max(ts), sum(length(t)), max(v), count(DISTINCT c), sum(n), count(DISTINCT n) FROM bulk";
             assert_eq!(rows(&mut c, sums), rows(&mut c, &sums.replace("bulk", "plain")));
             // A bad line in a batch of a bulk load has the error and the context of a load of values.
             let bad_lines = [
                 "< 1,2",
                 "< 1,2,3,2013-01-01,2013-01-01 00:00:00,\"open",
-                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,extra",
-                "< ,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c",
-                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,toolong,c",
-                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,,v,c",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,1,extra",
+                "< ,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,1",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,toolong,c,1",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,,v,c,1",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,abc",
+                "< 1,2,3,2013-01-01,2013-01-01 00:00:00,t,v,c,1e9",
             ];
             for bad in bad_lines {
                 let errors: Vec<Vec<String>> = ["bulk", "plain"]
