@@ -686,15 +686,20 @@ impl<'a> Reader<'a> {
         self.acquire(tag, mode, false, wait, RELATION)
     }
 
-    /// `LockRelationIdForSession`: the session holds the lock of the relation `relation` in `mode` after the end of the transaction, until [`Reader::unlock_relation_session`].
+    /// `LockRelationIdForSession`: the session holds the lock of the relation `relation` in `mode` after the end of the transaction, until [`Reader::unlock_relation_session`]. Without `wait`, a lock that is not free gives false.
     ///
     /// # Errors
     ///
     /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
-    pub(crate) fn lock_relation_session(&self, relation: u32, mode: Mode) -> Result<()> {
+    pub(crate) fn lock_relation_session(
+        &self,
+        relation: u32,
+        mode: Mode,
+        wait: bool,
+    ) -> Result<bool> {
         let (_, store) = self.server()?;
         let tag = Tag::Relation { database: database_oid(store, self.database), relation };
-        self.acquire(tag, mode, true, true, RELATION).map(drop)
+        self.acquire(tag, mode, true, wait, RELATION)
     }
 
     /// `UnlockRelationIdForSession`.
@@ -2214,6 +2219,13 @@ impl Env for Reader<'_> {
 
     fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
         self.take_locks(std::iter::once(relid), mode)
+    }
+
+    fn relation_lock_nowait(&self, relid: u32, mode: u8) -> Result<bool> {
+        if self.activity.is_none() {
+            return Ok(true);
+        }
+        self.lock_relation(relid, mode, false)
     }
 
     fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {

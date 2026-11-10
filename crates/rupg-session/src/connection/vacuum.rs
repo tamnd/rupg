@@ -88,6 +88,10 @@ struct Parsed {
     process_toast: bool,
     process_main: bool,
     only_database_stats: bool,
+    /// `SKIP_LOCKED`: a relation whose lock is not free is skipped, with no wait.
+    skip_locked: bool,
+    /// `SKIP_DATABASE_STATS`: no update of `datfrozenxid` at the end.
+    skip_database_stats: bool,
     /// True when a flag of `params.options` other than `VERBOSE`, `PROCESS_MAIN` and `PROCESS_TOAST` is on, for the check of `ONLY_DATABASE_STATS`.
     other: bool,
     workers: i32,
@@ -123,7 +127,10 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
         match name {
             "verbose" | "skip_locked" => {
                 let on = def_boolean(def)?;
-                parsed.other |= on && name == "skip_locked";
+                if name == "skip_locked" {
+                    parsed.skip_locked = on;
+                    parsed.other |= on;
+                }
             }
             "buffer_usage_limit" => {
                 let text = def_string(def)?;
@@ -175,7 +182,10 @@ fn parse_options(stmt: &VacuumStmt) -> Result<Parsed, Error> {
                 }
                 parsed.workers = workers;
             }
-            "skip_database_stats" => parsed.other |= def_boolean(def)?,
+            "skip_database_stats" => {
+                parsed.skip_database_stats = def_boolean(def)?;
+                parsed.other |= parsed.skip_database_stats;
+            }
             "only_database_stats" => parsed.only_database_stats = def_boolean(def)?,
             _ => return Err(unrecognized(command, name, at)),
         }
@@ -299,7 +309,7 @@ impl Connection {
             &stmt.rels,
             &reader,
             stmt.is_vacuumcmd,
-            analyze,
+            (analyze, parsed.skip_locked),
             &permitted,
             &mut warnings,
         );
@@ -360,11 +370,18 @@ impl Connection {
             (&catalog, &committed),
             (relids, &named),
             (vacuum, analyze),
-            (mode, own),
+            (mode, own, parsed.skip_locked),
             notices,
         );
         self.in_vacuum.set(false);
-        result.map(|()| Done::Tag(tag))
+        result?;
+        // `vac_update_datfrozenxid` changes the row of the database in `pg_database` in place, after `heap_inplace_lock` waits for the transaction that changed the row, as an open `GRANT ON DATABASE` did.
+        if stmt.is_vacuumcmd && !parsed.skip_database_stats {
+            let report =
+                |waits: bool| self.activity.report_wait(waits.then_some(("Lock", "tuple")));
+            self.store.wait_database_row(self.database_oid, self.pid, &self.cancel, &report)?;
+        }
+        Ok(Done::Tag(tag))
     }
 
     /// The loop of `vacuum` on the relations `relids`, each with the columns of `ANALYZE`, with the lock `mode` of `vacuum_rel`, which goes after each relation with `own`. `VACUUM FULL` of a table or a materialized view writes it again, as `cluster_rel` does, before the rest. A relation that went away while the statement waited for its lock is skipped, with a warning for one of `named`, the relations that the statement names, as `vacuum_open_relation` gives it.
@@ -373,17 +390,44 @@ impl Connection {
         (catalog, committed): (&Catalog, &Catalog),
         (relids, named): (Vec<Columns>, &[(u32, String)]),
         (vacuum, analyze): (Option<&Parsed>, bool),
-        (mode, own): (u8, bool),
+        (mode, own, skip_locked): (u8, bool, bool),
         notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         let reader = self.reader();
         for (relid, columns) in relids {
-            if own {
-                reader.lock_relation_session(relid, mode)?;
+            // `vacuum_open_relation`: with `SKIP_LOCKED`, `ConditionalLockRelationOid`, and a warning for a relation of the list of the statement whose lock is not free.
+            let locked = if own {
+                reader.lock_relation_session(relid, mode, !skip_locked)?
+            } else if skip_locked {
+                rupg_analyze::Env::relation_lock_nowait(&reader, relid, mode)?
             } else {
                 rupg_analyze::Env::relation_lock(&reader, relid, mode)?;
+                true
+            };
+            if !locked {
+                if let Some((_, name)) = named.iter().find(|(named, _)| *named == relid) {
+                    let what = if vacuum.is_some() { "vacuum" } else { "analyze" };
+                    notices.push(Notice::warning(rupg_analyze::lock_not_available(what, name)));
+                }
+                continue;
             }
+            // `acquire_inherited_sample_rows` of `ANALYZE` takes `AccessShareLock` on each child of the relation with `find_all_inheritors`, and waits for it also with `SKIP_LOCKED`. The locks go with the transaction of the relation.
+            let children =
+                if analyze && !catalog.relation(relid).is_some_and(|r| r.kind == RelKind::Toast) {
+                    catalog.all_inheritors(relid)
+                } else {
+                    Vec::new()
+                };
+            let mut taken = Vec::new();
             let result = (|| {
+                for &child in &children {
+                    if own {
+                        reader.lock_relation_session(child, 1, true)?;
+                        taken.push(child);
+                    } else {
+                        rupg_analyze::Env::relation_lock(&reader, child, 1)?;
+                    }
+                }
                 if committed.relation(relid).is_some()
                     && self.committed_view().0.relation(relid).is_none()
                 {
@@ -426,6 +470,9 @@ impl Connection {
                 .map(drop)
             })();
             if own {
+                for child in taken {
+                    reader.unlock_relation_session(child, 1);
+                }
                 reader.unlock_relation_session(relid, mode);
             }
             result?;

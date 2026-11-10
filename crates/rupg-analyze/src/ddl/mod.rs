@@ -101,7 +101,7 @@ pub use rule::{RuleTree, rule_tree};
 pub use schema_elements::SchemaElements;
 pub(crate) use table::check_attribute_type;
 pub use trigger::trigger_when;
-pub use vacuum::{VacuumRel, vacuum_denied, vacuum_relations};
+pub use vacuum::{VacuumRel, lock_not_available, vacuum_denied, vacuum_relations};
 
 use std::cell::RefCell;
 
@@ -779,6 +779,10 @@ impl Env for SchemaEnv<'_> {
 
     fn relation_lock(&self, relid: u32, mode: u8) -> Result<()> {
         self.env.relation_lock(relid, mode)
+    }
+
+    fn relation_lock_nowait(&self, relid: u32, mode: u8) -> Result<bool> {
+        self.env.relation_lock_nowait(relid, mode)
     }
 
     fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {

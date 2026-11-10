@@ -1787,7 +1787,7 @@ impl Connection {
         let reader = self.reader();
         let locked = [parent, child];
         let mut result = locked.iter().try_for_each(|&relation| {
-            reader.lock_relation_session(relation, SHARE_UPDATE_EXCLUSIVE)
+            reader.lock_relation_session(relation, SHARE_UPDATE_EXCLUSIVE, true).map(drop)
         });
         drop(reader);
         if result.is_ok() {
@@ -1953,6 +1953,8 @@ impl Connection {
                     || !defined.databases.is_empty()
                     || !defined.tablespaces.is_empty()
                 {
+                    self.store
+                        .lock_database_rows(self.pid, defined.databases.iter().map(|c| c.oid));
                     let mut roles = Roles::clone(&lease.roles);
                     roles.members.retain(|m| !defined.grantors.contains(&m.grantor));
                     for change in defined.databases {

@@ -102,6 +102,10 @@ struct State {
     tablespaces: Arc<[Tablespace]>,
     /// The database whose lock each waiting session waits for, by the process ID of the session.
     waiting: HashMap<i32, u32>,
+    /// The process ID of the session whose open transaction changed the row of `pg_database` of each database, by the OID of the database: the lock of the row until the end of the transaction.
+    row_locks: HashMap<u32, i32>,
+    /// The database whose row of `pg_database` each waiting session waits for, by the process ID of the session.
+    row_waiting: HashMap<i32, u32>,
     /// The rows of `pg_db_role_setting` by the OID of the database and the OID of the role, 0 for all: the settings of `ALTER DATABASE ... SET` and `ALTER ROLE ... SET`, each as `name=value`. A row of a database or a role that no longer exists has no effect.
     settings: BTreeMap<(u32, u32), Vec<String>>,
 }
@@ -130,6 +134,8 @@ impl Default for State {
             roles: Arc::default(),
             tablespaces: Arc::from(Vec::new()),
             waiting: HashMap::new(),
+            row_locks: HashMap::new(),
+            row_waiting: HashMap::new(),
             settings: BTreeMap::new(),
         }
     }
@@ -472,11 +478,69 @@ impl Store {
         lease
     }
 
-    /// The session whose transaction holds the lock of the database that the session `pid` waits for.
+    /// The session whose transaction holds the lock of the database, or of the row of `pg_database`, that the session `pid` waits for.
     pub(crate) fn lease_blocker(&self, pid: i32) -> Option<i32> {
         let state = self.state();
+        if let Some(database) = state.row_waiting.get(&pid) {
+            return state.row_locks.get(database).copied().filter(|&holder| holder != pid);
+        }
         let database = state.waiting.get(&pid)?;
         state.databases.get(database)?.locked.filter(|&holder| holder != pid)
+    }
+
+    /// Takes the lock of the rows of `pg_database` of `databases` for the transaction of the session `pid`, which changed them. The lock goes with the lease of the transaction.
+    pub(crate) fn lock_database_rows(&self, pid: i32, databases: impl IntoIterator<Item = u32>) {
+        let mut state = self.state();
+        for database in databases {
+            state.row_locks.insert(database, pid);
+        }
+    }
+
+    /// Waits while the transaction of another session holds the lock of the row of `pg_database` of `database`, as `heap_inplace_lock` does, and `report` tells the start and the end of the wait. A cancel of the session stops the wait with `57014`.
+    pub(crate) fn wait_database_row(
+        &self,
+        database: u32,
+        pid: i32,
+        cancel: &AtomicBool,
+        report: &dyn Fn(bool),
+    ) -> Result<()> {
+        let mut state = self.state();
+        let mut waited = false;
+        let result = loop {
+            if state.row_locks.get(&database).is_none_or(|&holder| holder == pid) {
+                break Ok(());
+            }
+            if cancel.swap(false, Ordering::Relaxed) {
+                break Err(Error::new(
+                    SqlState::QUERY_CANCELED,
+                    "canceling statement due to user request",
+                ));
+            }
+            if !waited {
+                waited = true;
+                state.row_waiting.insert(pid, database);
+                drop(state);
+                report(true);
+                state = self.state();
+                continue;
+            }
+            if let Some(tasks) = &self.tasks {
+                drop(state);
+                tasks.yield_now();
+                state = self.state();
+                continue;
+            }
+            state =
+                self.free.wait_timeout(state, WAIT_SLICE).unwrap_or_else(PoisonError::into_inner).0;
+        };
+        if waited {
+            state.row_waiting.remove(&pid);
+        }
+        drop(state);
+        if waited {
+            report(false);
+        }
+        result
     }
 
     /// `createdb` after the checks of the options: the check of the name, the wait for the other sessions of the template to end, and the copy of the catalog of the template. `me` is the number of the session in the table. It gives the OID of the new database.
@@ -1001,6 +1065,9 @@ fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
 impl Drop for Lease {
     fn drop(&mut self) {
         let mut state = self.store.state();
+        if let Some(holder) = state.databases.get(&self.database).and_then(|db| db.locked) {
+            state.row_locks.retain(|_, pid| *pid != holder);
+        }
         let next = self.catalog.next_oid();
         state.next_oid = state.next_oid.max(next);
         if let Some(db) = state.databases.get_mut(&self.database) {
@@ -1109,5 +1176,20 @@ mod tests {
         let lease = store.lease(POSTGRES, 2, &AtomicBool::new(false), &report).unwrap();
         assert_eq!(*locked.lock().unwrap(), Some(2));
         drop(lease);
+    }
+
+    #[test]
+    fn the_end_of_the_transaction_frees_the_row_of_the_database() {
+        let store = Arc::new(Store::new());
+        let cancel = AtomicBool::new(false);
+        let lease = store.lease(POSTGRES, 1, &cancel, &|_| {}).unwrap();
+        store.lock_database_rows(1, [POSTGRES]);
+        // The holder does not wait for itself, and another session sees it as the blocker.
+        store.wait_database_row(POSTGRES, 1, &cancel, &|_| {}).unwrap();
+        cancel.store(true, Ordering::Relaxed);
+        let error = store.wait_database_row(POSTGRES, 2, &cancel, &|_| {}).unwrap_err();
+        assert_eq!(error.state(), SqlState::QUERY_CANCELED);
+        lease.commit();
+        store.wait_database_row(POSTGRES, 2, &cancel, &|_| {}).unwrap();
     }
 }
