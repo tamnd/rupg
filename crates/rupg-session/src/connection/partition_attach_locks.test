@@ -1,0 +1,40 @@
+A> CREATE TABLE pal (i int, j text) PARTITION BY RANGE (i)
+CREATE TABLE
+A> CREATE TABLE pal_1 PARTITION OF pal FOR VALUES FROM (0) TO (100)
+CREATE TABLE
+A> CREATE TABLE pal_default PARTITION OF pal DEFAULT PARTITION BY LIST (j)
+CREATE TABLE
+A> CREATE TABLE pal_default_default PARTITION OF pal_default DEFAULT
+CREATE TABLE
+A> CREATE TABLE pal_2 (i int, j text)
+CREATE TABLE
+A> BEGIN
+BEGIN
+A> INSERT INTO pal VALUES (110, 'xxx')
+INSERT 0 1
+B> SELECT relation::regclass, mode FROM pg_locks WHERE relation::regclass::text LIKE 'pal%' ORDER BY 1::text
+fields relation:2205:4:-1,mode@pg_locks.13:25:-1:-1
+row pal,RowExclusiveLock
+row pal_default,RowExclusiveLock
+row pal_default_default,RowExclusiveLock
+SELECT 3
+B> SET lock_timeout = '10ms'
+SET
+B> ALTER TABLE pal ATTACH PARTITION pal_2 FOR VALUES FROM (100) TO (200)
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16392 of database 5)
+B> INSERT INTO pal_2 VALUES (150, 'yyy')
+INSERT 0 1
+B> BEGIN
+BEGIN
+B> ALTER TABLE pal ATTACH PARTITION pal_2 FOR VALUES FROM (100) TO (200)
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessExclusiveLock on relation 16392 of database 5)
+B> ROLLBACK
+ROLLBACK
+A> COMMIT
+COMMIT
+B> ALTER TABLE pal ATTACH PARTITION pal_2 FOR VALUES FROM (100) TO (200)
+ERROR 23514 updated partition constraint for default partition "pal_default_default" would be violated by some row
+B> SELECT tableoid::regclass, * FROM pal ORDER BY 1::text
+fields tableoid:2205:4:-1,i@pal.1:23:4:-1,j@pal.2:25:-1:-1
+row pal_default_default,110,xxx
+SELECT 1

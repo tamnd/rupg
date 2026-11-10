@@ -64,6 +64,16 @@ impl Definer<'_, '_> {
         // `transformPartitionCmd` transforms the bound before the other checks.
         self.partition_bound(name, parent, spec, false)?;
         let child = self.open_attached(rv, cmd)?;
+        // `table_openrv` opens the table in `AccessExclusiveLock`, and `ATExecAttachPartition` then locks the default partition of the parent in the same mode, as its bound becomes smaller: an insert that routes a row to the default partition waits for the end of the transaction.
+        self.an.env.relation_lock(child, super::ACCESS_EXCLUSIVE)?;
+        let default = self.catalog.partitions(parent).into_iter().find(|r| {
+            r.oid != child
+                && r.partition_of.as_ref().is_some_and(|p| p.bound == PartitionBound::Default)
+        });
+        let default = default.map(|r| r.oid);
+        if let Some(default) = default {
+            self.an.env.relation_lock(default, super::ACCESS_EXCLUSIVE)?;
+        }
         let lookup = |oid: u32| Error::internal(format!("cache lookup failed for relation {oid}"));
         let rel = self.catalog.relation(child).cloned().ok_or_else(|| lookup(child))?;
         let parent_rel = self.catalog.relation(parent).cloned().ok_or_else(|| lookup(parent))?;
@@ -167,15 +177,16 @@ impl Definer<'_, '_> {
         self.ensure_partition_indexes(&rel, &parent_rel)?;
         self.clone_triggers(parent, child)?;
         self.clone_foreign_keys(parent, child)?;
-        // `QueuePartitionConstraintValidation` for the new partition, then for the default partition, whose bound is now smaller.
-        let default = self.catalog.partitions(parent).into_iter().find(|r| {
-            r.oid != child
-                && r.partition_of.as_ref().is_some_and(|p| p.bound == PartitionBound::Default)
-        });
-        let default = default.map(|r| r.oid);
+        // `QueuePartitionConstraintValidation` for the new partition, then for the default partition, whose bound is now smaller. `find_all_inheritors` locks the partitions of each in `AccessExclusiveLock`.
+        for below in self.descendants(child) {
+            self.an.env.relation_lock(below, super::ACCESS_EXCLUSIVE)?;
+        }
         self.checks.push(PartitionCheck { table: child, default: false });
         self.scans.extend(self.leaves(child));
         if let Some(default) = default {
+            for below in self.descendants(default) {
+                self.an.env.relation_lock(below, super::ACCESS_EXCLUSIVE)?;
+            }
             self.checks.push(PartitionCheck { table: default, default: true });
             self.scans.extend(self.leaves(default));
         }

@@ -9768,6 +9768,12 @@ mod tests {
         big_stack(|| two_sessions(include_str!("connection/relation_locks.test")));
     }
 
+    /// An insert into a partitioned table locks each partition that its rows go to in `RowExclusiveLock`, and `ATTACH PARTITION` locks the default partition and its partitions in `AccessExclusiveLock`, so the two wait for each other. After the insert commits, the attach finds its row in the default partition.
+    #[test]
+    fn partition_attach_locks() {
+        big_stack(|| two_sessions(include_str!("connection/partition_attach_locks.test")));
+    }
+
     /// Row locks in two sessions: `INSERT ... ON CONFLICT DO UPDATE`, `UPDATE`, `DELETE` and the locking clauses wait for a lock of `FOR UPDATE` in a table and in a partition, `NOWAIT` fails, `SKIP LOCKED` skips the row, and `FOR KEY SHARE` lets an `UPDATE` of the columns that are not keys go.
     #[test]
     fn row_locks() {
