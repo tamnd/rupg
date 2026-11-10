@@ -1,6 +1,9 @@
 //! The checks of a row type that a column holds: `CheckAttributeType` for a composite type that would hold itself, and `find_composite_type_dependencies` for a change of the columns of a row type that a stored value holds.
 
-use rupg_catalog::{Catalog, RangePart, RelKind, Relation};
+use rupg_catalog::{
+    Catalog, ObjRef, PG_CAST, PG_CLASS, PG_CONSTRAINT, PG_OPERATOR, PG_PROC, PG_TYPE, RangePart,
+    RelKind, Relation,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
 
@@ -67,7 +70,9 @@ impl Definer<'_, '_> {
     /// `find_composite_type_dependencies` for the row type of the relation of `target`: a column of a table that holds the row type, also through a domain, an array or another composite type, stops a change of the type of a column, as the stored values keep their fields.
     pub(super) fn check_row_type_users(&self, target: &Target) -> Result<()> {
         let row_type = self.catalog.relation(target.oid).map_or(0, |r| r.row_type);
-        let Some((table, column)) = self.row_type_user(row_type, 0) else { return Ok(()) };
+        let Some((table, column)) = self.row_type_user(row_type, 0) else {
+            return self.check_row_type_exprs(target, row_type);
+        };
         let message = if target.kind == b'c' {
             format!(
                 "cannot alter type \"{}\" because column \"{table}.{column}\" uses it",
@@ -85,6 +90,101 @@ impl Definer<'_, '_> {
             )
         };
         Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, message))
+    }
+
+    /// `check_composite_type_dependency` of PostgreSQL 19 for the objects of `pg_depend` that depend on the row type `row_type`, and on the arrays, the domains, the ranges and the row types that hold it: a stored expression that can hold a value of the type, as a constant, stops a change of the type of a column. A function can use the type for its arguments and its result, but not in the defaults of its arguments or in a body of SQL. An operator, a cast and the relation of the row type itself can use the type too. The columns that hold the type are the part of [`Definer::check_row_type_users`].
+    fn check_row_type_exprs(&self, target: &Target, row_type: u32) -> Result<()> {
+        let mut visited = Vec::new();
+        let Some(user) = self.type_expr_user(row_type, &mut visited) else { return Ok(()) };
+        let user = self.describe(user);
+        let message = match target.kind {
+            b'c' => format!("cannot alter type \"{}\" because {user} uses it", target.name),
+            b'f' => format!(
+                "cannot alter foreign table \"{}\" because {user} uses its row type",
+                target.name
+            ),
+            _ => format!("cannot alter table \"{}\" because {user} uses its row type", target.name),
+        };
+        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, message))
+    }
+
+    /// `find_composite_type_dependencies_recurse` for the stored expressions: the first object that depends on the type `ty` with an expression that holds the type, also through a type that holds `ty`.
+    fn type_expr_user(&self, ty: u32, visited: &mut Vec<u32>) -> Option<ObjRef> {
+        if ty == 0 || visited.contains(&ty) || visited.len() > MAX_DEPTH * MAX_DEPTH {
+            return None;
+        }
+        visited.push(ty);
+        let catalog = &*self.catalog;
+        let users: Vec<ObjRef> = catalog
+            .depends()
+            .iter()
+            .filter(|d| d.referenced.class == PG_TYPE && d.referenced.oid == ty)
+            .map(|d| d.object)
+            .collect();
+        let holds = |text: Option<&str>, list: bool| {
+            text.is_some_and(|text| {
+                let exprs = if list {
+                    crate::node::read_list(text).unwrap_or_default()
+                } else {
+                    crate::node::read(text).map(|e| vec![e]).unwrap_or_default()
+                };
+                exprs.iter().any(|e| holds_type_value(e, ty))
+            })
+        };
+        for user in users {
+            match user.class {
+                PG_OPERATOR | PG_CAST => {}
+                PG_PROC => {
+                    let Some(f) = catalog.function(user.oid) else { continue };
+                    let signature =
+                        f.rettype == ty || f.argtypes.contains(&ty) || f.allargtypes.contains(&ty);
+                    if holds(f.argdefaults.as_deref(), true) || (f.body.is_some() && !signature) {
+                        return Some(user);
+                    }
+                }
+                PG_CONSTRAINT => {
+                    let Some(con) = catalog.constraint(user.oid) else { continue };
+                    if con.domain != ty || holds(con.expr.as_deref(), false) {
+                        return Some(user);
+                    }
+                }
+                PG_TYPE => {
+                    if let Some(found) = self.type_expr_user(user.oid, visited) {
+                        return Some(found);
+                    }
+                    let default = catalog
+                        .type_by_oid(user.oid)
+                        .and_then(|t| t.domain.as_ref())
+                        .and_then(|d| d.default.as_deref());
+                    if holds(default, false) {
+                        return Some(user);
+                    }
+                }
+                PG_CLASS => {
+                    let Some(rel) = catalog.relation(user.oid) else { continue };
+                    if user.sub > 0 {
+                        // A column of a relation with no rows, as of a view, makes its row type one that holds the type.
+                        if rel.row_type != 0
+                            && rel.row_type != ty
+                            && let Some(found) = self.type_expr_user(rel.row_type, visited)
+                        {
+                            return Some(found);
+                        }
+                        continue;
+                    }
+                    let partition = rel.partition_key.as_ref().and_then(|k| k.exprs.as_deref());
+                    let index = rel.index.as_ref();
+                    if holds(partition, true)
+                        || holds(index.and_then(|i| i.exprs.as_deref()), true)
+                        || holds(index.and_then(|i| i.predicate.as_deref()), false)
+                    {
+                        return Some(user);
+                    }
+                }
+                _ => return Some(user),
+            }
+        }
+        None
     }
 
     /// The stored expressions after `ALTER TYPE ... DROP ATTRIBUTE` or `ALTER TABLE ... DROP COLUMN` of the field at the place `at` of the row type of `relation`. PostgreSQL finds a field by its attribute number, but a field selection of rupg has the place of the field among the fields that are not dropped, so the fields after `at` move by one place.
@@ -167,4 +267,14 @@ impl Definer<'_, '_> {
                     .any(|c| self.holds_type(c.ty, target, fields, depth + 1))
             })
     }
+}
+
+/// `CheckTypeDependencyInExpr`: true when the expression refers to the type `ty`, as a constant, a cast or a `ROW` of the type.
+fn holds_type_value(expr: &Expr, ty: u32) -> bool {
+    expr.find(0, &mut |e, _| {
+        let refers = super::type_reference(e).is_some_and(|r| r.oid == ty)
+            || (matches!(e.kind, ExprKind::Row(..)) && e.ty == ty);
+        refers.then_some(())
+    })
+    .is_some()
 }
