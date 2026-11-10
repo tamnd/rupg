@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A definition that waited for the lock of the catalog while another transaction dropped a schema, a type, a function, a foreign-data wrapper, a server or a collation that it names fails with `referenced schema was concurrently dropped` and its kin, as `LockNotPinnedObject` of PostgreSQL 19 gives it, and not with the error of the name lookup (#1470).
 - A grouped vector scan with `HAVING` of only aggregates, a sort of the groups and no limit of the groups runs `HAVING` before the sort, and the sort has only the groups that pass. `min` and `max` of a text column of codes read the text of only the groups of the result. The serial end of ClickBench q28 does not read the text of `min(Referer)` or sort the keys of the 46837 groups, and q28 runs 4% fewer instructions.
 - `VACUUM` waits for an open transaction that changed the row of its database in `pg_database`, as an open `GRANT ON DATABASE` does, before it updates `datfrozenxid`, and `VACUUM (SKIP_LOCKED)` and `ANALYZE (SKIP_LOCKED)` skip a relation whose lock is not free with the warning of PostgreSQL. `DROP ROLE` after a `REVOKE ... ON DATABASE` in the same transaction sees the revoke (#1469).
 - The regular expression engine reads the text in UTF-8 in place with the positions of the bytes, and does not decode the text to a list of characters for each search. `regexp_replace` on the column `Referer` of ClickBench q28 is 29% faster (745 ms to 530 ms) and uses 31% less CPU.
