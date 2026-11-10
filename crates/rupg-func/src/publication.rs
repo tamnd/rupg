@@ -34,7 +34,13 @@ fn names(arg: Option<&Value>) -> Result<Vec<&str>> {
 }
 
 /// The rows of `pg_get_publication_tables`: the publication, the table, the column list and the row filter. A table of a `FOR ALL TABLES` publication or of a schema of the publication has no row filter, and with no column list the list has each column that the publication sends.
-fn rows(catalog: &Catalog, pairs: Vec<(u32, u32)>) -> Vec<Vec<Value>> {
+///
+/// The function opens each table with `AccessShareLock`, as `table_open` of `pg_get_publication_tables` does, and skips a table that a transaction dropped while the function waited for the lock.
+fn rows(
+    catalog: &Catalog,
+    pairs: Vec<(u32, u32)>,
+    session: &dyn crate::Session,
+) -> Result<Vec<Vec<Value>>> {
     let mut out = Vec::new();
     for (publication, relation) in pairs {
         let (Some(pubrow), Some(rel)) =
@@ -42,6 +48,10 @@ fn rows(catalog: &Catalog, pairs: Vec<(u32, u32)>) -> Vec<Vec<Value>> {
         else {
             continue;
         };
+        session.lock_relations(&[relation], 1, None)?;
+        if session.latest_catalog().is_some_and(|latest| latest.relation(relation).is_none()) {
+            continue;
+        }
         let in_schema = catalog
             .publication_namespaces()
             .any(|n| n.publication == publication && n.schema == rel.namespace);
@@ -69,7 +79,7 @@ fn rows(catalog: &Catalog, pairs: Vec<(u32, u32)>) -> Vec<Vec<Value>> {
         let qual = row.and_then(|r| r.qual.clone()).map_or(Value::Null, Value::text);
         out.push(vec![Value::Oid(publication), Value::Oid(relation), attrs, qual]);
     }
-    out
+    Ok(out)
 }
 
 /// `pg_get_publication_tables_a`: the tables of the publications of the `VARIADIC` array. A name that is not a publication is an error.
@@ -82,7 +92,7 @@ pub(crate) fn publication_tables(call: &Call<'_>, args: &[Value]) -> Result<Vec<
         };
     };
     let pairs = catalog.publication_tables(&names, None).map_err(|name| no_publication(&name))?;
-    Ok(rows(catalog, pairs))
+    rows(catalog, pairs, call.session)
 }
 
 /// `pg_get_publication_tables_b`: the rows of the table in the publications of the array. This form skips the names that are not publications. As in `pg_get_publication_tables`, a table that a publication cannot have gives no rows before the check of the names.
@@ -95,7 +105,7 @@ pub(crate) fn publication_tables_of(call: &Call<'_>, args: &[Value]) -> Result<V
     let names = names(args.first())?;
     let pairs =
         catalog.publication_tables(&names, Some(*target)).map_err(|name| no_publication(&name))?;
-    Ok(rows(catalog, pairs))
+    rows(catalog, pairs, call.session)
 }
 
 /// `pg_get_publication_sequences`: the sequences of a `FOR ALL SEQUENCES` publication.
