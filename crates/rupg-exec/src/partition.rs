@@ -78,6 +78,10 @@ pub struct Router {
     dispatch: Vec<Dispatch>,
     /// The columns that the statement gives values, for the detail of a row that a partition does not take.
     modified: Vec<i16>,
+    /// The partitions that the statement has locked, as `ExecInitPartitionInfo` and `ExecInitPartitionDispatchInfo` open them in `RowExclusiveLock` at their first row.
+    locked: Vec<u32>,
+    /// The default partitions whose bounds a transaction that committed while the statement waited for the lock made smaller, as `ATTACH PARTITION` does. Each row that goes to one of them is checked with the catalog of the transaction now.
+    stale: Vec<u32>,
 }
 
 impl Router {
@@ -116,9 +120,41 @@ impl Router {
                 .iter()
                 .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
                 .collect();
+            let default = matches!(part.bound, Bound::Default);
             oid = part.oid;
+            self.lock(oid, default, catalog, session)?;
+            // `ExecFindPartition` checks the partition constraint of a default partition, which a concurrent `ATTACH PARTITION` can change.
+            if default && self.stale.contains(&oid) && !latest_takes(oid, &row, session)? {
+                return Err(partition_check_error(
+                    relation(catalog, oid)?,
+                    &row,
+                    &self.modified,
+                    session,
+                )?);
+            }
         }
         Ok((oid, row))
+    }
+
+    /// Locks the partition `oid` in `RowExclusiveLock` at the first row that goes to it. A default partition whose bound changed while the statement waited goes in [`Router::stale`].
+    fn lock(
+        &mut self,
+        oid: u32,
+        default: bool,
+        catalog: &rupg_catalog::Catalog,
+        session: &dyn Session,
+    ) -> Result<()> {
+        if self.locked.contains(&oid) {
+            return Ok(());
+        }
+        session.lock_relations(&[], 0, Some(oid))?;
+        self.locked.push(oid);
+        if default
+            && session.latest_catalog().is_some_and(|latest| !std::ptr::eq(&*latest, catalog))
+        {
+            self.stale.push(oid);
+        }
+        Ok(())
     }
 
     /// `ExecPartitionCheck`: true when a row of the partition `table` is in the bounds of the partition, and of each partition above it.
@@ -636,6 +672,18 @@ pub(crate) fn satisfies_hash_partition(
 }
 
 /// The catalog of the user.
+/// `ExecPartitionCheck` of the row `row` of the partition `oid` with the catalog of the transaction now, which a session with a new snapshot reads. True for a session that has no other catalog.
+fn latest_takes(oid: u32, row: &[Value], session: &dyn Session) -> Result<bool> {
+    let mut takes = true;
+    session.with_new_snapshot(&mut |fresh| {
+        if fresh.catalog().is_some_and(|c| c.relation(oid).is_some()) {
+            takes = Router::default().check(oid, row, fresh)?;
+        }
+        Ok(Some(Vec::new()))
+    })?;
+    Ok(takes)
+}
+
 fn catalog(session: &dyn Session) -> Result<&rupg_catalog::Catalog> {
     session.catalog().ok_or_else(|| Error::internal("a partitioned table with no catalog"))
 }
