@@ -389,19 +389,29 @@ impl Tree {
 
     /// `cfindloop`: the positions of the leftmost match that starts at `begin`, the longest or the shortest as the root prefers.
     pub(super) fn find(&self, s: &[u8], begin: usize) -> Option<Groups> {
+        let mut groups = Groups::new();
+        self.find_into(s, begin, &mut groups).then_some(groups)
+    }
+
+    /// [`Tree::find`] into `groups`, which the search uses again with no allocation. When it gives false, `groups` has no meaning.
+    pub(super) fn find_into(&self, s: &[u8], begin: usize, groups: &mut Groups) -> bool {
         let (mut ends, mut arena) = std::mem::take(&mut *self.scratch.borrow_mut());
         ends.clear();
         arena.clear();
-        let mut d = Dissect { tree: self, s, ends, arena, pmatch: vec![None; self.groups + 1] };
+        let mut pmatch = std::mem::take(groups);
+        pmatch.clear();
+        pmatch.resize(self.groups + 1, None);
+        let mut d = Dissect { tree: self, s, ends, arena, pmatch };
         let found = self.find_in(&mut d, begin);
+        *groups = d.pmatch;
         if d.arena.capacity() <= MAX_SCRATCH {
             *self.scratch.borrow_mut() = (d.ends, d.arena);
         }
         found
     }
 
-    /// [`Tree::find`] with the state of a dissection.
-    fn find_in<'a>(&'a self, d: &mut Dissect<'a>, begin: usize) -> Option<Groups> {
+    /// [`Tree::find_into`] with the state of a dissection. The positions are in [`Dissect::pmatch`] when it gives true.
+    fn find_in<'a>(&'a self, d: &mut Dissect<'a>, begin: usize) -> bool {
         let s = d.s;
         let root = &self.root;
         let shorter = root.flags & SHORTER != 0;
@@ -411,20 +421,21 @@ impl Tree {
                 d.shortest(root, begin, estart, estop)
             } else {
                 d.longest(root, begin, estop)
-            }?;
+            };
+            let Some(end) = end else { return false };
             d.pmatch.fill(None);
             if d.dissect(root, begin, end) {
                 d.pmatch[0] = Some((begin, end));
-                return Some(std::mem::take(&mut d.pmatch));
+                return true;
             }
             if shorter {
                 if end == estop {
-                    return None;
+                    return false;
                 }
                 estart = end + 1;
             } else {
                 if end == begin {
-                    return None;
+                    return false;
                 }
                 estop = end - 1;
             }

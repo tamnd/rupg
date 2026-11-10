@@ -4489,7 +4489,11 @@ fn parallel_plan(
             _ => code_map(exec, tasks, from, kind)?,
         });
     }
-    Some((groups::Plan { keys, folds, bases: bases.len(), filters, maps, groups: 0 }, derived, dicts))
+    Some((
+        groups::Plan { keys, folds, bases: bases.len(), filters, maps, groups: 0 },
+        derived,
+        dicts,
+    ))
 }
 
 /// The plan of [`groups::run`] of [`parallel_plan`], the keys that come from the words of other keys, and the dictionary of each key, by its place in the keys, whose codes a map of [`key_map`] gives.
@@ -4613,12 +4617,25 @@ fn key_map(
                     parts: vec![Vec::new(); KEY_PARTS],
                     ..KeyChunk::default()
                 };
+                let (Ok(low), Ok(high)) = (u32::try_from(first - 1), u32::try_from(last - 1))
+                else {
+                    return;
+                };
+                // The dictionary of a text column holds only the bytes of a `String`. One check of the bytes of all the strings of the task costs less than a check of each string. When the bytes are text and each string starts and ends at the start of a character, each string is text.
+                let base = source.end(low);
+                let all = std::str::from_utf8(&source.bytes()[base..source.end(high)]).ok();
+                let Ok(mut compiled) = replace.compiled() else { return };
                 for (at, code) in (first..last).enumerate() {
                     let Ok(code) = u32::try_from(code) else { return };
-                    // The dictionary of a text column holds only the bytes of a `String`.
-                    let Ok(text) = std::str::from_utf8(source.get(code)) else { return };
+                    let text = all.and_then(|all| {
+                        all.get(source.end(code - 1) - base..source.end(code) - base)
+                    });
+                    let Some(text) = text.or_else(|| std::str::from_utf8(source.get(code)).ok())
+                    else {
+                        return;
+                    };
                     let start = chunk.text.len();
-                    if replace.text_into(text, &mut chunk.text).is_err() {
+                    if compiled.text_into(text, &mut chunk.text).is_err() {
                         return;
                     }
                     chunk.ends.push(chunk.text.len());

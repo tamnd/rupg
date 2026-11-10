@@ -141,22 +141,39 @@ impl Regex {
 
     /// [`Regex::find_at`] in the bytes of a text, with the code of `regerror` for the error. The engine reads the characters of the text in UTF-8 where they are, and each position is the byte where a character starts.
     fn search(&self, s: &[u8], from: usize) -> std::result::Result<Option<tree::Groups>, Code> {
+        let mut groups = tree::Groups::new();
+        Ok(self.search_into(s, from, &mut groups)?.then_some(groups))
+    }
+
+    /// [`Regex::search`] into `groups`, which the search uses again with no allocation. When it gives false, `groups` has no meaning.
+    fn search_into(
+        &self,
+        s: &[u8],
+        from: usize,
+        groups: &mut tree::Groups,
+    ) -> std::result::Result<bool, Code> {
         let tree = self.tree.get_or_init(|| tree::Tree::new(&self.parsed));
         let tree = tree.as_ref().map_err(|code| *code)?;
         if self.prog.has_backrefs() {
-            return Ok(tree.cfind(s, from));
+            return Ok(match tree.cfind(s, from) {
+                Some(found) => {
+                    *groups = found;
+                    true
+                }
+                None => false,
+            });
         }
         if self.prog.anchored() {
-            return Ok(if from == 0 { tree.find(s, 0) } else { None });
+            return Ok(from == 0 && tree.find_into(s, 0, groups));
         }
         let mut from = from;
         while let Some(begin) = self.prog.first(s, from) {
-            if let Some(groups) = tree.find(s, begin) {
-                return Ok(Some(groups));
+            if tree.find_into(s, begin, groups) {
+                return Ok(true);
             }
             from = after(s, begin);
         }
-        Ok(None)
+        Ok(false)
     }
 }
 
@@ -617,22 +634,36 @@ fn replace_into(
     s: &str,
     re: &Regex,
     replacement: &str,
+    at: (usize, i64),
+    out: &mut String,
+) -> Result<()> {
+    replace_with(s, re, replacement, at, out, &mut tree::Groups::new())
+}
+
+/// [`replace_into`] with a buffer for the positions of the groups, which each match uses again.
+fn replace_with(
+    s: &str,
+    re: &Regex,
+    replacement: &str,
     (start, n): (usize, i64),
     out: &mut String,
+    groups: &mut tree::Groups,
 ) -> Result<()> {
     let mut done = 0;
     let mut search = byte_of(s, start);
     let mut count = 0;
     while search <= s.len() {
-        let Some(groups) = re.find_at(s, search)? else { break };
-        let span = whole(&groups)?;
+        if !re.search_into(s.as_bytes(), search, groups).map_err(Code::error)? {
+            break;
+        }
+        let span = whole(groups)?;
         count += 1;
         if n > 0 && count != n {
             search = next_search(s, span);
             continue;
         }
         out.push_str(&s[done..span.0]);
-        substitute(out, replacement, &groups, s);
+        substitute(out, replacement, groups, s);
         done = span.1;
         if n > 0 {
             break;
@@ -719,6 +750,42 @@ impl Replace {
     pub fn text_into(&self, s: &str, out: &mut String) -> Result<()> {
         let re = compile(&self.pattern, self.cflags)?;
         replace_into(s, &re, &self.replacement, (self.start, self.n), out)
+    }
+
+    /// The compiled pattern of the replacement for the strings of one thread, so that each string does not look for the pattern in the cache.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the pattern.
+    pub fn compiled(&self) -> Result<Compiled<'_>> {
+        let re = compile(&self.pattern, self.cflags)?;
+        Ok(Compiled { replace: self, re, groups: tree::Groups::new() })
+    }
+}
+
+/// A [`Replace`] with its compiled pattern and a buffer for the positions of the groups, for the strings of one thread.
+pub struct Compiled<'a> {
+    replace: &'a Replace,
+    re: Rc<Regex>,
+    groups: tree::Groups,
+}
+
+impl std::fmt::Debug for Compiled<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compiled").field("replace", self.replace).finish_non_exhaustive()
+    }
+}
+
+impl Compiled<'_> {
+    /// [`Replace::text_into`] with the compiled pattern.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Replace::text_into`].
+    pub fn text_into(&mut self, s: &str, out: &mut String) -> Result<()> {
+        let replace = self.replace;
+        let at = (replace.start, replace.n);
+        replace_with(s, &self.re, &replace.replacement, at, out, &mut self.groups)
     }
 }
 
