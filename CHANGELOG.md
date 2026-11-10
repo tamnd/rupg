@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The serial `GROUP BY` scan finds the rate of new groups for each row of the table, also the rows that the conditions take out, so that a filter that keeps few rows does not make the map reserve room for many times the real groups. ClickBench q30 on 2M rows: 267M to 209M cycles, about 1.6 times faster than DuckDB.
 - `regexp_replace` as a key of `GROUP BY` on a text column compiles its pattern once for each task, and each match uses the same buffer for the positions of its groups. Each task checks the UTF-8 of all its strings at once. ClickBench Q28 on 2M rows runs 7.9 percent fewer instructions.
 - `COPY FROM` places the rows of each batch of `CopyMultiInsertInfo` on the pages as `heap_multi_insert` does with the bulk insert state, also when the load reads the rows by columns or a row is long. The size of the table and the ctids of the rows match PostgreSQL 19 (#1482).
 - `PREPARE TRANSACTION` works for a transaction that changed the catalog: the prepared transaction keeps the catalog lock and its catalog changes until `COMMIT PREPARED` publishes them or `ROLLBACK PREPARED` discards them. `CREATE INDEX CONCURRENTLY` waits for the transactions that write its table, as `WaitForLockers` waits, and a lock timeout leaves the index invalid (#1484).
