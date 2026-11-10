@@ -50,6 +50,13 @@ enum Layout {
     Varlena(usize, usize),
 }
 
+/// `make_result`: the length of the data of a `numeric` value, a header of two bytes when `NUMERIC_CAN_BE_SHORT` and four bytes otherwise, then the digits.
+pub(super) fn numeric_len(n: &rupg_types::Numeric) -> usize {
+    let short = n.dscale() <= 63 && (-64..=63).contains(&n.weight());
+    let header = if short || n.digits().is_empty() { 2 } else { 4 };
+    header + 2 * n.digits().len()
+}
+
 /// The storage of a value as the type of its variant stores it. `Text` has the storage of `text`, and a value of `name` gets the storage of its column from [`Fixed`]. The types whose storage the engine does not follow take 16 bytes of data.
 fn layout(value: &Value) -> Layout {
     match value {
@@ -67,12 +74,7 @@ fn layout(value: &Value) -> Layout {
         Value::Uuid(_) => Layout::Fixed(16, 1),
         Value::Text(text) => Layout::Varlena(text.len(), 4),
         Value::Bytea(bytes) => Layout::Varlena(bytes.len(), 4),
-        // `make_result`: a header of two bytes when `NUMERIC_CAN_BE_SHORT`, and four bytes otherwise, then the digits.
-        Value::Numeric(n) => {
-            let short = n.dscale() <= 63 && (-64..=63).contains(&n.weight());
-            let header = if short || n.digits().is_empty() { 2 } else { 4 };
-            Layout::Varlena(header + 2 * n.digits().len(), 4)
-        }
+        Value::Numeric(n) => Layout::Varlena(numeric_len(n), 4),
         Value::Inet(inet) => Layout::Varlena(2 + inet.family.size(), 4),
         // `construct_md_array`: the header with the dimensions and the null bitmap, then each element at its alignment, a `varlena` element with a header of four bytes.
         Value::Array(array) => {

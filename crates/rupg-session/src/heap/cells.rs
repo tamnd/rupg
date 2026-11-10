@@ -87,6 +87,19 @@ fn width(kind: Kind) -> Width {
     }
 }
 
+/// The end of the data of each value of a column of the kind `Kind::Numeric(scale)`, with the values one after the other, as [`plain_lens`] takes the ends of the values of a `varlena` column.
+fn numeric_ends(scale: u8, values: &[i64]) -> Vec<usize> {
+    let mut end = 0;
+    values
+        .iter()
+        .map(|&value| {
+            let n = rupg_types::Numeric::from_decimal(i128::from(value), u32::from(scale));
+            end += pages::numeric_len(&n);
+            end
+        })
+        .collect()
+}
+
 impl Frozen {
     /// [`Frozen::append`] of the rows from `from` to `to` of `cells`, which are no more than the rows left in the open segment. False, with the columns as they were, when a column does not keep the values.
     fn append_cells(
@@ -141,10 +154,20 @@ impl Heap {
         if !table.keys.is_empty() {
             return Ok(None);
         }
-        let columns = cells.columns.iter().map(|(kind, values)| match values {
-            Values::Bytes(_, ends) => (width(*kind), Some(&ends[..])),
-            Values::Ints(_) => (width(*kind), None),
-        });
+        // A `numeric` value is a `varlena` value whose length comes from its digits.
+        let numeric: Vec<Option<Vec<usize>>> = cells
+            .columns
+            .iter()
+            .map(|(kind, values)| match (kind, values) {
+                (Kind::Numeric(scale), Values::Ints(values)) => Some(numeric_ends(*scale, values)),
+                _ => None,
+            })
+            .collect();
+        let columns =
+            cells.columns.iter().zip(&numeric).map(|((kind, values), numeric)| match values {
+                Values::Bytes(_, ends) => (width(*kind), Some(&ends[..])),
+                Values::Ints(_) => (width(*kind), numeric.as_deref()),
+            });
         let Some(lens) = plain_lens(columns, cells.rows, &table.fixed, &table.storage) else {
             return Ok(None);
         };
