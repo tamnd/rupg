@@ -42,7 +42,21 @@ persist_enum!(Value {
 });
 
 persist_struct!(AnyArray { elem, text });
-persist_struct!(Record { types, values, names });
+/// A record that is read is formed when it is read.
+impl Persist for Record {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.types.put(out);
+        self.values.put(out);
+        self.names.put(out);
+    }
+
+    fn take(input: &mut Reader<'_>) -> Result<Self> {
+        let types = Persist::take(input)?;
+        let values = Persist::take(input)?;
+        let names = Persist::take(input)?;
+        Ok(Record::named(types, values, names))
+    }
+}
 persist_struct!(Array<Value> { dims, values });
 persist_struct!(ArrayDim { len, lower });
 persist_struct!(Range { flags, lower, upper });

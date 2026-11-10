@@ -969,7 +969,7 @@ fn json_rows(
     }
     for (i, mut values) in rows.into_iter().enumerate() {
         values.truncate(types.len());
-        let record = Record { types: types.to_vec(), values, names: Some(Arc::clone(names)) };
+        let record = Record::named(types.to_vec(), values, Some(Arc::clone(names)));
         let mut line = String::new();
         if force_array {
             line.push(if i == 0 { ' ' } else { ',' });

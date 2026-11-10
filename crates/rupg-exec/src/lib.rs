@@ -208,7 +208,7 @@ fn sql_result(ret: u32, rows: Rows, types: Vec<u32>) -> Value {
     if row.len() == 1 && ((ret != oid::RECORD && !composite) || whole) {
         return row.pop().unwrap_or(Value::Null);
     }
-    Value::Record(Box::new(Record { types, values: row, names: None }))
+    Value::Record(Box::new(Record::new(types, row)))
 }
 
 /// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns, or it is a procedure, which gives a row also with one column.
@@ -3059,7 +3059,7 @@ impl<'a> Eval<'a> {
                     row.pop().unwrap_or(Value::Null)
                 } else {
                     let (types, names) = (types.clone(), names.clone());
-                    Value::Record(Box::new(Record { types, values: row, names }))
+                    Value::Record(Box::new(Record::named(types, row, names)))
                 }
             })
             .collect())
@@ -3192,7 +3192,10 @@ impl<'a> Eval<'a> {
                 Ok(Value::Bool(null_test(&self.eval(arg)?, *is_null)))
             }
             ExprKind::FieldSelect(arg, field) => Ok(match self.eval(arg)? {
-                Value::Record(record) => record.values.get(*field).cloned().unwrap_or(Value::Null),
+                Value::Record(record) => {
+                    rupg_func::check_row_type(arg.ty, &record, self.session)?;
+                    record.values.get(*field).cloned().unwrap_or(Value::Null)
+                }
                 _ => Value::Null,
             }),
             ExprKind::BooleanTest(arg, test) => {
@@ -3268,7 +3271,7 @@ impl<'a> Eval<'a> {
                 let values = row.fields.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
                 let types = row.fields.iter().map(|e| e.ty).collect();
                 let names = Some(row.names.iter().cloned().collect());
-                Ok(Value::Record(Box::new(Record { types, values, names })))
+                Ok(Value::Record(Box::new(Record::named(types, values, names))))
             }
             ExprKind::SqlValue(v) => self.sql_value(*v),
             ExprKind::Var(var) if var.levels_up == 0 => {

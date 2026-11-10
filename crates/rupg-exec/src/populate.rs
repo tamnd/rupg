@@ -243,7 +243,7 @@ impl Eval<'_> {
             }
         }
         let types = row.columns.iter().map(|c| c.1).collect();
-        Ok(Ok(Value::Record(Box::new(Record { types, values, names: row.names.clone() }))))
+        Ok(Ok(Value::Record(Box::new(Record::named(types, values, row.names.clone())))))
     }
 
     /// `populate_composite` for a field or an element: the record of a JSON object. `default` is the value of the field in the base record.

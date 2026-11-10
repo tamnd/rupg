@@ -725,7 +725,7 @@ impl Connection {
                     error,
                 })?
             } else if let Node::LockStmt(stmt) = node {
-                self.lock(stmt)?
+                self.lock(stmt, true)?
             } else if let Some(done) = self.async_statement(node) {
                 done?
             } else if let Node::ConstraintsSetStmt(stmt) = node {

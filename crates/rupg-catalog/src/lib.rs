@@ -1386,6 +1386,8 @@ pub struct Catalog {
     dropped_builtins: BTreeSet<ObjRef>,
     /// The tables that lost their last partition or child: `relhassubclass` stays true for them until the next `ANALYZE`, as only `acquire_inherited_sample_rows` clears it.
     kept_subclass: BTreeSet<u32>,
+    /// The time of [`rupg_common::row_clock`] when a column of the row type of a relation last changed type, by the OID of the relation. A composite datum formed before it cannot be read with the row type. It is not stored, as the datums of a server that starts again are all formed later.
+    row_altered: BTreeMap<u32, u64>,
     /// The partitions with a pending detach that the statement of this copy leaves out of the partitions of their parents, as [`Catalog::omit_detached`] gives them. Only a copy for one statement has any, and they are not stored.
     omitted: BTreeSet<u32>,
 }
@@ -1508,6 +1510,7 @@ impl Catalog {
             uncommitted_labels: Vec::new(),
             dropped_builtins: BTreeSet::new(),
             kept_subclass: BTreeSet::new(),
+            row_altered: BTreeMap::new(),
             omitted: BTreeSet::new(),
         }
     }
@@ -2294,6 +2297,7 @@ impl Catalog {
         column.typmod = new.typmod;
         column.collation = new.collation;
         column.ndims = new.ndims;
+        self.row_altered.insert(table, rupg_common::row_clock::tick());
         let me = ObjRef::column(table, number);
         self.depends.retain(|d| {
             d.object != me
@@ -2305,6 +2309,11 @@ impl Catalog {
             self.depend(me, ObjRef::new(class, found), DepKind::Normal);
         }
         Ok(())
+    }
+
+    /// The time of [`rupg_common::row_clock`] when a column of the row type of the relation `relation` last changed type, or 0.
+    pub fn row_altered(&self, relation: u32) -> u64 {
+        self.row_altered.get(&relation).copied().unwrap_or(0)
     }
 
     /// The column `column` of an index, from 0, after a change of the type of the column `from` of the table, as the index that `ATPostAlterTypeCleanup` makes again has it: the type of the table column, the collation `collation`, and for a key column the operator class `class`.
@@ -5041,7 +5050,7 @@ rupg_common::persist_struct!(Catalog {
     uncommitted_labels,
     dropped_builtins,
     kept_subclass
-} skip { omitted });
+} skip { row_altered, omitted });
 
 #[cfg(test)]
 mod tests;

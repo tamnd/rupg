@@ -82,12 +82,19 @@ pub struct Record {
     pub values: Vec<Value>,
     /// The names of the fields of an anonymous `record`, as the row descriptor that `BlessTupleDesc` keeps for the typmod of the value. `None` when the type of the value gives the names, or when the fields are `f1`, `f2` and so on.
     pub names: Option<Arc<[String]>>,
+    /// The time of [`rupg_common::row_clock`] when the record was formed. A row type whose columns changed type after it gives an error for the record, as the descriptor of the datum is not the one of the type any more.
+    pub formed: u64,
 }
 
 impl Record {
     /// A record with no names for its fields.
     pub fn new(types: Vec<u32>, values: Vec<Value>) -> Record {
-        Record { types, values, names: None }
+        Record::named(types, values, None)
+    }
+
+    /// A record with the names of its fields, formed now.
+    pub fn named(types: Vec<u32>, values: Vec<Value>, names: Option<Arc<[String]>>) -> Record {
+        Record { types, values, names, formed: rupg_common::row_clock::now() }
     }
 }
 
