@@ -473,7 +473,8 @@ impl Connection {
         let present = loop {
             let keys = state.other.get_or_insert_with(|| {
                 // The check sees the rows of the statement, as the command counter goes up before the triggers fire. For a partitioned referenced table, the latest snapshot that finds the partition reads the rows too, so the check sees a row that committed after the snapshot of the transaction, as PostgreSQL does.
-                let rows = self.table_rows(foreign.other, self.is_partitioned_table(foreign.other));
+                let partitioned = self.is_partitioned_table(foreign.other);
+                let rows = self.table_rows(foreign.other, partitioned, &foreign.other_columns);
                 Keys::of(
                     rows,
                     &foreign.other_columns,
@@ -577,7 +578,7 @@ impl Connection {
         }
         let newer = state.newer.get_or_insert_with(|| {
             let seen: HashSet<(u32, u64)> = self
-                .table_rows(foreign.other, false)
+                .table_rows(foreign.other, false, &[])
                 .iter()
                 .filter_map(|(relation, row)| match row.last() {
                     Some(&Value::Int8(tid)) => Some((*relation, tid.cast_unsigned())),
@@ -585,7 +586,7 @@ impl Connection {
                 })
                 .collect();
             let rows: Vec<(u32, Vec<Value>)> = self
-                .table_rows(foreign.other, true)
+                .table_rows(foreign.other, true, &foreign.other_columns)
                 .into_iter()
                 .filter(|(relation, row)| match row.last() {
                     Some(&Value::Int8(tid)) => !seen.contains(&(*relation, tid.cast_unsigned())),
@@ -632,7 +633,7 @@ impl Connection {
                 state.own_permitted = true;
             }
             let keys = state.own.get_or_insert_with(|| {
-                let rows = self.table_rows(batch.table, false);
+                let rows = self.table_rows(batch.table, false, &foreign.columns);
                 Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, false)
             });
             if keys.has(&probe, &foreign.types)? {
@@ -653,7 +654,7 @@ impl Connection {
         }
         // `ri_restrict` passes `detectNewRows`, so it sees a row of the referencing table that committed after the snapshot of the transaction.
         let keys = state.other.get_or_insert_with(|| {
-            let rows = self.table_rows(foreign.other, true);
+            let rows = self.table_rows(foreign.other, true, &foreign.other_columns);
             Keys::of(
                 rows,
                 &foreign.other_columns,
@@ -685,14 +686,14 @@ impl Connection {
         let last = probe.len() - 1;
         let ty = foreign.types[last];
         let own = state.own.get_or_insert_with(|| {
-            let rows = self.table_rows(batch.table, false);
+            let rows = self.table_rows(batch.table, false, &foreign.columns);
             Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types, true)
         });
         let replacements: Vec<Value> =
             own.periods(probe, &foreign.types)?.into_iter().cloned().collect();
         let replacements: Vec<&Value> = replacements.iter().collect();
         let others = state.other.get_or_insert_with(|| {
-            let rows = self.table_rows(foreign.other, true);
+            let rows = self.table_rows(foreign.other, true, &foreign.other_columns);
             Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types, true)
         });
         for period in others.periods(probe, &foreign.types)? {
@@ -727,13 +728,13 @@ impl Connection {
             let foreign = rupg_analyze::foreign_keys(&reader, partition, write)?;
             for foreign in foreign.iter().filter(|f| !f.referencing && f.cloned) {
                 let others = Keys::of(
-                    self.table_rows(foreign.other, false),
+                    self.table_rows(foreign.other, false, &foreign.other_columns),
                     &foreign.other_columns,
                     &foreign.referencing_types,
                     &foreign.types,
                     foreign.period,
                 );
-                for (_, row) in self.table_rows(partition, false) {
+                for (_, row) in self.table_rows(partition, false, &foreign.columns) {
                     let key: Vec<&Value> = foreign
                         .columns
                         .iter()
@@ -776,8 +777,8 @@ impl Connection {
         self.catalog().relation(table).is_some_and(|r| r.kind == RelKind::Partitioned)
     }
 
-    /// The rows of the table `table` that a check of a foreign key reads, with the latest snapshot when `latest` is true, each with the table or leaf partition that has it and ending with the ID of its version. A partitioned table has the rows of its leaf partitions, with the columns of the table matched by name, as the scan of the query of `ri_PerformCheck` gives them.
-    fn table_rows(&self, table: u32, latest: bool) -> Vec<(u32, Vec<Value>)> {
+    /// The rows of the table `table` that a check of a foreign key reads, with the latest snapshot when `latest` is true, each with the table or leaf partition that has it and ending with the ID of its version. A partitioned table has the rows of its leaf partitions, with the columns of the table matched by name, as the scan of the query of `ri_PerformCheck` gives them. The rows of a table that is not partitioned have the values of only the columns `columns`, at their places, so that a check reads only the key columns.
+    fn table_rows(&self, table: u32, latest: bool, columns: &[usize]) -> Vec<(u32, Vec<Value>)> {
         let heap = self.store.heap();
         let mut view = self.view();
         // `ri_PerformCheck` with `detectNewRows` in `REPEATABLE READ` and `SERIALIZABLE`: the query reads the rows with a new snapshot, as `GetLatestSnapshot` gives it. The session holds the older `xmin` of the snapshot of the transaction, which keeps the versions of the new snapshot.
@@ -791,7 +792,14 @@ impl Connection {
             None => catalog,
         };
         let Some(rel) = catalog.relation(table).filter(|r| r.kind == RelKind::Partitioned) else {
-            return heap.rows(table, &view).into_iter().map(|row| (table, row)).collect();
+            let mut read = columns.to_vec();
+            read.sort_unstable();
+            read.dedup();
+            return heap
+                .sparse_rows(table, &view, &read)
+                .into_iter()
+                .map(|row| (table, row))
+                .collect();
         };
         let mut rows = Vec::new();
         // The leaves in the order of a scan, or in the order of their OIDs when a compare of the bounds fails.

@@ -2539,6 +2539,47 @@ impl Heap {
         rows
     }
 
+    /// The rows of [`Heap::rows`] with the values of only the columns `columns`, which go up, each at its place, a null at each other place before the last of them, and then the ID of the version. A check of keys reads only its columns, so the other values of the frozen columns do not decode.
+    pub(crate) fn sparse_rows(
+        &self,
+        relation: u32,
+        view: &View,
+        columns: &[usize],
+    ) -> Vec<Vec<Value>> {
+        let state = self.state();
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
+            return Vec::new();
+        };
+        let width = columns.last().map_or(0, |&last| last + 1);
+        let mut rows = Vec::new();
+        table.each_version_row(Some(columns), |version, values| {
+            if !visible(version, view) {
+                return;
+            }
+            let mut row = Vec::with_capacity(width + 1);
+            row.resize(width, Value::Null);
+            for &column in columns {
+                if let Some(value) = values.get(column) {
+                    row[column] = value.clone();
+                }
+            }
+            row.extend(version_row(version, &[], &table.combos, Some(&[]), false));
+            rows.push(row);
+        });
+        rows
+    }
+
+    /// True when the view sees a row of the table `relation`.
+    pub(crate) fn sees_rows(&self, relation: u32, view: &View) -> bool {
+        let state = self.state();
+        let Some(table) = state.tables.meta(&(view.database, relation)) else {
+            return false;
+        };
+        let mut seen = false;
+        table.each_version(|version| seen = seen || visible(version, view));
+        seen
+    }
+
     /// The columns `wanted` of a table, each with its physical type, in the order of the versions, when the view sees each version of the table and every version is live. The heap makes a column from the versions the first time a scan reads it, and keeps it until the table changes. It gives the number of rows with the columns. `None` is a table that the scan must read by rows: the table is small, a version is deleted, the view does not see a version, or a value does not have the type of its column.
     pub(crate) fn columns(
         &self,

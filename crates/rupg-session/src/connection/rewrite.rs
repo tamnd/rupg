@@ -249,7 +249,8 @@ impl Connection {
             }
             // The rows that the truncate deleted stay visible to the command that deleted them.
             let view = View { xid: self.xid.get(), ..self.view() };
-            let rows = heap.rows(table, &view);
+            // A check in place reads the rows after the plan, which tells the columns that the check needs.
+            let rows = (!in_place).then(|| heap.rows(table, &view));
             // The `INSERT` of the rows gives a new column of `fills` the default that it had when `ADD COLUMN` ran.
             let own: Vec<&Fill> = fills.iter().filter(|f| f.table == table).collect();
             let filled;
@@ -313,7 +314,7 @@ impl Connection {
             if let Some(message) = &repack.verbose {
                 notices.push(info(message.clone()));
             }
-            self.rewrite_table(&old, rel, work, (&view, false, true), rows, &[])?;
+            self.rewrite_table(&old, rel, work, (&view, false, true), Some(rows), &[])?;
             if repack.verbose.is_some() {
                 let mut notice = info(format!(
                     "\"{}\": found 0 removable, {count} nonremovable row versions in {pages} pages",
@@ -336,7 +337,7 @@ impl Connection {
         rel: &Relation,
         work: &Arc<Catalog>,
         (view, in_place, repack): (&View, bool, bool),
-        rows: Vec<Vec<Value>>,
+        rows: Option<Vec<Vec<Value>>>,
         transforms: &[Transform],
     ) -> Result<(), Error> {
         let Some(now) = work.relation(rel.oid) else { return Ok(()) };
@@ -441,10 +442,87 @@ impl Connection {
             .collect();
         // `ExecutorStart` checks the plan once for the statement. A plan that takes the values of the old row as its new row does not run, as the values of the row are its values already.
         let passes = plan.passes_params();
+        let heap = self.store.heap();
+        // `ATPostAlterTypeCleanup` makes a foreign key on a generated column with a new expression again, so the new values are checked.
+        let regenerated = |constraint: u32| {
+            work.constraint(constraint).is_some_and(|c| {
+                c.keys.iter().any(|&k| {
+                    now.column(k).is_some_and(|col| col.generated != 0)
+                        && old.default_of(rel.oid, k).map(|d| &d.expr)
+                            != work.default_of(rel.oid, k).map(|d| &d.expr)
+                })
+            })
+        };
+        let foreign: Vec<_> = info
+            .foreign
+            .iter()
+            .filter(|f| {
+                // A foreign key that becomes valid checks the rows, and a `NOT VALID` one does not.
+                let validated = work.constraint(f.constraint).is_some_and(|c| c.validated)
+                    && old.constraint(f.constraint).is_none_or(|o| !o.validated);
+                f.referencing && (validated || regenerated(f.constraint))
+            })
+            .map(|f| rupg_analyze::Foreign { deferrable: false, deferred: false, ..f.clone() })
+            .collect();
+        // `index_build`: a new index with an expression or a predicate computes them for each row, so that their errors stop the build. The rewrite of `CLUSTER`, `REPACK` and `VACUUM FULL` computes them once, as the insert of the rows into the new indexes does, since `reindex_relation` builds the indexes from the new file.
+        let built =
+            if repack { Vec::new() } else { rupg_analyze::built_index_keys(old, work, rel.oid)? };
+        let not_null = |name: &str| {
+            let error = Error::new(
+                SqlState::NOT_NULL_VIOLATION,
+                format!("column \"{name}\" of relation \"{}\" contains null values", now.name),
+            );
+            rupg_func::with_table_column(error, now.oid, name, &reader)
+        };
+        // A check in place with a plan that takes the values of the old row as its new row reads only the columns of the new not-null constraints and of the foreign keys, as `ATRewriteTable` tests only the new not-null constraints and `RI_Initial_Check` reads only the key columns. A valid not-null constraint from before has no null to find.
+        let sparse = rows.is_none()
+            && passes
+            && own.is_empty()
+            && live.len() == width
+            && now.columns.len() == width
+            && !reshape.contains(&true)
+            && built.is_empty()
+            && now.kind != RelKind::MatView;
+        let mut new_rows = Vec::new();
+        let rows = match rows {
+            Some(rows) => rows,
+            None if sparse => {
+                let newly: Vec<usize> = (0..width)
+                    .filter(|&i| {
+                        let (before, after) = (&rel.columns[i], &now.columns[i]);
+                        after.not_null
+                            && !after.not_null_invalid
+                            && !(before.not_null && !before.not_null_invalid)
+                    })
+                    .collect();
+                let mut read = newly.clone();
+                read.extend(foreign.iter().flat_map(|f| f.columns.iter().copied()));
+                read.sort_unstable();
+                read.dedup();
+                let any = if read.is_empty() {
+                    heap.sees_rows(rel.oid, view)
+                } else {
+                    new_rows = heap.sparse_rows(rel.oid, view, &read);
+                    !new_rows.is_empty()
+                };
+                if any {
+                    plan.start(&reader)?;
+                }
+                for row in &new_rows {
+                    if let Some(&at) =
+                        newly.iter().find(|&&at| row.get(at).is_none_or(Value::is_null))
+                    {
+                        return Err(not_null(&now.columns[at].name));
+                    }
+                }
+                Vec::new()
+            }
+            None => heap.rows(rel.oid, view),
+        };
         if !rows.is_empty() {
             plan.start(&reader)?;
         }
-        let mut new_rows = Vec::with_capacity(rows.len());
+        new_rows.reserve(rows.len());
         for row in rows {
             // A row from before an `ADD COLUMN` has no value for the new columns, which are null, and the ID of the version is at the end of the row.
             let stored = row.len().saturating_sub(1);
@@ -466,19 +544,7 @@ impl Connection {
                 for (column, value) in now.columns.iter().zip(&values) {
                     // `ATRewriteTable` checks only the valid not-null constraints.
                     if column.not_null && !column.not_null_invalid && value.is_null() {
-                        let error = Error::new(
-                            SqlState::NOT_NULL_VIOLATION,
-                            format!(
-                                "column \"{}\" of relation \"{}\" contains null values",
-                                column.name, now.name
-                            ),
-                        );
-                        return Err(rupg_func::with_table_column(
-                            error,
-                            now.oid,
-                            &column.name,
-                            &reader,
-                        ));
+                        return Err(not_null(&column.name));
                     }
                 }
                 // The first column of the checks has the number of the check that failed.
@@ -504,38 +570,13 @@ impl Connection {
             }
         }
         drop(reader);
-        let heap = self.store.heap();
-        // `ATPostAlterTypeCleanup` makes a foreign key on a generated column with a new expression again, so the new values are checked.
-        let regenerated = |constraint: u32| {
-            work.constraint(constraint).is_some_and(|c| {
-                c.keys.iter().any(|&k| {
-                    now.column(k).is_some_and(|col| col.generated != 0)
-                        && old.default_of(rel.oid, k).map(|d| &d.expr)
-                            != work.default_of(rel.oid, k).map(|d| &d.expr)
-                })
-            })
-        };
-        let foreign: Vec<_> = info
-            .foreign
-            .iter()
-            .filter(|f| {
-                // A foreign key that becomes valid checks the rows, and a `NOT VALID` one does not.
-                let validated = work.constraint(f.constraint).is_some_and(|c| c.validated)
-                    && old.constraint(f.constraint).is_none_or(|o| !o.validated);
-                f.referencing && (validated || regenerated(f.constraint))
-            })
-            .map(|f| rupg_analyze::Foreign { deferrable: false, deferred: false, ..f.clone() })
-            .collect();
-        let checked = if foreign.is_empty() { Vec::new() } else { new_rows.clone() };
+        let checked = if foreign.is_empty() || in_place { Vec::new() } else { new_rows.clone() };
         // The rows of a new index are checked at once, also when the index is deferrable.
         let unique: Vec<_> = info
             .unique
             .iter()
             .map(|u| rupg_analyze::Unique { deferrable: None, ..u.clone() })
             .collect();
-        // `index_build`: a new index with an expression or a predicate computes them for each row, so that their errors stop the build. The rewrite of `CLUSTER`, `REPACK` and `VACUUM FULL` computes them once, as the insert of the rows into the new indexes does, since `reindex_relation` builds the indexes from the new file.
-        let built =
-            if repack { Vec::new() } else { rupg_analyze::built_index_keys(old, work, rel.oid)? };
         if !built.is_empty() {
             let reader = self.reader_without_view(Arc::clone(work));
             let keys = self.as_maintenance(rel.owner, || {
@@ -552,9 +593,9 @@ impl Connection {
         if in_place {
             self.check_keys_in_place(old, rel, view, &info.unique, work)?;
             self.check_exclusion_build(old, rel.oid, view, work)?;
-            if !checked.is_empty() {
+            if !foreign.is_empty() && !new_rows.is_empty() {
                 self.fire(vec![
-                    Batch::new(info, &foreign, view.command, checked, Vec::new()).validating(),
+                    Batch::new(info, &foreign, view.command, new_rows, Vec::new()).validating(),
                 ])?;
             }
             return Ok(());
