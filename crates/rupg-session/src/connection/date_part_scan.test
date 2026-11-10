@@ -1,0 +1,78 @@
+> CREATE TABLE dp (id int, ts timestamp, d date, f float8)
+CREATE TABLE
+> INSERT INTO dp SELECT i, timestamp '2013-07-01 03:04:05.123456' + (i * 7919) * interval '1 second', date '2012-12-25' + (i % 900), (i % 13) * 0.5 FROM generate_series(1, 20000) i
+INSERT 0 20000
+> INSERT INTO dp VALUES (20001, '0010-06-01 03:04:05 BC', '0010-06-01 BC', 'NaN'), (20002, '0001-12-31 23:59:59.999999 BC', '0001-01-01 BC', '-0'), (20003, 'infinity', 'infinity', 'Infinity'), (20004, '-infinity', '-infinity', '-Infinity'), (20005, NULL, NULL, NULL), (20006, '4713-11-24 00:00:00 BC', '4713-11-24 BC', 1e300)
+INSERT 0 6
+> SELECT sum(extract(year FROM ts)), sum(extract(month FROM ts)), sum(extract(day FROM ts)), sum(extract(quarter FROM ts)), sum(extract(dow FROM ts)), sum(extract(isodow FROM ts)), sum(extract(doy FROM ts)), sum(extract(hour FROM ts)), sum(extract(minute FROM ts)), sum(extract(microseconds FROM ts)) FROM dp WHERE id < 20003 OR id > 20004
+fields sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1
+row 40305402,130546,313741,50225,60047,79997,3663314,229998,590153,592734119999
+SELECT 1
+> SELECT sum(date_part('year', ts)), sum(date_part('MONTH', ts)), sum(date_part('day', ts)), sum(date_part('quarter', ts)), sum(date_part('dow', ts)), sum(date_part('isodow', ts)), sum(date_part('doy', ts)), sum(date_part('hour', ts)), sum(date_part('minute', ts)), sum(date_part('us', ts)) FROM dp WHERE id < 20003 OR id > 20004
+fields sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1,sum:701:8:-1
+row 40305402,130546,313741,50225,60047,79997,3663314,229998,590153,592734119999
+SELECT 1
+> SELECT sum(extract(year FROM d)), sum(extract(month FROM d)), sum(extract(day FROM d)), sum(extract(quarter FROM d)), sum(extract(dow FROM d)), sum(extract(isodow FROM d)), sum(extract(doy FROM d)) FROM dp WHERE id < 20003 OR id > 20004
+fields sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1,sum:1700:-1:-1
+row 40270318,119066,313510,46454,60065,79973,3310512
+SELECT 1
+> SELECT sum(date_part('year', d)), sum(date_part('doy', d)), sum(date_part('dow', d)) FROM dp WHERE id < 20003 OR id > 20004
+fields sum:701:8:-1,sum:701:8:-1,sum:701:8:-1
+row 40270318,3310512,60065
+SELECT 1
+> SELECT count(*) FROM dp WHERE extract(minute FROM ts) = 7
+fields count:20:8:-1
+row 336
+SELECT 1
+> SELECT count(*) FROM dp WHERE date_part('hour', ts) = 13
+fields count:20:8:-1
+row 835
+SELECT 1
+> SELECT count(*) FROM dp WHERE extract(year FROM d) = 2013
+fields count:20:8:-1
+row 8224
+SELECT 1
+> SELECT count(*) FROM dp WHERE date_part('dow', ts) >= 5
+fields count:20:8:-1
+row 5721
+SELECT 1
+> SELECT count(*) FROM dp WHERE extract(month FROM ts) + 1 > 12
+fields count:20:8:-1
+row 1693
+SELECT 1
+> SELECT id, extract(day FROM ts), extract(dow FROM d), date_part('minute', ts), extract(year FROM ts), extract(year FROM d) FROM dp WHERE id > 20000 ORDER BY id
+fields id@dp.1:23:4:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 20001,1,6,4,-10,-10
+row 20002,31,6,59,-1,-1
+row 20003,NULL,NULL,NULL,Infinity,Infinity
+row 20004,NULL,NULL,NULL,-Infinity,-Infinity
+row 20005,NULL,NULL,NULL,NULL,NULL
+row 20006,24,3,0,-4713,-4713
+SELECT 6
+> SELECT count(*) FROM dp WHERE f = 'NaN'
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM dp WHERE f > 1e299
+fields count:20:8:-1
+row 3
+SELECT 1
+> SELECT count(*) FROM dp WHERE f = 0
+fields count:20:8:-1
+row 1539
+SELECT 1
+> SELECT count(*) FROM dp WHERE f < 'NaN'
+fields count:20:8:-1
+row 20004
+SELECT 1
+> SELECT count(*) FROM dp WHERE f <= 2.5
+fields count:20:8:-1
+row 9235
+SELECT 1
+> SELECT count(*) FROM dp WHERE f <> 3
+fields count:20:8:-1
+row 18466
+SELECT 1
+> SELECT extract(hour FROM d) FROM dp
+fields extract:1700:-1:-1
+ERROR 0A000 unit "hour" not supported for type date

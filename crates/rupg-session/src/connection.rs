@@ -4814,6 +4814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_numeric_key.test")));
     }
 
+    /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
+    #[test]
+    fn date_part_scan() {
+        big_stack(|| script(include_str!("connection/date_part_scan.test")));
+    }
+
     #[test]
     fn group_text_extreme() {
         big_stack(|| script(include_str!("connection/group_text_extreme.test")));

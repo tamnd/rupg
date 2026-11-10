@@ -16,7 +16,7 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
 use rupg_summary::zone::{Test, Verdict, Zone, has_code};
-use rupg_types::{Numeric, Value, oid};
+use rupg_types::{DateUnit, Numeric, POSTGRES_EPOCH_JDATE, Value, date2j, j2date, oid};
 
 use crate::agg;
 use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
@@ -594,6 +594,8 @@ fn dec_scale(expr: &Expr) -> Option<u8> {
 fn decs(col: &Col) -> Option<(Ints<'_>, u8)> {
     match &col.data {
         Data::Dec(v, scale) => Some((Ints::Vector(v, col.nulls.as_deref()), *scale)),
+        // The integer fields of `extract`, which have the scale 0.
+        Data::Int(v) if col.ty == oid::NUMERIC => Some((Ints::Vector(v, col.nulls.as_deref()), 0)),
         Data::Const(Value::Null) => Some((Ints::Const(None), 0)),
         Data::Const(Value::Numeric(n)) => {
             let scale = u8::try_from(n.dscale()).ok().filter(|&s| s <= 18)?;
@@ -687,6 +689,105 @@ fn unit(field: &Expr) -> Option<i64> {
         "minute" => 60_000_000,
         "hour" => 3_600_000_000,
         "day" => 86_400_000_000,
+        _ => return None,
+    })
+}
+
+/// A field of `extract` and `date_part` that [`Exec::part`] computes as an integer from the date and the time of day, or `None` for another field. The field is a constant, which `DateUnit::decode` reads in lower case.
+fn part(field: &Expr) -> Option<DateUnit> {
+    let ExprKind::Const(Value::Text(name)) = &field.kind else { return None };
+    // A longer name is cut to `NAMEDATALEN - 1` bytes, and the row engine does that.
+    if name.len() >= 64 {
+        return None;
+    }
+    let unit = DateUnit::decode(&name.to_ascii_lowercase());
+    matches!(
+        unit,
+        DateUnit::Microsecond
+            | DateUnit::Minute
+            | DateUnit::Hour
+            | DateUnit::Day
+            | DateUnit::Month
+            | DateUnit::Quarter
+            | DateUnit::Year
+            | DateUnit::Dow
+            | DateUnit::IsoDow
+            | DateUnit::Doy
+    )
+    .then_some(unit)
+}
+
+/// The field `unit` of [`part`] of the date `julian`, as `date_field` in the functions computes it.
+fn date_part(unit: DateUnit, julian: i32) -> i64 {
+    let (year, mon, mday) = j2date(julian);
+    let (mon, mday) = (mon as i32, mday as i32);
+    // `j2day`: the day of the week, with Sunday as 0.
+    let dow = (julian + 1).rem_euclid(7);
+    i64::from(match unit {
+        DateUnit::Day => mday,
+        DateUnit::Month => mon,
+        DateUnit::Quarter => (mon - 1) / 3 + 1,
+        // There is no year 0: 1 BC comes before 1 AD.
+        DateUnit::Year if year > 0 => year,
+        DateUnit::Year => year - 1,
+        DateUnit::Dow => dow,
+        DateUnit::IsoDow if dow == 0 => 7,
+        DateUnit::IsoDow => dow,
+        _ => julian - date2j(year, 1, 1) + 1,
+    })
+}
+
+/// The floats of a column for a loop on the rows: a vector with its null rows, or one value for each row.
+#[derive(Clone, Copy)]
+enum Floats<'a> {
+    Vector(&'a [f64], Option<&'a [bool]>),
+    Const(Option<f64>),
+}
+
+impl Floats<'_> {
+    fn of(col: &Col) -> Option<Floats<'_>> {
+        Some(match &col.data {
+            Data::Float(v) => Floats::Vector(v, col.nulls.as_deref()),
+            Data::Const(Value::Null) => Floats::Const(None),
+            Data::Const(Value::Float8(v)) => Floats::Const(Some(*v)),
+            Data::Const(Value::Float4(v)) => Floats::Const(Some(f64::from(*v))),
+            _ => return None,
+        })
+    }
+
+    #[inline]
+    fn get(self, i: usize) -> Option<f64> {
+        match self {
+            Floats::Vector(v, None) => Some(v[i]),
+            Floats::Vector(v, Some(nulls)) => (!nulls[i]).then(|| v[i]),
+            Floats::Const(v) => v,
+        }
+    }
+}
+
+/// The order of `float8_cmp_internal`: each NaN is equal to each other NaN and comes after all other values, and `-0` is equal to `0`.
+fn float_order(a: f64, b: f64) -> std::cmp::Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => std::cmp::Ordering::Equal,
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        (false, false) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
+    }
+}
+
+/// The comparison of a function of `float4` and `float8` values.
+fn float_compare(src: &str) -> Option<fn(std::cmp::Ordering) -> bool> {
+    let (head, op) = src.split_at_checked(src.len().checked_sub(2)?)?;
+    if !matches!(head, "float4" | "float8" | "float48" | "float84") {
+        return None;
+    }
+    Some(match op {
+        "eq" => std::cmp::Ordering::is_eq,
+        "ne" => std::cmp::Ordering::is_ne,
+        "lt" => std::cmp::Ordering::is_lt,
+        "le" => std::cmp::Ordering::is_le,
+        "gt" => std::cmp::Ordering::is_gt,
+        "ge" => std::cmp::Ordering::is_ge,
         _ => return None,
     })
 }
@@ -987,6 +1088,21 @@ impl<'q> Exec<'q> {
             }
             return Ok(None);
         }
+        if let (Some(compare), [a, b]) = (float_compare(src), args) {
+            let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
+            if let (Some(a), Some(b)) = (Floats::of(&a), Floats::of(&b)) {
+                let out: Vec<Option<bool>> = (0..sel.len())
+                    .map(|i| Some(compare(float_order(a.get(i)?, b.get(i)?))))
+                    .collect();
+                return Ok(Some(Col::bools(&out)));
+            }
+            return Ok(None);
+        }
+        if let ("extract_timestamp" | "timestamp_part" | "extract_date", [field, arg]) = (src, args)
+            && let Some(unit) = part(field)
+        {
+            return self.part(expr, unit, arg, batch, sel);
+        }
         if let ("texteq" | "textne", [a, b]) = (src, args) {
             let equal = src == "texteq";
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
@@ -1054,14 +1170,10 @@ impl<'q> Exec<'q> {
             let nulls = nulls.contains(&true).then_some(nulls);
             return Ok(Some(Col { data: Data::Int(values), nulls, ty: expr.ty }));
         }
-        if let ("timestamp_trunc" | "extract_timestamp", [field, arg]) = (src, args)
+        if let ("timestamp_trunc", [field, arg]) = (src, args)
             && arg.ty == oid::TIMESTAMP
             && let Some(unit) = unit(field)
         {
-            let trunc = src == "timestamp_trunc";
-            if !trunc && !(expr.ty == oid::NUMERIC && matches!(unit, 60_000_000 | 3_600_000_000)) {
-                return Ok(None);
-            }
             let col = self.eval(arg, batch, sel)?;
             if !col.is_int() {
                 return Ok(None);
@@ -1069,16 +1181,9 @@ impl<'q> Exec<'q> {
             let mut values = Vec::with_capacity(sel.len());
             let mut nulls = Vec::with_capacity(sel.len());
             for i in 0..sel.len() {
-                let value = col.int(i).and_then(|v| {
+                let value = col.int(i).map(|v| {
                     let infinite = v == i64::MIN || v == i64::MAX;
-                    if trunc {
-                        Some(if infinite { v } else { v - v.rem_euclid(unit) })
-                    } else if infinite {
-                        None
-                    } else {
-                        let span = if unit == 60_000_000 { 60 } else { 24 };
-                        Some(v.div_euclid(unit).rem_euclid(span))
-                    }
+                    if infinite { v } else { v - v.rem_euclid(unit) }
                 });
                 values.push(value.unwrap_or(0));
                 nulls.push(value.is_none());
@@ -1087,6 +1192,79 @@ impl<'q> Exec<'q> {
             return Ok(Some(Col { data: Data::Int(values), nulls, ty: expr.ty }));
         }
         Ok(None)
+    }
+
+    /// `extract` and `date_part` of a `timestamp` or a `date` for a field of [`part`], with the field of the date of a row found once for each run of rows of the same day. `extract` gives a `numeric` of scale 0 as [`Data::Int`], and `date_part` gives a `float8`. `None` for an infinite value of a field that is infinite, a date out of the range of the calendar, and a field of the time of a `date`: the row engine gives the value or the error.
+    fn part(
+        &mut self,
+        expr: &Expr,
+        unit: DateUnit,
+        arg: &Expr,
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        const USECS_PER_DAY: i64 = 86_400_000_000;
+        let date = arg.ty == oid::DATE;
+        let time = matches!(unit, DateUnit::Microsecond | DateUnit::Minute | DateUnit::Hour);
+        if !(date || arg.ty == oid::TIMESTAMP) || (date && time) {
+            return Ok(None);
+        }
+        let float = expr.ty == oid::FLOAT8;
+        if !float && expr.ty != oid::NUMERIC {
+            return Ok(None);
+        }
+        let col = self.eval(arg, batch, sel)?;
+        let Some(ints) = col.ints() else { return Ok(None) };
+        let (low, high) =
+            if date { (i64::from(i32::MIN), i64::from(i32::MAX)) } else { (i64::MIN, i64::MAX) };
+        let mut values = Vec::with_capacity(sel.len());
+        let mut nulls = Vec::with_capacity(sel.len());
+        // The day and the field of the last row, as the rows of a day are often next to each other.
+        let mut last: Option<(i64, i64)> = None;
+        for i in 0..sel.len() {
+            let Some(v) = ints.get(i).filter(|&v| v != low && v != high) else {
+                // An infinite `year` is infinite, and the other fields are null.
+                if unit == DateUnit::Year && ints.get(i).is_some() {
+                    return Ok(None);
+                }
+                values.push(0);
+                nulls.push(true);
+                continue;
+            };
+            let (day, usecs) = if date {
+                (v, 0)
+            } else {
+                (v.div_euclid(USECS_PER_DAY), v.rem_euclid(USECS_PER_DAY))
+            };
+            let value = match unit {
+                DateUnit::Hour => usecs / 3_600_000_000,
+                DateUnit::Minute => usecs % 3_600_000_000 / 60_000_000,
+                DateUnit::Microsecond => usecs % 60_000_000,
+                _ => match last {
+                    Some((d, value)) if d == day => value,
+                    _ => {
+                        let julian = day.checked_add(i64::from(POSTGRES_EPOCH_JDATE));
+                        let Some(julian) =
+                            julian.and_then(|j| i32::try_from(j).ok()).filter(|&j| j >= 0)
+                        else {
+                            return Ok(None);
+                        };
+                        let value = date_part(unit, julian);
+                        last = Some((day, value));
+                        value
+                    }
+                },
+            };
+            values.push(value);
+            nulls.push(false);
+        }
+        let nulls = nulls.contains(&true).then_some(nulls);
+        let data = if float {
+            Data::Float(values.iter().map(|&v| v as f64).collect())
+        } else {
+            Data::Int(values)
+        };
+        Ok(Some(Col { data, nulls, ty: expr.ty }))
     }
 
     /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression.
