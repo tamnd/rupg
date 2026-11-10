@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - The regex engine finds the groups of a match with fewer and cheaper DFA walks: a known step that needs no other work is one table load, and the dissection does not walk the program of a concatenation or an alternation that checks its own text. ClickBench q28 runs about 23% fewer instructions.
+- `ATTACH PARTITION` locks the default partition and its partitions in `AccessExclusiveLock`, and an insert into a partitioned table locks each partition that its rows go to in `RowExclusiveLock`. An insert into the default partition that waited for a concurrent attach checks its rows against the new bound of the default partition, as in PostgreSQL (#1481).
 - A function in PL/pgSQL can call itself 200 levels deep before `stack depth limit exceeded`, so a function with an exception block that calls itself 100 times runs, as in PostgreSQL (#1479).
 - In a query with `FOR UPDATE` or `FOR SHARE`, or in an `UPDATE` or a `DELETE`, a subquery that stays in `FROM`, such as a view with `ORDER BY`, carries its whole row for `ROW_MARK_COPY`, so that the plan keeps its `Subquery Scan`, as `preprocess_rowmarks` and `select_rowmark_type` do (#1478).
 - `pg_get_publication_tables` opens each table of the publication with `AccessShareLock`, waiting for a transaction that holds a stronger lock, and skips a table that the transaction dropped, as `pg_get_publication_tables` of PG does (#1477).
