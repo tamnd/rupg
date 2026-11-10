@@ -112,6 +112,7 @@ pub(super) fn top(
         bases: 0,
         filters: filters.to_vec(),
         maps: Vec::new(),
+        groups: 0,
     };
     let units = groups::units_of(rows, segments);
     if units.is_empty() {

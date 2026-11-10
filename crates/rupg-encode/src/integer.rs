@@ -1119,16 +1119,31 @@ fn encode_packed(values: &[i64], out: &mut Vec<u8>) -> Result<()> {
 }
 
 fn decode_chunk(reader: &mut Reader<'_>) -> Result<Vec<i64>> {
+    decode_chunk_room(reader, 0)
+}
+
+/// The values of the chunk at `reader`, as [`decode_chunk`] gives them, in a vector with room for
+/// `room` more values.
+///
+/// A chunk of differences decodes its differences into a vector with room for its last value. The
+/// push of that last value then does not move the vector, which it did once a chunk before.
+fn decode_chunk_room(reader: &mut Reader<'_>, room: usize) -> Result<Vec<i64>> {
     let kind = Kind::from_tag(reader.u8()?)?;
     let count = reader.u32()? as usize;
+    // A vector of zeros comes from memory that the allocator gives as zeros, with no write of each value, so the room is filled and then cut off.
+    let filled = |value: i64| {
+        let mut values = vec![value; count + room];
+        values.truncate(count);
+        values
+    };
     match kind {
-        Kind::Constant => Ok(vec![reader.i64()?; count]),
+        Kind::Constant => Ok(filled(reader.i64()?)),
         Kind::Packed => {
             // One buffer for the chunk, and every value written into it once. Both unpackers take
             // the frame of reference base and put the value it belongs to where it goes, so there
             // is no unit of raw offsets in between and no second pass to fold the base back in, and
             // both read the packed bytes where the chunk put them rather than through a copy.
-            let mut values = vec![0i64; count];
+            let mut values = filled(0);
             let mut done = 0;
             while done < count {
                 let base = reader.i64()?;
@@ -1152,7 +1167,7 @@ fn decode_chunk(reader: &mut Reader<'_>) -> Result<Vec<i64>> {
         }
         Kind::Delta => {
             let first = reader.i64()?;
-            let mut values = decode_chunk(reader)?;
+            let mut values = decode_chunk_room(reader, room + 1)?;
             check_count(values.len() + 1, count)?;
             // Each value is written over the difference that follows it, so the sums go into the
             // vector the differences came in and only the last one is pushed on the end. Pushing
@@ -1174,7 +1189,7 @@ fn decode_chunk(reader: &mut Reader<'_>) -> Result<Vec<i64>> {
         Kind::Dict => {
             let dictionary = decode_chunk(reader)?;
             let codes = decode_chunk(reader)?;
-            let mut values = Vec::with_capacity(count);
+            let mut values = Vec::with_capacity(count + room);
             for code in codes {
                 let index =
                     usize::try_from(code).ok().and_then(|index| dictionary.get(index)).ok_or_else(
@@ -1193,7 +1208,7 @@ fn decode_chunk(reader: &mut Reader<'_>) -> Result<Vec<i64>> {
             if positions.len() != exception_count || exceptions.len() != exception_count {
                 return Err(Error::internal("a sparse chunk disagrees about its exception count"));
             }
-            let mut values = vec![value; count];
+            let mut values = filled(value);
             for (position, exception) in positions.into_iter().zip(exceptions) {
                 let position = usize::try_from(position)
                     .ok()
@@ -1208,7 +1223,7 @@ fn decode_chunk(reader: &mut Reader<'_>) -> Result<Vec<i64>> {
         Kind::Strided => {
             let base = reader.i64()?;
             let stride = reader.u64()?;
-            let steps = decode_chunk(reader)?;
+            let steps = decode_chunk_room(reader, room)?;
             check_count(steps.len(), count)?;
             strided(steps, stride, base)
         }
