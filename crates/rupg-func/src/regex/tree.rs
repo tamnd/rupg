@@ -3,7 +3,6 @@
 //! The parser gives a tree of nodes, and this module builds from it the tree of `parse`, `parsebranch` and `parseqatom`, with the same flags of preference. Each node of the tree has its own program, which the dissection runs in place of the DFA of the node: the program tells where a match of the node can end. A back reference in such a program is the text of its group without the constraints, as `dupnfa` and `removeconstraints` make it. Thus the program accepts more than the node, and the dissection checks each back reference.
 
 use std::cell::RefCell;
-use std::hash::BuildHasherDefault;
 
 use super::exec::{FxMap, Program, char_at, count, starts};
 use super::parse::{DUPINF, Node, Parsed, to_lower};
@@ -119,10 +118,47 @@ pub(super) struct Tree {
     unicode: bool,
     /// The map and the arena of the last [`Dissect`] of [`Tree::find`], which the next search uses again with no allocation.
     scratch: RefCell<Scratch>,
+    /// True when the pattern has no back references, so that the program of each node accepts the text of the node and nothing more.
+    exact: bool,
 }
 
 /// The ends of the programs of a dissection: the place of each program and start in the arena, and the arena.
-type Scratch = (FxMap<(usize, usize), usize>, Vec<u64>);
+type Scratch = (Memo, Vec<u64>);
+
+/// The number of programs and starts that [`Memo`] keeps in a list before it uses a map.
+const SHORT: usize = 32;
+
+/// The place in the arena of the ends of each program and start of a dissection. A dissection walks few programs from few starts, so a list with no hash is the fast case, and the map is for many.
+#[derive(Debug, Default)]
+struct Memo {
+    list: Vec<(usize, usize, usize)>,
+    map: FxMap<(usize, usize), usize>,
+}
+
+impl Memo {
+    fn clear(&mut self) {
+        self.list.clear();
+        if !self.map.is_empty() {
+            self.map.clear();
+        }
+    }
+
+    fn get(&self, prog: usize, begin: usize) -> Option<usize> {
+        if self.map.is_empty() {
+            return self.list.iter().find(|&&(p, b, _)| p == prog && b == begin).map(|item| item.2);
+        }
+        self.map.get(&(prog, begin)).copied()
+    }
+
+    fn insert(&mut self, prog: usize, begin: usize, at: usize) {
+        if self.map.is_empty() && self.list.len() < SHORT {
+            self.list.push((prog, begin, at));
+            return;
+        }
+        self.map.extend(self.list.drain(..).map(|(p, b, at)| ((p, b), at)));
+        self.map.insert((prog, begin), at);
+    }
+}
 
 /// The largest arena that [`Tree::scratch`] keeps, in words.
 const MAX_SCRATCH: usize = 1 << 20;
@@ -307,7 +343,12 @@ impl Tree {
         let mut root = builder.parse(&parsed.node)?;
         let mut progs = Vec::new();
         builder.finish(&mut root, &mut progs, parsed)?;
+        fn backrefs(sub: &Sub) -> bool {
+            matches!(sub.op, Op::Backref(..)) || sub.children().into_iter().any(backrefs)
+        }
+        let exact = !backrefs(&root);
         Ok(Tree {
+            exact,
             root,
             progs,
             groups: parsed.groups,
@@ -397,7 +438,7 @@ struct Dissect<'a> {
     /// The text in UTF-8. A position is the byte where a character starts.
     s: &'a [u8],
     /// The ends of the matches of each program from each start.
-    ends: FxMap<(usize, usize), usize>,
+    ends: Memo,
     /// The ends of each program and start in [`Dissect::ends`], one bit for each position of the text, from the word that the map gives.
     arena: Vec<u64>,
     pmatch: Groups,
@@ -405,7 +446,7 @@ struct Dissect<'a> {
 
 impl<'a> Dissect<'a> {
     fn new(tree: &'a Tree, s: &'a [u8], pmatch: Groups) -> Self {
-        let ends = FxMap::with_capacity_and_hasher(8, BuildHasherDefault::default());
+        let ends = Memo::default();
         let arena = Vec::with_capacity(8 * words(s.len()));
         Dissect { tree, s, ends, arena, pmatch }
     }
@@ -418,13 +459,13 @@ impl<'a> Dissect<'a> {
     /// The ends of the matches of a node from a start, one bit for each position.
     fn ends(&mut self, sub: &Sub, begin: usize) -> &[u64] {
         let width = words(self.s.len());
-        let at = match self.ends.get(&(sub.id, begin)) {
-            Some(&at) => at,
+        let at = match self.ends.get(sub.id, begin) {
+            Some(at) => at,
             None => {
                 let at = self.arena.len();
                 self.arena.resize(at + width, 0);
                 self.tree.progs[sub.id].ends(self.s, begin, &mut self.arena[at..]);
-                self.ends.insert((sub.id, begin), at);
+                self.ends.insert(sub.id, begin, at);
                 at
             }
         };
@@ -499,9 +540,9 @@ impl<'a> Dissect<'a> {
                 self.rev_concat(left, right, begin, end)
             }
             Op::Concat(left, right) => self.concat(left, right, begin, end),
-            Op::Alt(subs) => {
-                subs.iter().any(|sub| self.spans(sub, begin, end) && self.dissect(sub, begin, end))
-            }
+            Op::Alt(subs) => subs.iter().any(|sub| {
+                (self.checks(sub) || self.spans(sub, begin, end)) && self.dissect(sub, begin, end)
+            }),
             Op::Iter(child, min, max) if child.flags & SHORTER != 0 => {
                 self.rev_iter(child, (*min, *max), begin, end)
             }
@@ -514,15 +555,47 @@ impl<'a> Dissect<'a> {
         found
     }
 
+    /// True when [`Dissect::dissect`] of the node checks the text itself, so that the caller can skip the walk of the program of the node: the node is a concatenation or an alternation, or the capture of one, and the pattern has no back references. Then the dissection gives true when the program of the node matches the text, and when it gives false, it writes no group, as the caller would not have called it after the walk.
+    fn checks(&self, sub: &Sub) -> bool {
+        self.tree.exact
+            && match &sub.op {
+                Op::Concat(..) | Op::Alt(..) => true,
+                Op::Capture(child) => self.checks(child),
+                _ => false,
+            }
+    }
+
+    /// The step of `ccondissect` and `crevcondissect` at a split `mid`: true when the right part matches from `mid` to `end` and the left part from `begin` to `mid`, with the positions of their groups. When the right part checks its text, it goes first and its dissection is the check. The parts write different groups, so the order does not change the groups.
+    fn split(
+        &mut self,
+        left: &'a Sub,
+        right: &'a Sub,
+        begin: usize,
+        mid: usize,
+        end: usize,
+    ) -> bool {
+        if self.checks(right) {
+            if self.dissect(right, mid, end) {
+                if self.dissect(left, begin, mid) {
+                    return true;
+                }
+                self.zap(right);
+            }
+        } else if self.spans(right, mid, end) && self.dissect(left, begin, mid) {
+            if self.dissect(right, mid, end) {
+                return true;
+            }
+            self.zap(left);
+        }
+        false
+    }
+
     /// `ccondissect`: the longest left part first.
     fn concat(&mut self, left: &'a Sub, right: &'a Sub, begin: usize, end: usize) -> bool {
         let Some(mut mid) = self.longest(left, begin, end) else { return false };
         loop {
-            if self.spans(right, mid, end) && self.dissect(left, begin, mid) {
-                if self.dissect(right, mid, end) {
-                    return true;
-                }
-                self.zap(left);
+            if self.split(left, right, begin, mid, end) {
+                return true;
             }
             if mid == begin {
                 return false;
@@ -538,11 +611,8 @@ impl<'a> Dissect<'a> {
     fn rev_concat(&mut self, left: &'a Sub, right: &'a Sub, begin: usize, end: usize) -> bool {
         let Some(mut mid) = self.shortest(left, begin, begin, end) else { return false };
         loop {
-            if self.spans(right, mid, end) && self.dissect(left, begin, mid) {
-                if self.dissect(right, mid, end) {
-                    return true;
-                }
-                self.zap(left);
+            if self.split(left, right, begin, mid, end) {
+                return true;
             }
             if mid == end {
                 return false;
