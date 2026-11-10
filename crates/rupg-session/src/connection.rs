@@ -1767,6 +1767,19 @@ impl Connection {
         self.define_allowed(node, text, notices, role, call)
     }
 
+    /// The waits of `DefineIndex` for `CREATE INDEX CONCURRENTLY` before the build and before the validation of the index `index`: each waits for the transactions that hold a lock on its table that conflicts with `ShareLock`, the writers, as `WaitForLockers` waits. A failure of a wait leaves the index invalid, as the failure of the build does.
+    fn wait_index_writers(&self, index: Option<u32>, catalog: &Catalog) -> Result<(), Error> {
+        const SHARE: u8 = 5;
+        let Some(index) = index else { return Ok(()) };
+        let Some(table) = catalog.relation(index).and_then(|r| r.index.as_ref()).map(|i| i.table)
+        else {
+            return Ok(());
+        };
+        let reader = self.reader();
+        reader.wait_lockers(&[table], SHARE)?;
+        reader.wait_lockers(&[table], SHARE)
+    }
+
     /// `ATExecDetachPartition` with `CONCURRENTLY`: the first transaction marks the partition with a pending detach and commits, with locks of the session on the parent and the partition. The second transaction waits for the transactions that lock the parent, as `WaitForLockersMultiple` waits, and then ends the detach as `DETACH PARTITION ... FINALIZE` ends it. After a cancel of the wait the partition keeps its pending detach.
     fn detach_concurrently(
         &self,
@@ -1940,7 +1953,8 @@ impl Connection {
             .and_then(|()| self.check_partitions(&defined.checks, &work))
             .and_then(|()| self.check_domain_rows(&defined.domain_checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
-            .and_then(|()| self.view_texts(&defined.views, &mut work));
+            .and_then(|()| self.view_texts(&defined.views, &mut work))
+            .and_then(|()| self.wait_index_writers(defined.concurrent, &work));
         if result.is_ok() {
             self.keep_dropped(&defined.dropped);
             let tag = match node {
@@ -9759,6 +9773,15 @@ mod tests {
         big_stack(|| {
             let config = [("max_prepared_transactions".to_string(), "10".to_string())];
             two_sessions_with(include_str!("connection/twophase.test"), &config);
+        });
+    }
+
+    /// A prepared transaction that changed the catalog keeps its changes and the locks of the relations that it changed until `COMMIT PREPARED` from another session publishes the changes, or `ROLLBACK PREPARED` discards them. The tables that a committed prepared transaction dropped go from the heap. `CREATE INDEX CONCURRENTLY` waits for a prepared transaction that wrote its table, and a timeout of the wait leaves the index invalid.
+    #[test]
+    fn two_phase_ddl() {
+        big_stack(|| {
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            two_sessions_with(include_str!("connection/twophase_ddl.test"), &config);
         });
     }
 

@@ -964,6 +964,21 @@ pub(crate) struct Lease {
 }
 
 impl Lease {
+    /// The lock of the database, and the locks of the rows of `pg_database` of the session `pid`, go to `owner`, the owner of the locks of a prepared transaction, as `PostPrepare_Locks` gives them to the dummy `PGPROC`.
+    pub(crate) fn hand_over(&self, pid: i32, owner: i32) {
+        let mut state = self.store.state();
+        for holder in state.row_locks.values_mut() {
+            if *holder == pid {
+                *holder = owner;
+            }
+        }
+        if let Some(db) = state.databases.get_mut(&self.database)
+            && db.locked == Some(pid)
+        {
+            db.locked = Some(owner);
+        }
+    }
+
     /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use. The rows of `pg_database` and `pg_tablespace` that the transaction changed go to the store.
     pub(crate) fn commit(mut self) {
         let mut catalog = std::mem::take(&mut self.catalog);

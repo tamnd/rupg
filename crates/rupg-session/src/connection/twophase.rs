@@ -1,4 +1,4 @@
-//! `PREPARE TRANSACTION`, `COMMIT PREPARED` and `ROLLBACK PREPARED` (spec/11 section 11.10). A transaction that changed the catalog cannot be prepared yet: it holds the lock of the catalog of its database, and a prepared transaction would hold it until its end, so no other transaction of the database could change the catalog.
+//! `PREPARE TRANSACTION`, `COMMIT PREPARED` and `ROLLBACK PREPARED` (spec/11 section 11.10). A prepared transaction that changed the catalog keeps the lock of the catalog of its database and its changes of the catalog until its end, so another transaction of the database that changes the catalog waits for `COMMIT PREPARED` or `ROLLBACK PREPARED`.
 
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{TransactionStmt, TransactionStmtKind};
@@ -32,12 +32,6 @@ impl Connection {
                 "cannot PREPARE while holding both session-level and transaction-level locks on the same object",
             ));
         }
-        if self.lease.borrow().is_some() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "rupg does not support PREPARE TRANSACTION for a transaction that changed the catalog",
-            ));
-        }
         let xid = self.transaction_id(true).unwrap_or_default();
         let entry = Prepared {
             gid: gid.to_owned(),
@@ -49,21 +43,25 @@ impl Connection {
             writes: std::collections::BTreeMap::new(),
             number: self.activity.number.unwrap_or_default(),
             busy: Some(self.pid),
+            lease: None,
         };
         self.store.prepared().reserve(entry, max)
     }
 
     /// `PostPrepare_Locks` and the rest of `PrepareTransaction` after the reservation: the transaction ID, its row locks, its heavyweight locks and its record of serializable snapshot isolation go to the prepared transaction, and the session ends its transaction with no commit and no abort.
     pub(super) fn end_prepared(&mut self) {
-        self.lease.get_mut().take();
+        let lease = self.lease.get_mut().take();
         let xid = self.xid.replace(0);
         self.stable_xid.set(0);
         self.end_notify(false);
         let owner = Prepared::lock_owner(xid);
+        if let Some(lease) = &lease {
+            lease.hand_over(self.pid, owner);
+        }
         self.store.heap().hand_over(xid, owner);
         self.store.locks().hand_over(self.pid, self.activity.fast.as_deref(), owner);
         self.sxact.set(0);
-        self.store.prepared().prepared(self.pid, self.activity.take_writes());
+        self.store.prepared().prepared(self.pid, self.activity.take_writes(), lease);
         self.store.commit(0, false, true);
         self.end_heap_state();
         self.marks.clear();
@@ -88,16 +86,22 @@ impl Connection {
             ));
         }
         let gid = stmt.gid.as_deref().unwrap_or_default();
-        let entry = self.store.prepared().take(
+        let mut entry = self.store.prepared().take(
             gid,
             self.current_role(),
             self.superuser(),
             self.database_oid,
         )?;
         let heap = self.store.heap();
+        let lease = entry.lease.take();
+        let defined = lease.is_some();
         if commit {
-            self.store.commit(entry.xid, false, self.synchronous_commit());
+            if let Some(lease) = lease {
+                lease.commit();
+            }
+            self.store.commit(entry.xid, defined, self.synchronous_commit());
         } else {
+            drop(lease);
             heap.abort(entry.xid);
             self.store.commit(0, false, true);
         }
@@ -107,6 +111,10 @@ impl Connection {
         self.store.locks().release_all(Prepared::lock_owner(entry.xid), false);
         if !entry.writes.is_empty() {
             self.store.report_writes(entry.database, &entry.writes, commit);
+        }
+        if commit && defined {
+            let catalog = self.store.committed(entry.database);
+            heap.drop_tables(entry.database, |relation| catalog.relation(relation).is_some());
         }
         Ok(Done::Tag(tag))
     }

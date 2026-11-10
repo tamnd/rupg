@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use rupg_common::{Error, Result, SqlState};
 
 use crate::connection::Pending;
+use crate::store::Lease;
 
 /// `GIDSIZE`: the size of the buffer of a global identifier with its terminating zero.
 const GID_SIZE: usize = 200;
@@ -30,6 +31,8 @@ pub(crate) struct Prepared {
     pub(crate) number: i32,
     /// `locking_backend`: the session that prepares the transaction or that ends it, which no other session can end meanwhile.
     pub(crate) busy: Option<i32>,
+    /// The lock of the catalog of the database and the changes of the catalog, of a transaction that changed the catalog. `COMMIT PREPARED` publishes the changes, and `ROLLBACK PREPARED` discards them.
+    pub(crate) lease: Option<Lease>,
 }
 
 impl Prepared {
@@ -80,11 +83,12 @@ impl PreparedXacts {
         Ok(())
     }
 
-    /// `MarkAsPrepared`: the transaction of the session `pid` is prepared, with the writes of the transaction.
-    pub(crate) fn prepared(&self, pid: i32, writes: BTreeMap<u32, Pending>) {
+    /// `MarkAsPrepared`: the transaction of the session `pid` is prepared, with the writes of the transaction and the lease of the catalog of a transaction that changed the catalog.
+    pub(crate) fn prepared(&self, pid: i32, writes: BTreeMap<u32, Pending>, lease: Option<Lease>) {
         if let Some(entry) = self.list().iter_mut().find(|entry| entry.busy == Some(pid)) {
             entry.busy = None;
             entry.writes = writes;
+            entry.lease = lease;
         }
     }
 
@@ -131,7 +135,9 @@ impl PreparedXacts {
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "prepared transaction belongs to another database",
             )
-            .with_hint("Connect to the database where the transaction was prepared to finish it."));
+            .with_hint(
+                "Connect to the database where the transaction was prepared to finish it.",
+            ));
         }
         Ok(list.remove(at))
     }
@@ -146,7 +152,9 @@ impl PreparedXacts {
         self.list()
             .iter()
             .filter(|entry| entry.busy.is_none())
-            .map(|entry| (entry.xid, entry.gid.clone(), entry.prepared, entry.owner, entry.database))
+            .map(|entry| {
+                (entry.xid, entry.gid.clone(), entry.prepared, entry.owner, entry.database)
+            })
             .collect()
     }
 }
