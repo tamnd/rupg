@@ -1,0 +1,97 @@
+A> CREATE TABLE pdb (i int)
+CREATE TABLE
+A> INSERT INTO pdb VALUES (1)
+INSERT 0 1
+A> BEGIN
+BEGIN
+A> CREATE TABLE pdn (i int)
+CREATE TABLE
+A> INSERT INTO pdn VALUES (1)
+INSERT 0 1
+A> ALTER TABLE pdb ADD COLUMN j int DEFAULT 7
+ALTER TABLE
+A> PREPARE TRANSACTION 'ddl_1'
+PREPARE TRANSACTION
+A> SELECT * FROM pdn
+ERROR 42P01 relation "pdn" does not exist at 15
+B> SELECT gid FROM pg_prepared_xacts
+fields gid@pg_prepared_xacts.2:25:-1:-1
+row ddl_1
+SELECT 1
+B> SET lock_timeout = '10ms'
+SET
+B> SELECT * FROM pdb
+ERROR 55P03 canceling statement due to lock timeout (waiting for AccessShareLock on relation 16384 of database 5)
+B> SELECT relname, mode, granted, pid IS NULL AS prepared FROM pg_locks JOIN pg_class ON oid = relation WHERE relname = 'pdb' ORDER BY 2
+fields relname@pg_class.2:19:64:-1,mode@pg_locks.13:25:-1:-1,granted@pg_locks.14:16:1:-1,prepared:16:1:-1
+row pdb,AccessExclusiveLock,t,t
+row pdb,RowExclusiveLock,t,t
+SELECT 2
+B> COMMIT PREPARED 'ddl_1'
+COMMIT PREPARED
+B> SELECT * FROM pdb
+fields i@pdb.1:23:4:-1,j@pdb.2:23:4:-1
+row 1,7
+SELECT 1
+B> SELECT * FROM pdn
+fields i@pdn.1:23:4:-1
+row 1
+SELECT 1
+A> SELECT * FROM pdn
+fields i@pdn.1:23:4:-1
+row 1
+SELECT 1
+A> BEGIN
+BEGIN
+A> DROP TABLE pdn
+DROP TABLE
+A> CREATE TABLE pdr (i int)
+CREATE TABLE
+A> PREPARE TRANSACTION 'ddl_2'
+PREPARE TRANSACTION
+B> ROLLBACK PREPARED 'ddl_2'
+ROLLBACK PREPARED
+B> SELECT * FROM pdn
+fields i@pdn.1:23:4:-1
+row 1
+SELECT 1
+B> SELECT * FROM pdr
+ERROR 42P01 relation "pdr" does not exist at 15
+A> BEGIN
+BEGIN
+A> DROP TABLE pdn
+DROP TABLE
+A> PREPARE TRANSACTION 'ddl_3'
+PREPARE TRANSACTION
+B> COMMIT PREPARED 'ddl_3'
+COMMIT PREPARED
+B> SELECT * FROM pdn
+ERROR 42P01 relation "pdn" does not exist at 15
+A> CREATE TABLE pdr (i int)
+CREATE TABLE
+A> SELECT count(*) FROM pg_prepared_xacts
+fields count:20:8:-1
+row 0
+SELECT 1
+A> CREATE TABLE cic (a int)
+CREATE TABLE
+A> BEGIN
+BEGIN
+A> INSERT INTO cic VALUES (1)
+INSERT 0 1
+A> PREPARE TRANSACTION 'cic_1'
+PREPARE TRANSACTION
+B> CREATE INDEX CONCURRENTLY cic_a ON cic (a)
+ERROR 55P03 canceling statement due to lock timeout
+B> SELECT indisvalid FROM pg_index WHERE indrelid = 'cic'::regclass
+fields indisvalid@pg_index.11:16:1:-1
+row f
+SELECT 1
+B> COMMIT PREPARED 'cic_1'
+COMMIT PREPARED
+B> REINDEX INDEX CONCURRENTLY cic_a
+REINDEX
+B> SELECT indisvalid FROM pg_index WHERE indrelid = 'cic'::regclass
+fields indisvalid@pg_index.11:16:1:-1
+row t
+SELECT 1
