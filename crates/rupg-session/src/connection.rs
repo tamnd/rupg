@@ -6405,6 +6405,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_type_altered.test")));
     }
 
+    /// A view that the planner does not merge, here for its `ORDER BY`, keeps its `Subquery Scan` in a query with `FOR UPDATE` of another table, as the whole row of the view for `ROW_MARK_COPY` is a column of the scan. `connection/rowmark_subquery.test` is the output of PostgreSQL 19 for the script of `eval-plan-qual-resjunk`.
+    #[test]
+    fn rowmark_subquery() {
+        big_stack(|| script(include_str!("connection/rowmark_subquery.test")));
+    }
+
     /// An expression in `FROM` that gives a composite type: casts, `COALESCE` and `NULLIF`, the row type of a table, a nested composite type, aliases of the columns, the errors for too many aliases and a column definition list, a null value, `WITH ORDINALITY`, `ROWS FROM`, `LATERAL`, and the text of views with casts of rows. `connection/composite_from.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn composite_from() {

@@ -1,0 +1,26 @@
+> CREATE TABLE epq_rj_lock (id int PRIMARY KEY, n int);
+CREATE TABLE
+> INSERT INTO epq_rj_lock VALUES (1, 0);
+INSERT 0 1
+> CREATE TABLE epq_rj_data (id int, t text);
+CREATE TABLE
+> INSERT INTO epq_rj_data VALUES (1, 'x');
+INSERT 0 1
+> CREATE VIEW epq_rj_view AS SELECT id FROM epq_rj_data ORDER BY t;
+CREATE VIEW
+> EXPLAIN (COSTS OFF) SELECT l.id, l.n FROM epq_rj_lock l JOIN epq_rj_view v ON v.id = l.id FOR UPDATE OF l;
+fields QUERY PLAN:25:-1:-1
+row LockRows
+row   ->  Hash Join
+row         Hash Cond: (v.id = l.id)
+row         ->  Subquery Scan on v
+row               ->  Sort
+row                     Sort Key: epq_rj_data.t
+row                     ->  Seq Scan on epq_rj_data
+row         ->  Hash
+row               ->  Seq Scan on epq_rj_lock l
+EXPLAIN
+> SELECT l.id, l.n FROM epq_rj_lock l JOIN epq_rj_view v ON v.id = l.id FOR UPDATE OF l;
+fields id@epq_rj_lock.1:23:4:-1,n@epq_rj_lock.2:23:4:-1
+row 1,0
+SELECT 1

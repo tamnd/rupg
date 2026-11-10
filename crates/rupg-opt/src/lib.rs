@@ -985,7 +985,7 @@ impl<'q> Builder<'q> {
         node
     }
 
-    /// `preprocess_rowmarks` and `preprocess_targetlist`: the junk columns that the rows of a query carry for its row marks. `FOR UPDATE` and `FOR SHARE` mark each relation of `FROM`, the locked tables first, and an `UPDATE` or a `DELETE` marks each relation other than its target. A table gives `ctid`, and a function, a `VALUES` list or a query of `WITH` gives the whole row, as `ROW_MARK_COPY`. A table with an inheritance tree also gives `tableoid`, which `expand_inherited_rtentry` adds after the other columns. A subquery gives no column yet.
+    /// `preprocess_rowmarks` and `preprocess_targetlist`: the junk columns that the rows of a query carry for its row marks. `FOR UPDATE` and `FOR SHARE` mark each relation of `FROM`, the locked tables first, and an `UPDATE` or a `DELETE` marks each relation other than its target. A table gives `ctid`, and a function, a `VALUES` list, a query of `WITH` or a subquery that stays in `FROM` gives the whole row, as `select_rowmark_type` gives them `ROW_MARK_COPY`. A table with an inheritance tree also gives `tableoid`, which `expand_inherited_rtentry` adds after the other columns.
     fn marks(&self, query: &'q Query, write: Option<&Write>) -> Vec<Expr> {
         let target = match write.map(|w| &w.kind) {
             Some(WriteKind::Update | WriteKind::Delete | WriteKind::Merge) => Some(0),
@@ -1032,7 +1032,10 @@ impl<'q> Builder<'q> {
                 if self.members.and_then(|m| m.members(query, r, &[])).is_some() {
                     parents.push(var(r, TABLE_OID_ATTNUM, oid::OID));
                 }
-            } else if query.relations[r].subquery.is_none() {
+            } else if !(target.is_none()
+                && query.relations[r].subquery.as_deref().is_some_and(pullup::simple))
+            {
+                // The planner does not merge the subqueries of a query with `FOR UPDATE`, which `pull_up_subqueries` merges before `preprocess_rowmarks`, so a simple subquery gives no column.
                 out.push(var(r, 0, oid::RECORD));
             }
         }
