@@ -23,6 +23,23 @@ pub(crate) use cells::{Cells, Values};
 pub(crate) use pages::{Fixed, Skip, Storage, datum_width, stored_widths};
 use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, toast};
 
+/// `MAX_BUFFERED_TUPLES`: the rows of a batch of a copy.
+const BUFFERED_TUPLES: usize = 1000;
+
+/// `MAX_BUFFERED_BYTES`: the bytes of the lines of a batch of a copy.
+pub(crate) const BUFFERED_BYTES: usize = 65535;
+
+/// `CopyMultiInsertInfoStore` and `CopyMultiInsertInfoIsFull`: the batch `batch` of a copy, its rows and the bytes of their lines, takes a row with a line of `line` bytes. True when the batch is then full, and the next row starts a new batch.
+pub(crate) fn copy_batch_full(batch: &mut (usize, usize), line: usize) -> bool {
+    batch.0 += 1;
+    batch.1 = batch.1.saturating_add(line);
+    let full = batch.0 >= BUFFERED_TUPLES || batch.1 >= BUFFERED_BYTES;
+    if full {
+        *batch = (0, 0);
+    }
+    full
+}
+
 mod btree;
 mod cells;
 mod fsm;
@@ -1738,6 +1755,42 @@ impl Table {
             let (page, slot) = self.pages.place(len, old.map(page_of), bulk, self.save_free);
             pages::tid(self.pages.generation, page, slot)
         });
+        self.put(tid, (xmin, cmin), values, (unique, fresh), len)
+    }
+
+    /// The places of the new versions of the rows `rows` of a copy, each with the length of its line in `lines`, and the length of each version, as `heap_multi_insert` places them. `ahead` has the lengths and the lines of the rows of the copy after `rows`, for the rest of their batch. The toaster takes the OIDs of the values that it moves.
+    fn place_copy(
+        &mut self,
+        made: (u32, u32),
+        rows: &[Vec<Value>],
+        (lines, ahead): CopyLines<'_>,
+        use_fsm: bool,
+        moved: &mut u32,
+    ) -> Vec<(u64, usize)> {
+        let sized: Vec<(usize, usize)> = rows
+            .iter()
+            .enumerate()
+            .map(|(at, values)| {
+                let toasted = toast(values, &self.fixed, &self.storage, None);
+                *moved += toasted.moved;
+                (max_align(toasted.len), lines.get(at).copied().unwrap_or(0))
+            })
+            .collect();
+        let places = self.pages.place_copy((&sized, ahead), made, use_fsm, self.save_free);
+        let generation = self.pages.generation;
+        let tids = places.into_iter().map(|(page, slot)| pages::tid(generation, page, slot));
+        tids.zip(sized).map(|(tid, (len, _))| (tid, len)).collect()
+    }
+
+    /// The new version `tid` of `len` bytes with the values `values`, in the maps of the unique keys and in the order of the versions.
+    fn put(
+        &mut self,
+        tid: u64,
+        (xmin, cmin): (u32, u32),
+        values: Vec<Value>,
+        (unique, fresh): (&[Unique], &[DerivedKey]),
+        len: usize,
+    ) -> u64 {
         self.made += 1;
         for map in &mut self.keys {
             if map.stale {
@@ -1906,7 +1959,12 @@ impl Table {
                     break;
                 }
                 return Ok(Some(match seen {
-                    Seen::Wait(holder) => Changed::WaitKey { holder, index, used: used.to_vec() },
+                    Seen::Wait(holder) => Changed::WaitKey {
+                        holder,
+                        index,
+                        used: used.to_vec(),
+                        waits: used.last().copied().unwrap_or_default(),
+                    },
                     _ => Changed::Duplicate {
                         index,
                         key: map.columns.iter().map(|&column| values[column].clone()).collect(),
@@ -1958,9 +2016,12 @@ impl Table {
                     _ => continue,
                 };
                 return Ok(Some(match (seen_before, seen) {
-                    (Seen::Wait(holder), _) | (_, Seen::Wait(holder)) => {
-                        Changed::WaitKey { holder, index, used: vec![version.tid] }
-                    }
+                    (Seen::Wait(holder), _) | (_, Seen::Wait(holder)) => Changed::WaitKey {
+                        holder,
+                        index,
+                        used: vec![version.tid],
+                        waits: version.tid,
+                    },
                     _ => Changed::Duplicate {
                         index,
                         key: map.columns.iter().map(|&column| earlier[column].clone()).collect(),
@@ -2126,8 +2187,8 @@ pub(crate) enum Changed {
     Wait { holder: u32, tid: u64 },
     /// In `READ COMMITTED`, a transaction that committed after the snapshot changed a row. The statement must run again with a new snapshot, which sees the last version of the row, as `EvalPlanQual` checks it.
     Again,
-    /// The transaction `holder` is in progress and inserted or deleted a version with the same key in the unique index at the place `index` of the list of the write. The write must wait for the end of `holder` and try again with the IDs `used` of its new versions, of which the last is the version that waits.
-    WaitKey { holder: u32, index: usize, used: Vec<u64> },
+    /// The transaction `holder` is in progress and inserted or deleted a version with the same key in the unique index at the place `index` of the list of the write. The write must wait for the end of `holder` and try again with the IDs `used` of its new versions. `waits` is the ID of the version that waits.
+    WaitKey { holder: u32, index: usize, used: Vec<u64>, waits: u64 },
     /// A live version has the key of a new version in the unique index at the place `index`. `key` is the value of each key column.
     Duplicate { index: usize, key: Vec<Value> },
     /// `TM_SelfModified` with a `cmax` that is not the command of the view: a later command of the transaction, such as a statement of a trigger, changed the row. `update` is true when the change of the row is an update.
@@ -2874,6 +2935,31 @@ impl Heap {
         self.insert_ids(relation, view, rows, unique, kept, &mut Vec::new())
     }
 
+    /// `CopyMultiInsertBufferFlush`: [`Heap::insert`] of the rows of a copy, each with the length of its line in `lines`, and with the lengths and the lines of the rows after them in the batch in `ahead`, which places the new versions in the batches of the copy, as `heap_multi_insert` does with the `BulkInsertState` of the copy. `use_fsm` is false for a table that the transaction created or gave a new file. After a wait for a key, the rows after the row that waited get new places.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the equality of a key.
+    pub(crate) fn insert_copy(
+        &self,
+        relation: u32,
+        view: &View,
+        rows: Vec<Vec<Value>>,
+        lines: CopyLines<'_>,
+        unique: (&[Unique], Derive<'_>),
+        (kept, use_fsm): (&[u64], bool),
+    ) -> Result<Changed> {
+        let copy = Some((lines, use_fsm));
+        self.insert_rows(relation, view, rows, unique, (kept, copy), &mut Vec::new())
+    }
+
+    /// The length of the version of the row `values` of the table `key` after the toaster, as [`Heap::insert_copy`] places it.
+    pub(crate) fn toasted_len(&self, key: (u32, u32), values: &[Value]) -> Option<usize> {
+        let state = self.state();
+        let table = state.tables.meta(&key)?;
+        Some(max_align(toast(values, &table.fixed, &table.storage, None).len))
+    }
+
     /// [`Heap::insert`] that gives in `ids` the ID of the new version of each row, for `ctid` of `RETURNING`.
     ///
     /// # Errors
@@ -2886,6 +2972,19 @@ impl Heap {
         rows: Vec<Vec<Value>>,
         (unique, derive): (&[Unique], Derive<'_>),
         kept: &[u64],
+        ids: &mut Vec<u64>,
+    ) -> Result<Changed> {
+        self.insert_rows(relation, view, rows, (unique, derive), (kept, None), ids)
+    }
+
+    /// [`Heap::insert_ids`], and [`Heap::insert_copy`] with the lengths of the lines of the rows of a copy and `use_fsm` in `copy`.
+    fn insert_rows(
+        &self,
+        relation: u32,
+        view: &View,
+        rows: Vec<Vec<Value>>,
+        (unique, derive): (&[Unique], Derive<'_>),
+        (kept, copy): (&[u64], Option<(CopyLines<'_>, bool)>),
         ids: &mut Vec<u64>,
     ) -> Result<Changed> {
         // `heap_insert` checks the lock of the table, and the insert into each index the lock of its page.
@@ -2903,8 +3002,15 @@ impl Heap {
             let mut state = self.state();
             let State { tables, toast_oids, .. } = &mut *state;
             let table = tables.append((view.database, relation));
-            for values in rows {
-                ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
+            if let Some((lines, use_fsm)) = copy {
+                let places = table.place_copy(made, &rows, lines, use_fsm, toast_oids);
+                for (values, (tid, len)) in rows.into_iter().zip(places) {
+                    ids.push(table.put(tid, made, values, (unique, &[]), len));
+                }
+            } else {
+                for values in rows {
+                    ids.push(table.add(None, made, values, (unique, &[]), None, toast_oids));
+                }
             }
             // A large load moves the values of its versions into columns as it goes, so the rows of the load are not all in memory at once.
             table.freeze_load(self.tasks.as_deref());
@@ -2919,17 +3025,34 @@ impl Heap {
         let (mut state, places) = self.lock_keys((view.database, relation), unique, derive)?;
         let State { tables, running, rechecks: pending, toast_oids, .. } = &mut *state;
         let table = tables.entry((view.database, relation));
+        // The rows of a copy take their places as a batch before the checks of their keys, as `heap_multi_insert` comes before `ExecInsertIndexTuples`. A try after a wait takes the places of all the rows of the first try.
+        let planned = match copy {
+            Some((lines, use_fsm)) if kept.is_empty() => {
+                table.place_copy(made, &rows, lines, use_fsm, toast_oids)
+            }
+            _ => Vec::new(),
+        };
+        let tids: Vec<u64> = planned.iter().map(|&(tid, _)| tid).collect();
+        let mut placed = planned.into_iter();
         let mut kept = kept.iter().copied();
         let mut used = Vec::with_capacity(rows.len());
         let mut partial = Vec::new();
         for (values, keys) in rows.into_iter().zip(&keys) {
-            used.push(table.add(kept.next(), made, values, (unique, keys), None, toast_oids));
+            used.push(match placed.next() {
+                Some((tid, len)) => table.put(tid, made, values, (unique, keys), len),
+                None => table.add(kept.next(), made, values, (unique, keys), None, toast_oids),
+            });
             let checked = (view.xid, &**running);
             match table.check_keys((&places, unique), &used, checked, &mut partial) {
                 Ok(None) => {}
                 result => {
                     table.undo(&used, &[]);
-                    return result.map(|conflict| conflict.unwrap_or(Changed::Done(0)));
+                    return result.map(|conflict| match conflict {
+                        Some(Changed::WaitKey { holder, index, waits, .. }) if !tids.is_empty() => {
+                            Changed::WaitKey { holder, index, used: tids, waits }
+                        }
+                        conflict => conflict.unwrap_or(Changed::Done(0)),
+                    });
                 }
             }
         }
@@ -4163,6 +4286,9 @@ fn committed_before(xid: u32, snapshot: &Snapshot) -> bool {
     xid < snapshot.xmax && !snapshot.running.contains(&xid)
 }
 
+/// The lines of the rows of a copy, and the lengths and the lines of the rows of the copy after them.
+pub(crate) type CopyLines<'a> = (&'a [usize], pages::Sizes<'a>);
+
 /// The positions of the columns that a mask of used columns keeps, so that a scan reads the mask once and not for each row.
 fn used_columns(used: Option<&[bool]>) -> Option<Vec<usize>> {
     used.map(|u| u.iter().enumerate().filter(|(_, u)| **u).map(|(i, _)| i).collect())
@@ -5296,7 +5422,10 @@ mod tests {
             (unique, &none),
             &[],
         );
-        assert_eq!(wait.unwrap(), Changed::WaitKey { holder: a, index: 0, used: vec![6, 7] });
+        assert_eq!(
+            wait.unwrap(),
+            Changed::WaitKey { holder: a, index: 0, used: vec![6, 7], waits: 7 }
+        );
         heap.abort(a);
         let done = heap.insert(
             7,

@@ -6,6 +6,9 @@ use rupg_types::Value;
 
 use super::fsm::Fsm;
 
+/// The rows of a copy, each with the length of its version and the length of its line.
+pub(crate) type Sizes<'a> = &'a [(usize, usize)];
+
 /// `MaxHeapTuplesPerPage`: the most versions that a page of 8 kB has. The ID of a version gives its page and its place in the page as if each page had this number of versions.
 pub(super) const TUPLES_PER_PAGE: u64 = 291;
 
@@ -507,12 +510,46 @@ impl Page {
     }
 }
 
-/// The extension of the heap by a bulk insert, `BulkInsertStateData`: the statement of the insert, the pages of the last extension that no version took yet, and `already_extended_by`.
+/// The extension of the heap by a bulk insert, `BulkInsertStateData`: the statement of the insert, the pages of the last extension that no version took yet, and `already_extended_by`. A copy also keeps the rows and the bytes of the lines of its batch of `CopyMultiInsertInfo`, and `npages`, `npages_used` and `starting_with_empty_page` of `heap_multi_insert` for the batch.
 #[derive(Clone, Copy, Debug)]
 struct Bulk {
     made: (u32, u32),
     free: (u32, u32),
     extended_by: u32,
+    batch: (usize, usize),
+    npages: u32,
+    npages_used: u32,
+    empty_start: bool,
+}
+
+impl Bulk {
+    fn new(made: (u32, u32)) -> Bulk {
+        Bulk {
+            made,
+            free: (1, 0),
+            extended_by: 0,
+            batch: (0, 0),
+            npages: 0,
+            npages_used: 0,
+            empty_start: false,
+        }
+    }
+}
+
+/// `heap_multi_insert_pages`: the pages that the versions of `rows` need at the most, each version with its line pointer, with the space `save` free in each page.
+fn multi_pages<'a>(rows: impl IntoIterator<Item = &'a (usize, usize)>, save: usize) -> u32 {
+    let page = usize::from(PAGE_SIZE - PAGE_HEADER).wrapping_sub(save);
+    let mut avail = page;
+    let mut npages = 1;
+    for &(len, _) in rows {
+        let size = usize::from(LINE_POINTER) + len;
+        if avail < size {
+            npages += 1;
+            avail = page;
+        }
+        avail = avail.wrapping_sub(size);
+    }
+    npages
 }
 
 /// Which pages that the visibility map marks `VACUUM` skips.
@@ -586,13 +623,94 @@ impl Pages {
         if self.bulk.is_some_and(|b| Some(b.made) != bulk) {
             self.bulk = None;
         }
-        let free = |pages: &[Page], at: u32| pages.get(at as usize).map_or(0, Page::free);
-        if let Some(at) = old.filter(|&at| free(&self.pages, at) >= len) {
+        if let Some(at) = old.filter(|&at| self.pages.get(at as usize).map_or(0, Page::free) >= len)
+        {
             return (at, self.pages[at as usize].add(len));
         }
+        let at = self.buffer_for(len, bulk, bulk.is_none(), save, 1);
+        (at, self.pages[at as usize].add(len))
+    }
+
+    /// `heap_multi_insert` with the `BulkInsertState` of a copy: the page and the slot of each row of `rows`, each with the length of its version and the length of its line. The rows go in the batches of `CopyMultiInsertInfo`, each up to `MAX_BUFFERED_TUPLES` rows or up to the row whose line makes `MAX_BUFFERED_BYTES` bytes. A page takes the next rows of the batch while they fit, and `RelationGetBufferForTuple` gives the next page, which extends the heap by the pages that the rest of the batch needs, as `heap_multi_insert_pages` counts them, when no page has the space. A batch can come in more than one call: `ahead` has the lengths and the lines of the rows of the copy after `rows`, which the batch counts, and the first rows of a later call go on the last page while they fit. `use_fsm` is false for a table that the transaction created or gave a new file, as `TABLE_INSERT_SKIP_FSM` is.
+    pub(super) fn place_copy(
+        &mut self,
+        (rows, ahead): (Sizes<'_>, Sizes<'_>),
+        made: (u32, u32),
+        use_fsm: bool,
+        save: usize,
+    ) -> Vec<(u32, u16)> {
+        let mut places = Vec::with_capacity(rows.len());
+        let mut start = 0;
+        while start < rows.len() {
+            let bulk = self.bulk_of(made);
+            let first = bulk.batch == (0, 0);
+            // The rows of the batch that this call has.
+            let mut end = start;
+            let mut closed = false;
+            while end < rows.len() && !closed {
+                end += 1;
+                closed = super::copy_batch_full(&mut bulk.batch, rows[end - 1].1);
+            }
+            // The rest of a batch that goes on after `rows`.
+            let mut probe = bulk.batch;
+            let after = match closed {
+                true => 0,
+                false => ahead
+                    .iter()
+                    .position(|row| super::copy_batch_full(&mut probe, row.1))
+                    .map_or(ahead.len(), |at| at + 1),
+            };
+            for at in start..end {
+                let len = rows[at].0;
+                let current = self.target.filter(|_| !first || at > start);
+                if let Some(page) = current.and_then(|page| self.pages.get_mut(page as usize))
+                    && page.free() >= len + save
+                {
+                    places.push((current.unwrap_or_default(), page.add(len)));
+                    continue;
+                }
+                let bulk = self.bulk_of(made);
+                if (first && at == start) || !bulk.empty_start {
+                    bulk.npages = multi_pages(rows[at..end].iter().chain(&ahead[..after]), save);
+                    bulk.npages_used = 0;
+                } else {
+                    bulk.npages_used += 1;
+                }
+                let pages = bulk.npages.saturating_sub(bulk.npages_used).max(1);
+                let block = self.buffer_for(len, Some(made), use_fsm, save, pages);
+                let page = &mut self.pages[block as usize];
+                let empty = page.lines == 0;
+                places.push((block, page.add(len)));
+                self.bulk_of(made).empty_start = empty;
+            }
+            start = end;
+        }
+        places
+    }
+
+    /// The `BulkInsertState` of the statement `made`, a new one for a new statement.
+    fn bulk_of(&mut self, made: (u32, u32)) -> &mut Bulk {
+        if self.bulk.is_some_and(|b| b.made != made) {
+            self.bulk = None;
+        }
+        self.bulk.get_or_insert(Bulk::new(made))
+    }
+
+    /// `RelationGetBufferForTuple`: the page for a new version of `len` bytes, the target page or the page of the free space map or the last page of the heap. A page with too little space goes to the free space map, which gives the next page to try, or the next free page of the last extension of a bulk insert, the statement `bulk`. Then `RelationAddBlocks` extends the heap by one page, or by `pages` pages for a bulk insert, and at least as many as the bulk insert added before, up to `MAX_BUFFERS_TO_EXTEND_BY`. The pages after the first `pages` go into the free space map.
+    fn buffer_for(
+        &mut self,
+        len: usize,
+        bulk: Option<(u32, u32)>,
+        use_fsm: bool,
+        save: usize,
+        pages: u32,
+    ) -> u32 {
+        if self.bulk.is_some_and(|b| Some(b.made) != bulk) {
+            self.bulk = None;
+        }
+        let free = |pages: &[Page], at: u32| pages.get(at as usize).map_or(0, Page::free);
         let nearly_empty = MAX_TUPLE - (TUPLES_PER_PAGE as usize / 8 * usize::from(LINE_POINTER));
         let len_saved = if len + save > nearly_empty { len.max(nearly_empty) } else { len + save };
-        let use_fsm = bulk.is_none();
         let count = self.blocks();
         let mut at = self.target.filter(|&at| at < count);
         if at.is_none() && use_fsm {
@@ -605,9 +723,13 @@ impl Pages {
             let space = free(&self.pages, block);
             if space >= len_saved {
                 self.target = Some(block);
-                return (block, self.pages[block as usize].add(len));
+                return block;
             }
             at = if let Some(b) = self.bulk.as_mut().filter(|b| b.free.0 <= b.free.1) {
+                // The free space of the page goes into the map, for narrower versions later.
+                if use_fsm {
+                    self.fsm.record(block, space);
+                }
                 b.free.0 += 1;
                 Some(b.free.0 - 1)
             } else if !use_fsm {
@@ -616,19 +738,25 @@ impl Pages {
                 self.fsm.record_and_get(block, space, len_saved, count)
             };
         }
-        let by = match bulk {
+        let (by, kept) = match bulk {
             Some(made) => {
-                let b = self.bulk.get_or_insert(Bulk { made, free: (1, 0), extended_by: 0 });
-                let by = b.extended_by.clamp(1, MAX_EXTEND);
+                let b = self.bulk_of(made);
+                let by = pages.max(b.extended_by).clamp(1, MAX_EXTEND);
                 b.extended_by += by;
                 b.free = (count + 1, count + by - 1);
-                by
+                (by, pages)
             }
-            None => 1,
+            None => (1, 1),
         };
         self.pages.extend((0..by).map(|_| Page::NEW));
+        if use_fsm && kept < by {
+            for block in count + kept..count + by {
+                self.fsm.record(block, usize::from(PAGE_SIZE - PAGE_HEADER));
+            }
+            self.fsm.vacuum_range(count + kept, count + by);
+        }
         self.target = Some(count);
-        (count, self.pages[count as usize].add(len))
+        count
     }
 
     /// The pages with the generation `generation` of a heap that a `TRUNCATE` renewed, as the log of a commit gives it.
@@ -804,7 +932,7 @@ rupg_common::persist_struct!(Pages {
     relallfrozen,
 });
 rupg_common::persist_struct!(Page { lines, upper, unused, visible, frozen });
-rupg_common::persist_struct!(Bulk { made, free, extended_by });
+rupg_common::persist_struct!(Bulk { made, free, extended_by } skip { batch, npages, npages_used, empty_start });
 
 /// The method of a column is its tag: 1 and 2 for `m`, 3 and 4 for `x`.
 impl Persist for Storage {
