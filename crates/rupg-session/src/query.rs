@@ -63,6 +63,9 @@ const SLEEP_SLICE_US: i64 = 10_000;
 const ADVISORY: (&str, &str) = ("Lock", "advisory");
 /// The wait event of a wait for the lock of a relation.
 const RELATION: (&str, &str) = ("Lock", "relation");
+
+/// The wait event of a lock of an object.
+const OBJECT: (&str, &str) = ("Lock", "object");
 /// The wait event of a wait for the end of the transaction of another session, as `VirtualXactLock` waits.
 const VIRTUAL_XID: (&str, &str) = ("Lock", "virtualxid");
 /// The wait event of a wait for the end of a transaction that changed a row.
@@ -700,6 +703,18 @@ impl<'a> Reader<'a> {
         let (_, store) = self.server()?;
         let tag = Tag::Relation { database: database_oid(store, self.database), relation };
         self.acquire(tag, mode, true, wait, RELATION)
+    }
+
+    /// `LockSharedObject` of the object `oid` of the shared catalog `class` in `mode` until the end of the transaction. A session with no server takes no lock.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    pub(crate) fn lock_shared_object(&self, class: u32, oid: u32, mode: Mode) -> Result<()> {
+        if self.activity.is_none() {
+            return Ok(());
+        }
+        self.acquire(Tag::Object { database: 0, class, oid }, mode, false, true, OBJECT).map(drop)
     }
 
     /// `UnlockRelationIdForSession`.
@@ -2063,6 +2078,14 @@ impl rupg_func::Session for Reader<'_> {
                     lock[9] = Value::Int2(key.kind.cast_signed());
                     lock
                 }
+                Tag::Object { database, class, oid } => {
+                    let mut lock = row("object", pid, mode, granted);
+                    lock[1] = Value::Oid(database);
+                    lock[7] = Value::Oid(class);
+                    lock[8] = Value::Oid(oid);
+                    lock[9] = Value::Int2(0);
+                    lock
+                }
             };
             rows.push(lock);
         }
@@ -2230,6 +2253,10 @@ impl Env for Reader<'_> {
 
     fn wait_for_lockers(&self, relids: &[u32], mode: u8) -> Result<()> {
         self.wait_lockers(relids, mode)
+    }
+
+    fn lock_shared_object(&self, class: u32, oid: u32) -> Result<()> {
+        Reader::lock_shared_object(self, class, oid, 1)
     }
 
     fn transaction_xid(&self) -> u32 {

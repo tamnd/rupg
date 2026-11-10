@@ -13,8 +13,20 @@ use rupg_platform::Tasks;
 /// The tag of a lock: a relation of a database, or the key of an advisory lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Tag {
-    Relation { database: u32, relation: u32 },
-    Advisory { database: u32, key: AdvisoryKey },
+    Relation {
+        database: u32,
+        relation: u32,
+    },
+    Advisory {
+        database: u32,
+        key: AdvisoryKey,
+    },
+    /// `SET_LOCKTAG_OBJECT`: an object of the catalog `class`, as a tablespace of `LockSharedObject`, which has the database 0.
+    Object {
+        database: u32,
+        class: u32,
+        oid: u32,
+    },
 }
 
 impl std::fmt::Display for Tag {
@@ -26,6 +38,9 @@ impl std::fmt::Display for Tag {
             }
             Tag::Advisory { database, key } => {
                 write!(f, "advisory lock [{database},{},{},{}]", key.high, key.low, key.kind)
+            }
+            Tag::Object { database, class, oid } => {
+                write!(f, "object {oid} of class {class} of database {database}")
             }
         }
     }
@@ -49,11 +64,11 @@ const STRONG: Mode = 4;
 /// `FAST_PATH_STRONG_LOCK_HASH_PARTITIONS`.
 const PARTITIONS: usize = 1024;
 
-/// The partition of the count of strong locks of a relation tag, or `None` for an advisory tag.
+/// The partition of the count of strong locks of a relation tag, or `None` for an advisory tag or an object tag.
 fn partition(tag: Tag) -> Option<usize> {
     match tag {
         Tag::Relation { relation, .. } => Some(relation as usize % PARTITIONS),
-        Tag::Advisory { .. } => None,
+        Tag::Advisory { .. } | Tag::Object { .. } => None,
     }
 }
 

@@ -488,5 +488,27 @@ DROP TABLESPACE
 DROP ROLE
 > DROP ROLE regress_ts_u2;
 DROP ROLE
+> CREATE ROLE regress_ts_o1;
+CREATE ROLE
+> CREATE ROLE regress_ts_g1;
+CREATE ROLE
+> CREATE TABLESPACE regress_ts9 OWNER regress_ts_o1 LOCATION '';
+CREATE TABLESPACE
+> GRANT CREATE ON TABLESPACE regress_ts9 TO regress_ts_g1;
+GRANT
+> REASSIGN OWNED BY regress_ts_o1 TO CURRENT_USER;
+REASSIGN OWNED
+> DROP OWNED BY regress_ts_g1;
+DROP OWNED
+> SELECT spcowner::regrole, spcacl FROM pg_tablespace WHERE spcname = 'regress_ts9';
+fields spcowner:4096:4:-1,spcacl@pg_tablespace.4:1034:-1:-1
+row postgres,{postgres=C/postgres}
+SELECT 1
+> DROP ROLE regress_ts_o1;
+DROP ROLE
+> DROP ROLE regress_ts_g1;
+DROP ROLE
+> DROP TABLESPACE regress_ts9;
+DROP TABLESPACE
 > RESET allow_in_place_tablespaces;
 RESET

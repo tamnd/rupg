@@ -295,6 +295,15 @@ pub trait Env {
         let _ = (relid, mode);
         Ok(true)
     }
+    /// `LockSharedObject` in `AccessShareLock` of the object `oid` of the shared catalog `class`, which a concurrent `DROP` cannot take away until the end of the transaction.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the lock manager.
+    fn lock_shared_object(&self, class: u32, oid: u32) -> Result<()> {
+        let _ = (class, oid);
+        Ok(())
+    }
     /// `WaitForLockersMultiple`: the wait for the end of each other transaction that holds a lock that conflicts with `mode` on a relation of `relids` when the wait starts. The transactions that lock the relations later do not hold up the wait. A session with no other sessions does not wait.
     ///
     /// # Errors

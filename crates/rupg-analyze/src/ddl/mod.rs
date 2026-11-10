@@ -789,6 +789,10 @@ impl Env for SchemaEnv<'_> {
         self.env.wait_for_lockers(relids, mode)
     }
 
+    fn lock_shared_object(&self, class: u32, oid: u32) -> Result<()> {
+        self.env.lock_shared_object(class, oid)
+    }
+
     fn transaction_xid(&self) -> u32 {
         self.env.transaction_xid()
     }

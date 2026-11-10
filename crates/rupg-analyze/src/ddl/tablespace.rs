@@ -1,6 +1,8 @@
 //! The tablespace of a new relation, as `DefineRelation` and `DefineIndex` of `tablecmds.c` and `indexcmds.c` choose it, with `GetDefaultTablespace` of `tablespace.c`, and the move of a relation to another tablespace, as `ALTER TABLE ... SET TABLESPACE`, `ALTER TABLE ALL IN TABLESPACE` and `REINDEX (TABLESPACE)` do it.
 
-use rupg_catalog::{ObjRef, PG_CLASS, PG_TOAST_NAMESPACE, RelKind};
+use rupg_catalog::{
+    FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_TABLESPACE, PG_TOAST_NAMESPACE, RelKind,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{AlterTableMoveAllStmt, Node, ObjectType};
 
@@ -58,7 +60,23 @@ impl Definer<'_, '_> {
                 "only shared relations can be placed in pg_global tablespace",
             ));
         }
+        self.lock_tablespace(tablespace)?;
         Ok(if tablespace == database { 0 } else { tablespace })
+    }
+
+    /// `shdepLockAndCheckObject` of a tablespace: `AccessShareLock` on the tablespace until the end of the transaction, so that a concurrent `DROP TABLESPACE` waits, and the check that the tablespace is still there after the wait. A tablespace of initdb is pinned and takes no lock.
+    pub(super) fn lock_tablespace(&self, tablespace: u32) -> Result<()> {
+        if tablespace < FIRST_NORMAL_OID {
+            return Ok(());
+        }
+        self.an.env.lock_shared_object(PG_TABLESPACE, tablespace)?;
+        if self.an.env.tablespace_name(tablespace).is_none() {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablespace {tablespace} was concurrently dropped"),
+            ));
+        }
+        Ok(())
     }
 
     /// `get_tablespace_oid` and the check of `CREATE` on the tablespace of `ATPrepSetTableSpace` and `ExecReindex`. The default tablespace of the database needs no privilege.
@@ -72,6 +90,7 @@ impl Definer<'_, '_> {
                 format!("permission denied for tablespace {name}"),
             ));
         }
+        self.lock_tablespace(oid)?;
         Ok(oid)
     }
 
