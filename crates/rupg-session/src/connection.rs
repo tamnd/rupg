@@ -6411,6 +6411,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/rowmark_subquery.test")));
     }
 
+    /// A function in PL/pgSQL with an exception block that calls itself 100 times runs, as the `gen_subxids` of `subxid-overflow` does. `connection/plpgsql_depth.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_depth() {
+        big_stack(|| script(include_str!("connection/plpgsql_depth.test")));
+    }
+
     /// An expression in `FROM` that gives a composite type: casts, `COALESCE` and `NULLIF`, the row type of a table, a nested composite type, aliases of the columns, the errors for too many aliases and a column definition list, a null value, `WITH ORDINALITY`, `ROWS FROM`, `LATERAL`, and the text of views with casts of rows. `connection/composite_from.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn composite_from() {

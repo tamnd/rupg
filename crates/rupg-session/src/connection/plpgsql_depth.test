@@ -1,0 +1,18 @@
+> CREATE TABLE pd_subxids (subx integer, val integer)
+CREATE TABLE
+> INSERT INTO pd_subxids VALUES (0, 0)
+INSERT 0 1
+> CREATE FUNCTION pd_gen(n integer) RETURNS void LANGUAGE plpgsql AS $$ BEGIN IF n <= 0 THEN UPDATE pd_subxids SET val = 1 WHERE subx = 0; RETURN; ELSE PERFORM pd_gen(n - 1); RETURN; END IF; EXCEPTION WHEN raise_exception THEN NULL; END $$
+CREATE FUNCTION
+> BEGIN
+BEGIN
+> SELECT pd_gen(100)
+fields pd_gen:2278:4:-1
+row 
+SELECT 1
+> SELECT val FROM pd_subxids
+fields val@pd_subxids.2:23:4:-1
+row 1
+SELECT 1
+> COMMIT
+COMMIT
