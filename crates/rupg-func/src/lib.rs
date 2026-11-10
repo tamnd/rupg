@@ -134,7 +134,7 @@ pub use large_object::Descriptors as LoDescriptors;
 pub use multirange::{period_covered, period_overlaps, range_agg};
 pub use random::Randomness;
 pub use reg::ts_config_setting;
-pub use regex::{AuthMatch, Replace, auth_compile, auth_search};
+pub use regex::{AuthMatch, Compiled, Replace, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use snapshot::XactState;
 pub use srf::{SetKernel, set_kernel};
