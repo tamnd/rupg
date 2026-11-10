@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rupg_catalog::{ObjRef, PG_CLASS, RelKind, Tablespace};
+use rupg_catalog::{FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_TABLESPACE, RelKind, Tablespace};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::roles::Roles;
 use rupg_sql::Severity;
@@ -157,6 +157,14 @@ impl Connection {
                 format!("permission denied for tablespace {name}"),
             ));
         }
+        // No new shared dependency comes while the tablespace goes. After the wait, the tablespace can be gone, and the objects of the transaction that held the lock are in the catalog.
+        self.reader().lock_shared_object(PG_TABLESPACE, oid, 8)?;
+        if !self.tablespace_rows().iter().any(|t| t.oid == oid) {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablespace \"{name}\" does not exist"),
+            ));
+        }
         // A partitioned relation has no files, so `pg_shdepend` keeps its tablespace, and `checkSharedDependencies` reports it.
         let current = self.catalog();
         // The objects of the current database come first, then a count for each other database.
@@ -242,6 +250,20 @@ impl Connection {
         }
     }
 
+    /// `shdepLockAndCheckObject` of the tablespace of the row: `AccessShareLock` until the end of the transaction, so that a concurrent `DROP TABLESPACE` waits, then the row again, with the changes of the transactions that committed in the wait. A tablespace of initdb is pinned and takes no lock.
+    fn lock_tablespace(&self, row: Tablespace) -> Result<Tablespace, Error> {
+        if row.oid < FIRST_NORMAL_OID {
+            return Ok(row);
+        }
+        self.reader().lock_shared_object(PG_TABLESPACE, row.oid, 1)?;
+        self.tablespace_rows().iter().find(|t| t.oid == row.oid).cloned().ok_or_else(|| {
+            Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablespace {} was concurrently dropped", row.oid),
+            )
+        })
+    }
+
     /// Puts a changed row of `pg_tablespace` in the changes of the transaction. The commit of the transaction moves the row to the store, and a rollback discards it. The engine cannot change the static rows of `pg_default` and `pg_global` yet.
     fn change_tablespace(&self, row: &Tablespace, statement: &str) -> Result<(), Error> {
         if matches!(row.oid, DEFAULT_TABLESPACE | GLOBAL_TABLESPACE) {
@@ -274,7 +296,7 @@ impl Connection {
         me: u32,
     ) -> Result<Done, Error> {
         let name = stmt.tablespacename.as_deref().unwrap_or_default();
-        let mut row = self.tablespace_row(name)?;
+        let mut row = self.lock_tablespace(self.tablespace_row(name)?)?;
         if !self.owns_tablespace(&row, me) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
@@ -290,7 +312,7 @@ impl Connection {
     pub(super) fn rename_tablespace(&self, stmt: &RenameStmt, me: u32) -> Result<Done, Error> {
         let old = stmt.subname.as_deref().unwrap_or_default();
         let new = stmt.newname.as_deref().unwrap_or_default();
-        let mut row = self.tablespace_row(old)?;
+        let mut row = self.lock_tablespace(self.tablespace_row(old)?)?;
         if !self.owns_tablespace(&row, me) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
@@ -340,7 +362,7 @@ impl Connection {
             Some(Node::String(name)) => &**name,
             _ => return Err(Error::internal("ALTER TABLESPACE OWNER with no name")),
         };
-        let mut row = self.tablespace_row(name)?;
+        let mut row = self.lock_tablespace(self.tablespace_row(name)?)?;
         if row.owner == new {
             return Ok(Done::Tag(CommandTag::AlterTablespace));
         }

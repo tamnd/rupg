@@ -864,7 +864,7 @@ impl Definer<'_, '_> {
     }
 
     /// The first row of `pg_database` for which `wanted` is true, with the changes of the statement and of the transaction: the row of a database that `CREATE DATABASE` made or that a statement changed, or a static row of `initdb`.
-    fn database_row(
+    pub(super) fn database_row(
         &self,
         wanted: impl Fn(&rupg_catalog::Database) -> bool,
     ) -> Option<rupg_catalog::Database> {
@@ -882,7 +882,7 @@ impl Definer<'_, '_> {
     }
 
     /// The first row of `pg_tablespace` for which `wanted` is true, with the changes of the statement and of the transaction: the row of a tablespace that `CREATE TABLESPACE` made, or a static row of `pg_default` or `pg_global`.
-    fn tablespace_row(
+    pub(super) fn tablespace_row(
         &self,
         wanted: impl Fn(&rupg_catalog::Tablespace) -> bool,
     ) -> Option<rupg_catalog::Tablespace> {

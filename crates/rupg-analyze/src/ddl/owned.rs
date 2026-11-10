@@ -4,7 +4,8 @@ use rupg_catalog::{
     Catalog, ObjRef, PG_CLASS, PG_COLLATION, PG_CONVERSION, PG_DATABASE, PG_DEFAULT_ACL,
     PG_EVENT_TRIGGER, PG_EXTENSION, PG_FOREIGN_DATA_WRAPPER, PG_FOREIGN_SERVER, PG_LANGUAGE,
     PG_LARGEOBJECT, PG_NAMESPACE, PG_OPCLASS, PG_OPERATOR, PG_OPFAMILY, PG_PROC, PG_PUBLICATION,
-    PG_STATISTIC_EXT, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, PG_USER_MAPPING, RangePart, RelKind,
+    PG_STATISTIC_EXT, PG_TABLESPACE, PG_TS_CONFIG, PG_TS_DICT, PG_TYPE, PG_USER_MAPPING, RangePart,
+    RelKind,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{DropBehavior, DropOwnedStmt, List, Node, ReassignOwnedStmt};
@@ -197,6 +198,16 @@ impl Definer<'_, '_> {
                     revoked.push(ObjRef::new(PG_DATABASE, db.oid));
                 }
             }
+            // So is the ACL of a tablespace, which `DROP TABLESPACE` cannot take away until the end of the transaction.
+            for oid in self.an.env.tablespaces().iter().map(|t| t.oid).collect::<Vec<_>>() {
+                let Some(row) = self.tablespace_row(|row| row.oid == oid) else { continue };
+                let names =
+                    row.acl.as_deref().is_some_and(|acl| super::acl_roles(acl).contains(&role));
+                if row.owner != role && names {
+                    self.lock_tablespace(oid)?;
+                    revoked.push(ObjRef::new(PG_TABLESPACE, oid));
+                }
+            }
             revoked.sort_by_key(|o| o.oid);
             for object in revoked {
                 self.remove_role_from_acl(role, object)?;
@@ -257,6 +268,55 @@ impl Definer<'_, '_> {
             for object in owned {
                 self.reassign(object, role, new)?;
             }
+            self.reassign_shared(role, new)?;
+        }
+        Ok(())
+    }
+
+    /// `shdepReassignOwned_Owner` for the shared objects of `old`: the databases, with the checks of `AlterDatabaseOwner`, and the tablespaces, which `DROP TABLESPACE` cannot take away until the end of the transaction. The ACL of each object gets the new owner.
+    fn reassign_shared(&mut self, old: u32, new: u32) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let (old_name, new_name) = (role_name(old), role_name(new));
+        let databases: Vec<u32> = self.an.env.databases().iter().map(|d| d.oid).collect();
+        for oid in databases {
+            let Some(mut row) = self.database_row(|row| row.oid == oid) else { continue };
+            if row.owner != old {
+                continue;
+            }
+            if !self.is_superuser() {
+                let roles = rupg_pgcatalog::roles::current();
+                if !roles.attrs(self.user).is_some_and(|a| a.createdb) {
+                    return Err(Error::new(
+                        SqlState::INSUFFICIENT_PRIVILEGE,
+                        "permission denied to change owner of database",
+                    ));
+                }
+            }
+            row.acl = row
+                .acl
+                .as_deref()
+                .map(|acl| rupg_catalog::acl_new_owner(acl, &old_name, &new_name));
+            row.owner = new;
+            self.databases.retain(|c| c.oid != oid);
+            self.databases.push(super::database_change(&row));
+        }
+        let tablespaces: Vec<u32> = self.an.env.tablespaces().iter().map(|t| t.oid).collect();
+        for oid in tablespaces {
+            let Some(row) = self.tablespace_row(|row| row.oid == oid) else { continue };
+            if row.owner != old {
+                continue;
+            }
+            self.lock_tablespace(oid)?;
+            let Some(mut row) = self.tablespace_row(|row| row.oid == oid) else { continue };
+            row.acl = row
+                .acl
+                .as_deref()
+                .map(|acl| rupg_catalog::acl_new_owner(acl, &old_name, &new_name));
+            row.owner = new;
+            self.tablespaces.retain(|c| c.oid != oid);
+            self.tablespaces.push(super::tablespace_change(&row));
         }
         Ok(())
     }
