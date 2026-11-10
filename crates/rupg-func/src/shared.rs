@@ -331,8 +331,9 @@ pub(crate) fn slru(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(SLRUS
         .iter()
         .map(|name| {
-            let mut row = vec![Value::text(*name)];
-            row.extend(std::iter::repeat_n(Value::Int8(0), 7));
+            let zeroed = if *name == "notify" { call.session.notify_zeroed() } else { 0 };
+            let mut row = vec![Value::text(*name), Value::Int8(zeroed)];
+            row.extend(std::iter::repeat_n(Value::Int8(0), 6));
             row.push(reset.clone());
             row
         })

@@ -1972,6 +1972,7 @@ pub(crate) fn run(
     let kept_columns: Vec<usize> = (0..kept.len()).filter(|&c| kept[c]).collect();
     if open {
         session.count_scan(relation.oid);
+        session.count_returned(relation.oid, rows);
     }
     let segments = rows.div_ceil(ROWS);
     let mut scan =

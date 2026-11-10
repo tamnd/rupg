@@ -115,6 +115,7 @@ impl Connection {
         if commit && defined {
             let catalog = self.store.committed(entry.database);
             heap.drop_tables(entry.database, |relation| catalog.relation(relation).is_some());
+            self.store.drop_counters(entry.database, &catalog);
         }
         Ok(Done::Tag(tag))
     }

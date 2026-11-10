@@ -1,0 +1,118 @@
+A> CREATE FUNCTION fs() RETURNS int LANGUAGE plpgsql AS $$BEGIN RETURN 1; END$$
+CREATE FUNCTION
+A> CREATE FUNCTION fsql(int) RETURNS int LANGUAGE sql AS $$SELECT 1; SELECT $1 + 1$$
+CREATE FUNCTION
+A> CREATE TABLE fo AS SELECT 'fs'::regproc::oid AS f, 'fsql'::regproc::oid AS s
+SELECT 1
+A> SELECT fs()
+fields fs:23:4:-1
+row 1
+SELECT 1
+A> SELECT pg_stat_get_function_calls(f) AS calls FROM fo
+fields calls:20:8:-1
+row NULL
+SELECT 1
+A> SET track_functions = 'pl'
+SET
+A> SELECT fs()
+fields fs:23:4:-1
+row 1
+SELECT 1
+A> SELECT fsql(1)
+fields fsql:23:4:-1
+row 2
+SELECT 1
+A> BEGIN
+BEGIN
+A> SELECT fs()
+fields fs:23:4:-1
+row 1
+SELECT 1
+A> SELECT pg_stat_get_xact_function_calls(f) AS pending, pg_stat_get_function_calls(f) AS calls, pg_stat_get_function_calls(s) AS sql FROM fo
+fields pending:20:8:-1,calls:20:8:-1,sql:20:8:-1
+row 1,1,NULL
+SELECT 1
+A> COMMIT
+COMMIT
+B> SELECT pg_stat_get_function_calls(f) AS calls, pg_stat_get_function_total_time(f) >= pg_stat_get_function_self_time(f) AS times, pg_stat_get_function_stat_reset_time(f) AS reset FROM fo
+fields calls:20:8:-1,times:16:1:-1,reset:1184:8:-1
+row 2,t,NULL
+SELECT 1
+A> SET track_functions = 'all'
+SET
+A> SELECT fsql(1)
+fields fsql:23:4:-1
+row 2
+SELECT 1
+B> SET stats_fetch_consistency = 'cache'
+SET
+B> BEGIN
+BEGIN
+B> SELECT pg_stat_get_function_calls(f) AS calls FROM fo
+fields calls:20:8:-1
+row 2
+SELECT 1
+A> SELECT fs(), fsql(2)
+fields fs:23:4:-1,fsql:23:4:-1
+row 1,3
+SELECT 1
+B> SELECT pg_stat_get_function_calls(f) AS calls, pg_stat_get_function_calls(s) AS sql FROM fo
+fields calls:20:8:-1,sql:20:8:-1
+row 2,2
+SELECT 1
+B> SELECT pg_stat_clear_snapshot()
+fields pg_stat_clear_snapshot:2278:4:-1
+row 
+SELECT 1
+B> SELECT pg_stat_get_function_calls(f) AS calls, pg_stat_get_function_calls(s) AS sql FROM fo
+fields calls:20:8:-1,sql:20:8:-1
+row 3,2
+SELECT 1
+B> COMMIT
+COMMIT
+A> SELECT pg_stat_reset_single_function_counters(f) FROM fo
+fields pg_stat_reset_single_function_counters:2278:4:-1
+row 
+SELECT 1
+A> SELECT pg_stat_get_function_calls(f) AS calls, pg_stat_get_function_stat_reset_time(f) IS NOT NULL AS reset, pg_stat_get_function_calls(s) AS sql FROM fo
+fields calls:20:8:-1,reset:16:1:-1,sql:20:8:-1
+row 0,t,2
+SELECT 1
+A> SELECT fs()
+fields fs:23:4:-1
+row 1
+SELECT 1
+A> DROP FUNCTION fs()
+DROP FUNCTION
+B> SELECT pg_stat_get_function_calls(f) AS calls FROM fo
+fields calls:20:8:-1
+row NULL
+SELECT 1
+A> CREATE TABLE ft (i int)
+CREATE TABLE
+A> INSERT INTO ft VALUES (1), (2), (3)
+INSERT 0 3
+A> SELECT count(*) FROM ft
+fields count:20:8:-1
+row 3
+SELECT 1
+A> SELECT count(*) FROM ft WHERE i > 1
+fields count:20:8:-1
+row 2
+SELECT 1
+A> SELECT seq_scan, seq_tup_read, n_live_tup FROM pg_stat_user_tables WHERE relname = 'ft'
+fields seq_scan@pg_stat_user_tables.4:20:8:-1,seq_tup_read@pg_stat_user_tables.6:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1
+row 2,6,3
+SELECT 1
+A> SELECT pg_stat_reset()
+fields pg_stat_reset:2278:4:-1
+row 
+SELECT 1
+A> SELECT seq_scan, seq_tup_read, n_live_tup, pg_stat_get_stat_reset_time('ft'::regclass) IS NOT NULL AS reset FROM pg_stat_user_tables WHERE relname = 'ft'
+fields seq_scan@pg_stat_user_tables.4:20:8:-1,seq_tup_read@pg_stat_user_tables.6:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,reset:16:1:-1
+row 0,0,0,t
+SELECT 1
+A> SELECT pg_stat_get_function_calls(s) AS sql FROM fo
+fields sql:20:8:-1
+row 0
+SELECT 1

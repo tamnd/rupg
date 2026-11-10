@@ -138,7 +138,7 @@ pub use regex::{AuthMatch, Compiled, Replace, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use snapshot::XactState;
 pub use srf::{SetKernel, set_kernel};
-pub use stat::{RelationCounts, Writes};
+pub use stat::{FunctionCounts, RelationCounts, Writes};
 pub use text::{Infix, like_text, pattern_match, quote_identifier};
 pub use tsearch::{ts_config_qualified, tsvector_of_texts};
 pub use tsm::sample_rows;
@@ -641,6 +641,10 @@ pub trait Session {
     fn count_scan(&self, relation: u32) {
         let _ = relation;
     }
+    /// `pgstat_count_heap_getnext`: counts the rows that a sequential scan of a relation read, in the counts of the transaction.
+    fn count_returned(&self, relation: u32, rows: usize) {
+        let _ = (relation, rows);
+    }
     /// The rows of a table of the user that the snapshot of the statement sees, each with a value for each column of the table when the row was written. With `used`, each row has only the columns that are true in `used`, in their order, so that a scan copies only the columns that the query reads. A session with no server has no rows.
     ///
     /// # Errors
@@ -771,6 +775,29 @@ pub trait Session {
     fn pending_writes(&self, relation: u32) -> Writes {
         let _ = relation;
         Writes::default()
+    }
+    /// `find_tabstat_entry`: the rows that the sequential scans of the transaction read in a relation and did not report yet.
+    fn pending_returned(&self, relation: u32) -> i64 {
+        let _ = relation;
+        0
+    }
+    /// `pgstat_fetch_stat_funcentry`: the counters of a function of the database of the session, as `stats_fetch_consistency` keeps them in the transaction, or `None` for a function with no entry.
+    fn function_counts(&self, func: u32) -> Option<FunctionCounts> {
+        let _ = func;
+        None
+    }
+    /// `blks_zeroed` of the SLRU `notify`, as `stats_fetch_consistency` keeps it in the transaction.
+    fn notify_zeroed(&self) -> i64 {
+        0
+    }
+    /// `find_funcstat_entry`: the calls of a function that the session counted and did not report yet, or `None` when it counted none.
+    fn pending_function(&self, func: u32) -> Option<FunctionCounts> {
+        let _ = func;
+        None
+    }
+    /// `pgstat_reset_counters` for `None`, which sets the counters of the relations and the functions of the database of the session to 0, and `pgstat_reset` of one relation or function, which sets its counters to 0 when it has an entry.
+    fn reset_counters(&self, object: Option<u32>) {
+        let _ = object;
     }
     /// The time of the last reset of the statistics of the whole server in microseconds since 2000-01-01 UTC, or 0 when the session has no server.
     fn stats_reset(&self) -> i64 {

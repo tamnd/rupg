@@ -29,7 +29,7 @@ use rupg_types::{
 use rupg_wire::{Field, Portals, Statements};
 
 use crate::advisory::{EXCLUSIVE, Edge, Mode, ROW_EXCLUSIVE, Request, SHARE, Tag, mode_name};
-use crate::connection::{Activity, Connection, Portal, Prepared};
+use crate::connection::{Activity, Connection, Fetch, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::heap::{Heap, RowLocked, View, tid_text};
 use crate::param::type_error;
@@ -1205,6 +1205,11 @@ fn date_format(text: &str) -> DateFormat {
 }
 
 impl Reader<'_> {
+    /// `stats_fetch_consistency`.
+    fn fetch_consistency(&self) -> Fetch {
+        self.conn.map_or(Fetch::Cache, Connection::fetch_consistency)
+    }
+
     /// `PredicateLockRelation` and `CheckForSerializableConflictOut` for a scan of the table `relation` in `SERIALIZABLE`. `PredicateLockingNeededForRelation` skips a system table and a temporary table.
     fn serializable_read(&self, relation: u32, store: &Store, view: &View) -> Result<()> {
         if !self.predicate_locking(relation, view) {
@@ -1630,6 +1635,18 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn count_returned(&self, relation: u32, rows: usize) {
+        if let Some((activity, _)) = self.activity
+            && rows > 0
+            && !matches!(
+                guc::known!("track_counts").map(|p| self.settings().setting(p)),
+                Some(guc::Setting::Bool(false))
+            )
+        {
+            activity.count_returned(relation, rows);
+        }
+    }
+
     fn table_rows(&self, relation: u32, used: Option<&[bool]>) -> Result<Vec<Vec<Value>>> {
         match (self.activity, &self.view) {
             (Some((_, store)), Some(view)) => {
@@ -1753,11 +1770,35 @@ impl rupg_func::Session for Reader<'_> {
 
     fn relation_counts(&self, relation: u32) -> Option<rupg_func::RelationCounts> {
         let (activity, store) = self.activity?;
-        activity.relation_counts(store, relation)
+        activity.relation_counts(store, relation, self.fetch_consistency())
+    }
+
+    fn notify_zeroed(&self) -> i64 {
+        self.activity
+            .map_or(0, |(activity, store)| activity.notify_zeroed(store, self.fetch_consistency()))
     }
 
     fn pending_scans(&self, relation: u32) -> i64 {
         self.activity.map_or(0, |(activity, _)| activity.pending_scans(relation))
+    }
+
+    fn pending_returned(&self, relation: u32) -> i64 {
+        self.activity.map_or(0, |(activity, _)| activity.pending_returned(relation))
+    }
+
+    fn function_counts(&self, func: u32) -> Option<rupg_func::FunctionCounts> {
+        let (activity, store) = self.activity?;
+        activity.function_counts(store, func, self.fetch_consistency())
+    }
+
+    fn pending_function(&self, func: u32) -> Option<rupg_func::FunctionCounts> {
+        self.activity.and_then(|(activity, _)| activity.pending_function(func))
+    }
+
+    fn reset_counters(&self, object: Option<u32>) {
+        if let Some((activity, store)) = self.activity {
+            store.reset_counters(activity.database(), object, now(self.clock));
+        }
     }
 
     fn pending_writes(&self, relation: u32) -> rupg_func::Writes {
@@ -1824,7 +1865,7 @@ impl rupg_func::Session for Reader<'_> {
         args: &[Value],
     ) -> Result<Vec<Value>> {
         match self.conn {
-            Some(conn) => conn.pl_call(self, func, types, ret, args),
+            Some(conn) => conn.tracked_call(func, 1, || conn.pl_call(self, func, types, ret, args)),
             None => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "a function in PL/pgSQL is not supported here",
@@ -1839,7 +1880,7 @@ impl rupg_func::Session for Reader<'_> {
         args: &[Value],
     ) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
         match self.conn {
-            Some(conn) => conn.sql_call(self, func, types, args),
+            Some(conn) => conn.tracked_call(func, 2, || conn.sql_call(self, func, types, args)),
             None => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "a function in SQL with more than one statement is not supported here",

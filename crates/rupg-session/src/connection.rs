@@ -70,7 +70,7 @@ mod upsert;
 mod vacuum;
 mod writes;
 
-pub(crate) use activity::{Activity, Pending};
+pub(crate) use activity::{Activity, Calls, Fetch, Pending, Scans};
 use copy_from::Begin;
 pub(crate) use explain::{btree_shape, planned};
 use extended::Failed;
@@ -1486,6 +1486,7 @@ impl Connection {
         if commit && defined {
             let catalog = self.store.committed(self.database_oid);
             heap.drop_tables(self.database_oid, |relation| catalog.relation(relation).is_some());
+            self.store.drop_counters(self.database_oid, &catalog);
         }
         self.end_heap_state();
     }
@@ -9774,6 +9775,12 @@ mod tests {
             let config = [("max_prepared_transactions".to_string(), "10".to_string())];
             two_sessions_with(include_str!("connection/twophase.test"), &config);
         });
+    }
+
+    /// The counters of the functions in the statistics: `track_functions` decides which calls count, a call counts in the session until the end of its transaction, `stats_fetch_consistency = cache` keeps the counters of a function that the transaction read until `pg_stat_clear_snapshot`, `pg_stat_reset_single_function_counters` sets them to 0, and a `DROP FUNCTION` drops them. A sequential scan counts the rows that it read, and `pg_stat_reset` sets the counters of the database to 0.
+    #[test]
+    fn function_stats() {
+        big_stack(|| two_sessions(include_str!("connection/function_stats.test")));
     }
 
     /// A prepared transaction that changed the catalog keeps its changes and the locks of the relations that it changed until `COMMIT PREPARED` from another session publishes the changes, or `ROLLBACK PREPARED` discards them. The tables that a committed prepared transaction dropped go from the heap. `CREATE INDEX CONCURRENTLY` waits for a prepared transaction that wrote its table, and a timeout of the wait leaves the index invalid.

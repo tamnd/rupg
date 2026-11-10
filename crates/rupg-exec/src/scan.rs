@@ -733,6 +733,7 @@ pub(crate) fn read(
                 Some(read) => read,
                 None => session.table_rows(relation.oid, kept)?,
             };
+            session.count_returned(relation.oid, read.len());
             for row in &mut read {
                 let tid = row.pop().unwrap_or(Value::Null);
                 row.resize(width, Value::Null);
@@ -1043,6 +1044,7 @@ fn key_rows(
         });
     }
     session.count_scan(lookup.relation);
+    session.count_returned(lookup.relation, rows.len());
     let width = used.map_or(lookup.width, |u| u.iter().filter(|u| **u).count());
     for row in &mut rows {
         let tid = row.pop().unwrap_or(Value::Null);
@@ -1284,6 +1286,7 @@ pub(crate) fn point_rows(
         return Ok(None);
     };
     session.count_scan(lookup.relation);
+    session.count_returned(lookup.relation, found.len());
     let mut rows = Vec::with_capacity(found.len());
     let targets: Vec<Option<Point<'_>>> =
         query.targets.iter().map(|t| point_target(&t.expr)).collect();
@@ -1395,6 +1398,7 @@ impl<'q> PointRows<'q> {
             return Ok(None);
         };
         session.count_scan(lookup.relation);
+        session.count_returned(lookup.relation, found.len());
         let rows = found
             .into_iter()
             .filter(|(row, _)| {
@@ -1463,6 +1467,7 @@ fn user_rows(
         } else {
             session.table_rows(oid, used)?
         };
+        session.count_returned(oid, rows.len());
         let children = match session.catalog() {
             Some(catalog) if !from.only => catalog.all_inheritors(oid),
             _ => Vec::new(),
