@@ -253,12 +253,35 @@ impl Definer<'_, '_> {
             }
             match found {
                 Found::User(oid) if oid >= FIRST_NORMAL_OID => {
+                    if !stmt.concurrent {
+                        self.lock_for_drop(oid)?;
+                    }
                     objects.push(ObjRef::new(PG_CLASS, oid));
                 }
                 _ => return Err(builtin_object()),
             }
         }
         Ok(objects)
+    }
+
+    /// The locks of `RemoveRelations` on a relation that `DROP` names, before the walk of its dependencies: `RangeVarCallbackForDropRelation` locks the table of an index before the index and the parent of a partition before the partition, and for a partitioned index `find_all_inheritors` locks each partition of the table, so that the partitions of the index are locked after their tables.
+    fn lock_for_drop(&self, oid: u32) -> Result<()> {
+        let Some(rel) = self.catalog.relation(oid) else { return Ok(()) };
+        if let Some(index) = &rel.index {
+            self.an.env.relation_lock(index.table, super::ACCESS_EXCLUSIVE)?;
+        } else if let Some(of) = &rel.partition_of {
+            // A partition goes after the lock of its parent.
+            self.an.env.relation_lock(of.parent, super::ACCESS_EXCLUSIVE)?;
+        }
+        self.an.env.relation_lock(oid, super::ACCESS_EXCLUSIVE)?;
+        if rel.kind == RelKind::PartitionedIndex
+            && let Some(index) = &rel.index
+        {
+            for child in self.catalog.all_inheritors(index.table) {
+                self.an.env.relation_lock(child, super::ACCESS_EXCLUSIVE)?;
+            }
+        }
+        Ok(())
     }
 
     /// `RangeVarGetRelidExtended` with `RVR_MISSING_OK`: the relation of a name, or `None` when the schema or the relation does not exist.
