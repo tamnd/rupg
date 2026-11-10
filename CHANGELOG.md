@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A function in PL/pgSQL can call itself 200 levels deep before `stack depth limit exceeded`, so a function with an exception block that calls itself 100 times runs, as in PostgreSQL (#1479).
 - In a query with `FOR UPDATE` or `FOR SHARE`, or in an `UPDATE` or a `DELETE`, a subquery that stays in `FROM`, such as a view with `ORDER BY`, carries its whole row for `ROW_MARK_COPY`, so that the plan keeps its `Subquery Scan`, as `preprocess_rowmarks` and `select_rowmark_type` do (#1478).
 - `pg_get_publication_tables` opens each table of the publication with `AccessShareLock`, waiting for a transaction that holds a stronger lock, and skips a table that the transaction dropped, as `pg_get_publication_tables` of PG does (#1477).
 - `DROP INDEX` locks the table of the index before the index, and for a partitioned index each partition of the table before the partitions of the index, as `RemoveRelations` does; a query locks each index of the tables it reads in the mode of the table, and the indexes of the table it writes in `RowExclusiveLock`, as `get_relation_info` and `ExecOpenIndices` do (#1476).
