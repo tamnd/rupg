@@ -27,8 +27,8 @@ type CastKey = (u32, i32, u32, i32);
 /// The rows of a query and its columns.
 type Rows = (Vec<Vec<Value>>, Vec<Field>);
 
-/// The depth of the calls of PL/pgSQL functions where a call fails, which stands for `max_stack_depth`.
-const MAX_DEPTH: usize = 100;
+/// The depth of the calls of PL/pgSQL functions where a call fails, which stands for `max_stack_depth`. A function with an exception block that calls itself 100 times runs, as in PostgreSQL, and the stack of a session thread holds twice this depth of calls, also of calls through a query or a trigger.
+const MAX_DEPTH: usize = 200;
 
 /// A compiled function with the plans of its expressions, `PLpgSQL_function` with the plans of `PLpgSQL_expr`.
 #[derive(Debug)]
