@@ -9792,7 +9792,7 @@ mod tests {
         });
     }
 
-    /// The locks that statements take on relations in two sessions: a read and a write take a weak lock on the fast path, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE` and `CREATE INDEX` wait for them until `lock_timeout`, a strong request moves the weak locks to the table, and the rollback to a savepoint releases the locks after it.
+    /// The locks that statements take on relations in two sessions: a read and a write take a weak lock on the fast path, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE` and `CREATE INDEX` wait for them until `lock_timeout`, a read of a view also locks the view, a strong request moves the weak locks to the table, and the rollback to a savepoint releases the locks after it.
     #[test]
     fn relation_locks() {
         big_stack(|| two_sessions(include_str!("connection/relation_locks.test")));

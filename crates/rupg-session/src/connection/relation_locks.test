@@ -71,5 +71,23 @@ row RowExclusiveLock
 SELECT 1
 B> COMMIT
 COMMIT
+A> CREATE VIEW rlv AS SELECT a FROM rl
+CREATE VIEW
+A> BEGIN
+BEGIN
+A> SELECT count(*) FROM rlv
+fields count:20:8:-1
+row 1
+SELECT 1
+A> SELECT relation::regclass::text AS r, mode FROM pg_locks WHERE relation IN (0, 'rl'::regclass, 'rlv'::regclass, 'pg_locks'::regclass) ORDER BY 1
+fields r:25:-1:-1,mode@pg_locks.13:25:-1:-1
+row pg_locks,AccessShareLock
+row rl,AccessShareLock
+row rlv,AccessShareLock
+SELECT 3
+A> COMMIT
+COMMIT
+A> DROP VIEW rlv
+DROP VIEW
 A> DROP TABLE rl
 DROP TABLE

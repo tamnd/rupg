@@ -970,7 +970,15 @@ pub(crate) fn scanned_relations(query: &Query) -> (Vec<u32>, Vec<u32>) {
 fn add_scanned(query: &Query, reads: &mut (Vec<u32>, Vec<u32>)) {
     for relation in &query.relations {
         match relation.subquery.as_deref() {
-            Some(sub) => add_scanned(sub, reads),
+            Some(sub) => {
+                // `AcquireRewriteLocks` locks a view in the mode of the statement before the relations of its query. A subquery in `FROM` has no relation.
+                if relation.oid != 0 && !reads.0.contains(&relation.oid) {
+                    reads.0.push(relation.oid);
+                }
+                add_scanned(sub, reads);
+            }
+            // A function, a `VALUES` list or a query of `WITH` has no relation to lock.
+            None if relation.oid == 0 => {}
             None => {
                 // `Expr::find` also visits the sublinks in a sublink, so a relation can come again. The first time is the one that counts for the order of the errors.
                 if !reads.0.contains(&relation.oid) {
