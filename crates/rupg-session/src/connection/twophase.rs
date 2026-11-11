@@ -5,7 +5,7 @@ use rupg_sql::nodes::{TransactionStmt, TransactionStmtKind};
 use rupg_wire::CommandTag;
 
 use super::{Connection, Done};
-use crate::twophase::Prepared;
+use crate::twophase::{HeldLock, Prepared};
 
 impl Connection {
     /// The checks of `PrepareTransaction` after `PreCommit_CheckForSerializationFailure`, and `MarkAsPreparing`, which reserves the global identifier for the session until [`Connection::end_prepared`]. The transaction gets a transaction ID if it has none, as `GetCurrentTransactionId` gives it.
@@ -61,6 +61,14 @@ impl Connection {
         self.store.heap().hand_over(xid, owner);
         self.store.locks().hand_over(self.pid, self.activity.fast.as_deref(), owner);
         self.sxact.set(0);
+        // The log gets the prepare before another session can end the transaction. A transaction that changed the catalog is not in the log, and a restart loses it.
+        if lease.is_none() {
+            let locks = self.store.locks().xact_holds(owner, None);
+            let locks = locks.into_iter().map(|(tag, mode, count)| HeldLock::of(tag, mode, count));
+            if let Some(durable) = self.store.prepared().durable(xid, locks.collect()) {
+                self.store.prepare(xid, &durable.bytes());
+            }
+        }
         self.store.prepared().prepared(self.pid, self.activity.take_writes(), lease);
         self.store.commit(0, false, true);
         self.end_heap_state();
@@ -99,11 +107,11 @@ impl Connection {
             if let Some(lease) = lease {
                 lease.commit();
             }
-            self.store.commit(entry.xid, defined, self.synchronous_commit());
+            self.store.finish_prepared(entry.xid, true, defined, self.synchronous_commit());
         } else {
             drop(lease);
             heap.abort(entry.xid);
-            self.store.commit(0, false, true);
+            self.store.finish_prepared(entry.xid, false, false, true);
         }
         if entry.sxact != 0 {
             heap.serializable_end(entry.sxact, commit);

@@ -195,6 +195,8 @@ struct State {
     row_queues: RowQueues,
     /// `nextMXact` and `nextOffset` from `FirstMultiXactId`: the number of the multixacts that the row locks made, and the sum of their members. A lock of a version that another transaction or subtransaction locks too makes a new multixact with all the lockers, as `MultiXactIdExpand` does. rupg keeps no multixacts after their lockers end, and never truncates, so the numbers only grow.
     multixacts: (u64, u64),
+    /// The prepared transactions that a restart keeps, by their transaction IDs, with the bytes of what the log keeps of each, as the state files of `pg_twophase` keep them. A prepared transaction stays in `running`, and the image keeps its changes as the changes of a commit.
+    prepared: BTreeMap<u32, Vec<u8>>,
 }
 
 /// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
@@ -4049,6 +4051,7 @@ impl Heap {
         Arc::make_mut(&mut state.running).remove(&xid);
         state.latest_completed = state.latest_completed.max(xid);
         self.publish(&state);
+        state.prepared.remove(&xid);
         state.combos.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
@@ -4080,6 +4083,7 @@ impl Heap {
         state.latest_completed = state.latest_completed.max(xid);
         state.aborted.insert(xid);
         self.publish(&state);
+        state.prepared.remove(&xid);
         state.combos.remove(&xid);
         state.touched.remove(&xid);
         state.loading.remove(&xid);
@@ -4088,6 +4092,59 @@ impl Heap {
         state.waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
         state.unlock_rows(xid);
+    }
+
+    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the image keeps its changes from then on, so the log of its commit has no changes. The result is false, with no call of `log`, for a transaction that truncated a table or loaded rows, which a restart does not keep.
+    pub(crate) fn prepare_logged(
+        &self,
+        xid: u32,
+        meta: Vec<u8>,
+        log: &mut dyn FnMut(Logged<'_>),
+    ) -> bool {
+        let mut state = self.state();
+        if state.truncating.contains_key(&xid) || state.loading.contains_key(&xid) {
+            return false;
+        }
+        state.prepared.insert(xid, meta);
+        match state.touched.remove(&xid) {
+            Some(mut touched) => {
+                let mut out = Vec::new();
+                if state.log_commit(xid, &mut touched, &[], &mut out) {
+                    log(Logged::Changes(&out));
+                } else {
+                    log(Logged::Large);
+                }
+            }
+            None => log(Logged::Nothing),
+        }
+        true
+    }
+
+    /// The prepared transactions that a restart keeps, with the bytes of what the log keeps of each.
+    pub(crate) fn prepared(&self) -> Vec<(u32, Vec<u8>)> {
+        self.state().prepared.iter().map(|(&xid, meta)| (xid, meta.clone())).collect()
+    }
+
+    /// The redo of a prepare from the log, after [`Heap::redo`] of its changes: the transaction `xid` is in progress again as a prepared transaction with the bytes `meta`, whose locks the owner [`crate::twophase::Prepared::lock_owner`] holds.
+    pub(crate) fn redo_prepare(&self, xid: u32, meta: Vec<u8>) {
+        let mut state = self.state();
+        state.next_xid = state.next_xid.max(xid.wrapping_add(1));
+        Arc::make_mut(&mut state.running).insert(xid);
+        state.owners.insert(xid, -xid.cast_signed());
+        state.prepared.insert(xid, meta);
+        self.publish(&state);
+    }
+
+    /// The redo of `COMMIT PREPARED` or `ROLLBACK PREPARED` from the log. A transaction that the image or the log does not have as prepared ended before the image, so its end does nothing.
+    pub(crate) fn redo_finish(&self, xid: u32, commit: bool) {
+        if !self.state().prepared.contains_key(&xid) {
+            return;
+        }
+        if commit {
+            self.commit(xid);
+        } else {
+            self.abort(xid);
+        }
     }
 
     /// `AbortSubTransaction` for the rows: the versions that the commands of `xid` from `command` on inserted go, and the versions that they deleted stay. A transaction has no transaction IDs for its subtransactions, so the command of each change tells the changes of the subtransaction from the changes before it.
@@ -4447,7 +4504,10 @@ impl Heap {
         let mut imaged = Imaged::default();
         let state = self.state();
         imaged.1 = state.unlogged;
+        // A transaction in progress aborts at a restart, and a prepared transaction stays prepared with its changes.
+        let prepared = &state.prepared;
         let running = &state.running;
+        let gone = |xid: &u32| running.contains(xid) && !prepared.contains_key(xid);
         state.next_xid.put(out);
         state.latest_completed.put(out);
         state.aborted.put(out);
@@ -4455,27 +4515,25 @@ impl Heap {
         state.tables.0.len().put(out);
         for (key, table) in &state.tables.0 {
             key.put(out);
-            table.versions.iter().filter(|v| !running.contains(&v.xmin)).count().put(out);
+            table.versions.iter().filter(|v| !gone(&v.xmin)).count().put(out);
             // The encoded columns go to the image as they are when no transaction in progress made a frozen version, so a frozen version keeps no values in the image either.
-            let frozen = table.frozen.as_ref().filter(|_| {
-                table.versions.iter().all(|v| !v.values.is_empty() || !running.contains(&v.xmin))
-            });
+            let frozen = table
+                .frozen
+                .as_ref()
+                .filter(|_| table.versions.iter().all(|v| !v.values.is_empty() || !gone(&v.xmin)));
             let mut end = 0usize;
             let mut written = 0usize;
             let mut put = |at: usize, values: &[Value]| {
                 let v = &table.versions[at];
-                if running.contains(&v.xmin) {
+                if gone(&v.xmin) {
                     return;
                 }
                 written += 1;
                 if frozen.is_some() && v.values.is_empty() {
                     end = written;
                 }
-                let (aborted, xmax, cmax) = if running.contains(&v.xmax) {
-                    (v.xmax, 0, 0)
-                } else {
-                    (v.aborted, v.xmax, v.cmax)
-                };
+                let (aborted, xmax, cmax) =
+                    if gone(&v.xmax) { (v.xmax, 0, 0) } else { (v.aborted, v.xmax, v.cmax) };
                 (v.tid, v.made, v.xmin, v.cmin).put(out);
                 (xmax, cmax, aborted, v.next).put(out);
                 v.len.put(out);
@@ -4491,7 +4549,7 @@ impl Heap {
                     }
                 }
                 // A frozen version of a transaction in progress is not in the image, so it does not decode.
-                None => table.each_kept_row(None, |v| !running.contains(&v.xmin), put),
+                None => table.each_kept_row(None, |v| !gone(&v.xmin), put),
             }
             table.made.put(out);
             // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
@@ -4516,6 +4574,10 @@ impl Heap {
                 }
                 None => out.push(0),
             }
+        }
+        // An image of a server with no prepared transaction ends with the tables, as an image of an earlier server did.
+        if !prepared.is_empty() {
+            prepared.put(out);
         }
         imaged
     }
@@ -4589,6 +4651,14 @@ impl Heap {
                 return Err(rupg_common::persist::corrupt("a cold table has no frozen columns"));
             }
             state.tables.0.insert(key, table);
+        }
+        if !input.is_empty() {
+            state.prepared = Persist::take(input)?;
+            let running = Arc::make_mut(&mut state.running);
+            for &xid in state.prepared.keys() {
+                running.insert(xid);
+                state.owners.insert(xid, -xid.cast_signed());
+            }
         }
         Ok(Heap {
             state: RwLock::new(state),
