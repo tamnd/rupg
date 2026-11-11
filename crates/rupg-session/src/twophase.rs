@@ -1,10 +1,13 @@
-//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The list is in memory, so a restart of the server loses the prepared transactions.
+//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The log and the image keep each prepared transaction with its changes and its heavyweight locks, so a restart after a crash finds it prepared again, as `RecoverPreparedTransactions` does. A restart does not keep a transaction that changed the catalog, truncated a table or loaded rows, its row locks, or its record of serializable snapshot isolation.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use rupg_common::persist::{Persist, Reader, corrupt};
 use rupg_common::{Error, Result, SqlState};
+use rupg_func::AdvisoryKey;
 
+use crate::advisory::{Mode, Tag};
 use crate::connection::Pending;
 use crate::store::Lease;
 
@@ -39,6 +42,90 @@ impl Prepared {
     /// The owner of the heavyweight locks of the transaction, as the dummy `PGPROC` of a prepared transaction holds them: a number that no session has.
     pub(crate) fn lock_owner(xid: u32) -> i32 {
         -xid.cast_signed()
+    }
+}
+
+/// What the log and the image keep of a prepared transaction, as the state file of `pg_twophase` keeps it: the global identifier, the database, the owner, the time of the prepare and the heavyweight locks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Durable {
+    pub(crate) gid: String,
+    pub(crate) database: u32,
+    pub(crate) owner: u32,
+    pub(crate) prepared: i64,
+    pub(crate) locks: Vec<HeldLock>,
+}
+
+rupg_common::persist_struct!(Durable { gid, database, owner, prepared, locks });
+
+/// A heavyweight lock of a prepared transaction, as the record `TWOPHASE_RM_LOCK_ID` keeps it: the tag, the mode and the number of the holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HeldLock {
+    /// 0 for a relation, 1 for an advisory lock and 2 for an object.
+    kind: u8,
+    database: u32,
+    /// The relation, the high half of the key, or the class.
+    first: u32,
+    /// The low half of the key, or the OID of the object.
+    second: u32,
+    /// The kind of the key of an advisory lock.
+    field: u16,
+    mode: Mode,
+    count: u32,
+}
+
+rupg_common::persist_struct!(HeldLock { kind, database, first, second, field, mode, count });
+
+impl HeldLock {
+    /// The record of `count` holds of `tag` in `mode`.
+    pub(crate) fn of(tag: Tag, mode: Mode, count: u32) -> HeldLock {
+        let (kind, database, first, second, field) = match tag {
+            Tag::Relation { database, relation } => (0, database, relation, 0, 0),
+            Tag::Advisory { database, key } => (1, database, key.high, key.low, key.kind),
+            Tag::Object { database, class, oid } => (2, database, class, oid, 0),
+        };
+        HeldLock { kind, database, first, second, field, mode, count }
+    }
+
+    /// The tag, the mode and the number of the holds of the record.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` for a record with a bad kind.
+    pub(crate) fn lock(&self) -> Result<(Tag, Mode, u32)> {
+        let HeldLock { kind, database, first, second, field, mode, count } = *self;
+        let tag = match kind {
+            0 => Tag::Relation { database, relation: first },
+            1 => Tag::Advisory {
+                database,
+                key: AdvisoryKey { high: first, low: second, kind: field },
+            },
+            2 => Tag::Object { database, class: first, oid: second },
+            _ => return Err(corrupt("a lock of a prepared transaction has a bad kind")),
+        };
+        Ok((tag, mode, count))
+    }
+}
+
+impl Durable {
+    /// The bytes of the record.
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.put(&mut out);
+        out
+    }
+
+    /// The record of the bytes of [`Durable::bytes`].
+    ///
+    /// # Errors
+    ///
+    /// `XX001` for bytes that are not a record.
+    pub(crate) fn of_bytes(bytes: &[u8]) -> Result<Durable> {
+        let mut input = Reader::new(bytes);
+        let durable = Durable::take(&mut input)?;
+        if !input.is_empty() {
+            return Err(corrupt("a prepared transaction has bytes after its end"));
+        }
+        Ok(durable)
     }
 }
 
@@ -92,6 +179,19 @@ impl PreparedXacts {
         }
     }
 
+    /// The record that the log keeps of the transaction `xid` that the session prepares, with the heavyweight locks `locks`.
+    pub(crate) fn durable(&self, xid: u32, locks: Vec<HeldLock>) -> Option<Durable> {
+        let list = self.list();
+        let entry = list.iter().find(|entry| entry.xid == xid)?;
+        Some(Durable {
+            gid: entry.gid.clone(),
+            database: entry.database,
+            owner: entry.owner,
+            prepared: entry.prepared,
+            locks,
+        })
+    }
+
     /// `AtAbort_Twophase`: the reservation of the session `pid` goes when its transaction aborts before the end of the prepare.
     pub(crate) fn forget(&self, pid: i32) {
         self.list().retain(|entry| entry.busy != Some(pid));
@@ -140,6 +240,22 @@ impl PreparedXacts {
             ));
         }
         Ok(list.remove(at))
+    }
+
+    /// `RecoverPreparedTransactions`: the prepared transaction `xid` of the log or the image is prepared again, with no writes to count, no lease of the catalog and no record of serializable snapshot isolation.
+    pub(crate) fn restore(&self, xid: u32, durable: Durable) {
+        self.list().push(Prepared {
+            gid: durable.gid,
+            xid,
+            database: durable.database,
+            owner: durable.owner,
+            prepared: durable.prepared,
+            sxact: 0,
+            writes: BTreeMap::new(),
+            number: 0,
+            busy: None,
+            lease: None,
+        });
     }
 
     /// The transaction ID and the number of the session that prepared it, of each prepared transaction, for `pg_lock_status`.

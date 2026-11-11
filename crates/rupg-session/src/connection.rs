@@ -8277,6 +8277,80 @@ mod tests {
         });
     }
 
+    /// A prepared transaction comes back after a restart, from the log and from an image that a checkpoint wrote while it was prepared: `pg_prepared_xacts` has it, its changes stay invisible, it holds its advisory lock again, and `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it after the restart. A transaction in progress is gone.
+    #[test]
+    fn prepared_transactions_come_back_after_a_restart() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("ERROR"))
+                    .collect()
+            };
+            let all = "SELECT a, b FROM t ORDER BY a";
+            let gids = "SELECT gid FROM pg_prepared_xacts ORDER BY gid";
+            let store = open();
+            let (mut a, _) = connect_with(&store, 1234, &config);
+            send(&mut a, &query("CREATE TABLE t (a int, b text)"));
+            send(&mut a, &query("INSERT INTO t VALUES (1, 'one'), (2, 'two')"));
+            for sql in [
+                "BEGIN",
+                "INSERT INTO t VALUES (3, 'three')",
+                "UPDATE t SET b = 'two!' WHERE a = 2",
+                "SELECT pg_advisory_xact_lock(42)",
+                "PREPARE TRANSACTION 'g1'",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            store.checkpoint().unwrap();
+            for sql in ["BEGIN", "DELETE FROM t WHERE a = 1", "PREPARE TRANSACTION 'g2'"] {
+                send(&mut a, &query(sql));
+            }
+            let (mut b, _) = connect_with(&store, 1235, &config);
+            send(&mut b, &query("BEGIN; INSERT INTO t VALUES (99, 'gone')"));
+
+            let back = open();
+            let (mut c, _) = connect_with(&back, 1236, &config);
+            assert_eq!(rows(&mut c, gids), ["row g1", "row g2"]);
+            assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two"]);
+            assert_eq!(
+                rows(&mut c, "SELECT mode FROM pg_locks WHERE locktype = 'advisory'"),
+                ["row ExclusiveLock"]
+            );
+            assert_eq!(rows(&mut c, "SELECT pg_try_advisory_lock(42)"), ["row f"]);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'g1'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
+            assert_eq!(rows(&mut c, "SELECT pg_try_advisory_lock(42)"), ["row t"]);
+            drop(c);
+
+            let again = open();
+            let (mut c, _) = connect_with(&again, 1237, &config);
+            assert_eq!(rows(&mut c, gids), ["row g2"]);
+            assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
+            again.checkpoint().unwrap();
+            drop(c);
+
+            let last = open();
+            let (mut c, _) = connect_with(&last, 1238, &config);
+            assert_eq!(rows(&mut c, gids), ["row g2"]);
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'g2'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
+            drop(c);
+
+            let end = open();
+            let (mut c, _) = connect_with(&end, 1239, &config);
+            assert_eq!(rows(&mut c, gids), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
+            assert_eq!(rows(&mut c, "DELETE FROM t WHERE a = 1").len(), 0);
+            assert_eq!(rows(&mut c, all), ["row 2,two!", "row 3,three"]);
+        });
+    }
+
     /// A timed checkpoint writes the image only after a change: a commit that the log has, or the statistics of `ANALYZE` and the stats of `VACUUM`, which the log does not have. A load that read records from the log writes the image at its first timed checkpoint, and a load with an empty log does not.
     #[test]
     fn a_timed_checkpoint_writes_the_image_only_after_a_change() {
