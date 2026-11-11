@@ -57,8 +57,8 @@ fn release_due(released: &AtomicU64, now: Duration) -> bool {
 /// The step of two phase commit that a record of the log ends with, after the changes of the rows.
 #[derive(Clone, Copy, Debug)]
 enum TwoPhase<'a> {
-    /// `PREPARE TRANSACTION` of the transaction of the record, with the bytes of [`crate::twophase::Durable`].
-    Prepare(&'a [u8]),
+    /// `PREPARE TRANSACTION` of the transaction of the record, with the bytes of [`crate::twophase::Durable`], and the bytes of its row locks that [`Heap::prepare_logged`] gives.
+    Prepare(&'a [u8], &'a [u8]),
     /// `COMMIT PREPARED` of the transaction, true, or `ROLLBACK PREPARED`, false.
     Finish(u32, bool),
 }
@@ -191,7 +191,7 @@ impl Store {
 
     /// `EndPrepare` for the store: the log gets the changes of the prepared transaction `xid` and the bytes `meta` of [`crate::twophase::Durable`], and the prepare waits until the log is on the disk, so a restart finds the transaction prepared. The result is false when a restart does not keep the transaction, for a store with no file and for a transaction that [`Heap::prepare_logged`] does not keep.
     pub(crate) fn prepare(&self, xid: u32, meta: &[u8]) -> bool {
-        self.image.is_some() && self.log(xid, false, true, true, Some(TwoPhase::Prepare(meta)))
+        self.image.is_some() && self.log(xid, false, true, true, Some(TwoPhase::Prepare(meta, &[])))
     }
 
     /// `RecordTransactionCommitPrepared` and `RecordTransactionAbortPrepared`: the end of the prepared transaction `xid`, which commits in the heap with `commit`. The log gets the end, and the call waits until it is on the disk with `sync`, and for the records before it with `wait`, as [`Store::commit`] does. An abort always waits. The heap of a `ROLLBACK PREPARED` already aborted the transaction.
@@ -235,7 +235,7 @@ impl Store {
         two: Option<TwoPhase<'_>>,
     ) -> bool {
         let prepare = match two {
-            Some(TwoPhase::Prepare(meta)) => Some(meta),
+            Some(TwoPhase::Prepare(meta, _)) => Some(meta),
             _ => None,
         };
         let Some(file) = &self.image else {
@@ -248,7 +248,11 @@ impl Store {
         let mut large = false;
         // The heap is locked before the log in a commit, so the counter of the xids of a record of the catalog is read before the log is locked.
         let next_xid = catalog.then(|| self.heap.next_xid());
-        let mut add = |logged: Logged<'_>| {
+        let mut add = |logged: Logged<'_>, locks: &[u8]| {
+            let two = two.map(|two| match two {
+                TwoPhase::Prepare(meta, _) => TwoPhase::Prepare(meta, locks),
+                finish => finish,
+            });
             let heap = match logged {
                 Logged::Changes(bytes) => Some(bytes),
                 Logged::Large => {
@@ -268,11 +272,11 @@ impl Store {
         };
         let mut kept = true;
         if xid == 0 {
-            add(Logged::Nothing);
+            add(Logged::Nothing, &[]);
         } else if let Some(meta) = prepare {
             kept = self.heap.prepare_logged(xid, meta.to_vec(), &mut add);
         } else {
-            self.heap.commit_logged(xid, &mut add);
+            self.heap.commit_logged(xid, &mut |logged| add(logged, &[]));
         }
         if large {
             let mut first = file.first.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -321,11 +325,12 @@ impl Store {
         out.extend_from_slice(heap.unwrap_or_default());
         // A record with no step ends with the rows, as a record of an earlier server did.
         match two {
-            Some((xid, TwoPhase::Prepare(meta))) => {
+            Some((xid, TwoPhase::Prepare(meta, locks))) => {
                 0u8.put(out);
                 xid.put(out);
                 put_count(out, meta.len());
                 out.extend_from_slice(meta);
+                out.extend_from_slice(locks);
             }
             Some((_, TwoPhase::Finish(xid, commit))) => {
                 1u8.put(out);
@@ -355,7 +360,10 @@ impl Store {
             let step = u8::take(&mut input)?;
             let xid = u32::take(&mut input)?;
             match step {
-                0 => self.heap.redo_prepare(xid, Persist::take(&mut input)?),
+                0 => {
+                    let meta = Persist::take(&mut input)?;
+                    self.heap.redo_prepare(xid, meta, &mut input)?;
+                }
                 1 => self.heap.redo_finish(xid, bool::take(&mut input)?),
                 _ => return Err(corrupt("a record of the log has a bad step of two phase commit")),
             }

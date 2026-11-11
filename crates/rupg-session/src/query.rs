@@ -814,9 +814,7 @@ impl<'a> Reader<'a> {
                                 tid_text(tid)
                             );
                             let row = (view.database, relation, tid);
-                            self.wait_xact_while(xid, holder, &context, |heap| {
-                                heap.row_blocked(row, (holder, strength))
-                            })?;
+                            self.wait_xact_while(xid, holder, &context, Some((row, strength)))?;
                         }
                     }
                 }
@@ -836,7 +834,7 @@ impl<'a> Reader<'a> {
     ///
     /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
     pub(crate) fn wait_xact(&self, xid: u32, holder: u32, context: &str) -> Result<()> {
-        self.wait_xact_while(xid, holder, context, |_| true)
+        self.wait_xact_while(xid, holder, context, None)
     }
 
     /// [`Reader::wait_xact`] for a lock with `strength` or a change of the version `row`, which ends too when `holder` no longer blocks the row: a rollback to a savepoint of `holder` took away its change or its lock, or `holder` left the queue of the row with no lock.
@@ -851,10 +849,10 @@ impl<'a> Reader<'a> {
         row: (u32, u32, u64),
         strength: crate::heap::RowStrength,
     ) -> Result<()> {
-        self.wait_xact_while(xid, holder, context, |heap| heap.row_blocked(row, (holder, strength)))
+        self.wait_xact_while(xid, holder, context, Some((row, strength)))
     }
 
-    /// [`Reader::wait_xact`] that ends too when `still` gives false, as for a row lock that a rollback to a savepoint of `holder` takes away, which ends the wait for the subtransaction in `XactLockTableWait`.
+    /// [`Reader::wait_xact`] that ends too when `holder` no longer blocks the version and the strength `row`, as for a row lock that a rollback to a savepoint of `holder` takes away, which ends the wait for the subtransaction in `XactLockTableWait`.
     ///
     /// # Errors
     ///
@@ -864,11 +862,14 @@ impl<'a> Reader<'a> {
         xid: u32,
         holder: u32,
         context: &str,
-        still: impl Fn(&Heap) -> bool,
+        row: Option<((u32, u32, u64), crate::heap::RowStrength)>,
     ) -> Result<()> {
         let (activity, store) = self.server()?;
         let heap = store.heap();
-        heap.wait(xid, holder);
+        heap.wait(xid, holder, row);
+        let still = |heap: &Heap| {
+            row.is_none_or(|(row, strength)| heap.row_blocked(row, (holder, strength)))
+        };
         activity.report_wait(Some(TRANSACTION_ID));
         let start = now(self.clock);
         let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
