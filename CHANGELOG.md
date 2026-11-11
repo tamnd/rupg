@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A prepared transaction that bulk-loaded rows into a table's frozen columns comes back after a crash and restart. `COMMIT PREPARED` then keeps the rows, and `ROLLBACK PREPARED` takes them away (#1495)
 - A prepared transaction that ran `TRUNCATE` or rewrote a table (for example `ALTER TABLE ... ADD COLUMN ... DEFAULT`) comes back after a crash and restart. `ROLLBACK PREPARED` then brings back the table's rows and pages from before the `TRUNCATE`, and `COMMIT PREPARED` keeps the rows after it (#1494)
 - A prepared transaction that changed the catalog (`CREATE TABLE`, `DROP TABLE`, `ALTER TABLE`, and the other DDL) comes back after a crash and restart with its pending catalog changes and the catalog lock of its database, and `COMMIT PREPARED` or `ROLLBACK PREPARED` then publishes or discards them. A recovered prepared transaction also keeps the session number that `pg_locks.virtualtransaction` shows (#1493)
 - A prepared transaction keeps its row locks (`FOR UPDATE`, `FOR SHARE`, `FOR KEY SHARE`) across a crash and restart, including the locks that an update after the prepare carried to the new version of the row; and `pg_isolation_test_session_is_blocked` no longer counts a wait for a row whose holder released it with `ROLLBACK TO SAVEPOINT` (#1492)

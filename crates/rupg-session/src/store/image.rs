@@ -199,9 +199,11 @@ impl Store {
         self.log(xid, false, wait, sync, None);
     }
 
-    /// `EndPrepare` for the store: the log gets the changes of the prepared transaction `xid` and the bytes `meta` of [`crate::twophase::Durable`], and the prepare waits until the log is on the disk, so a restart finds the transaction prepared. The result is false when a restart does not keep the transaction, for a store with no file and for a transaction that [`Heap::prepare_logged`] does not keep.
-    pub(crate) fn prepare(&self, xid: u32, meta: &[u8]) -> bool {
-        self.image.is_some() && self.log(xid, false, true, true, Some(TwoPhase::Prepare(meta, &[])))
+    /// `EndPrepare` for the store: the log gets the changes of the prepared transaction `xid` and the bytes `meta` of [`crate::twophase::Durable`], and the prepare waits until the log is on the disk, so a restart finds the transaction prepared. A store with no file keeps nothing.
+    pub(crate) fn prepare(&self, xid: u32, meta: &[u8]) {
+        if self.image.is_some() {
+            self.log(xid, false, true, true, Some(TwoPhase::Prepare(meta, &[])));
+        }
     }
 
     /// `RecordTransactionCommitPrepared` and `RecordTransactionAbortPrepared`: the end of the prepared transaction `xid`, which commits in the heap with `commit`. The log gets the end, and the call waits until it is on the disk with `sync`, and for the records before it with `wait`, as [`Store::commit`] does. An abort always waits. The heap of a `ROLLBACK PREPARED` already aborted the transaction.
@@ -231,19 +233,12 @@ impl Store {
         self.log(0, true, wait, true, None);
     }
 
-    /// The commit of `xid`, when it is not 0, with a record of the log for its changes, for the catalog with `catalog`, and for the step `two` of two phase commit. The prepare of [`TwoPhase::Prepare`] takes the place of the commit, and the result is false when the heap does not keep the prepared transaction.
+    /// The commit of `xid`, when it is not 0, with a record of the log for its changes, for the catalog with `catalog`, and for the step `two` of two phase commit. The prepare of [`TwoPhase::Prepare`] takes the place of the commit.
     ///
     /// # Panics
     ///
     /// When the log does not go to the disk, as PostgreSQL stops with a `PANIC` there.
-    fn log(
-        &self,
-        xid: u32,
-        catalog: bool,
-        wait: bool,
-        sync: bool,
-        two: Option<TwoPhase<'_>>,
-    ) -> bool {
+    fn log(&self, xid: u32, catalog: bool, wait: bool, sync: bool, two: Option<TwoPhase<'_>>) {
         let prepare = match two {
             Some(TwoPhase::Prepare(meta, _)) => Some(meta),
             _ => None,
@@ -252,7 +247,7 @@ impl Store {
             if xid != 0 && prepare.is_none() {
                 self.heap.commit(xid);
             }
-            return false;
+            return;
         };
         let mut added = None;
         let mut large = false;
@@ -280,11 +275,10 @@ impl Store {
                 added = Some((number, heap.is_some() || catalog || two.is_some()));
             }
         };
-        let mut kept = true;
         if xid == 0 {
             add(Logged::Nothing, &[]);
         } else if let Some(meta) = prepare {
-            kept = self.heap.prepare_logged(xid, meta.to_vec(), &mut add);
+            self.heap.prepare_logged(xid, meta.to_vec(), &mut add);
         } else {
             self.heap.commit_logged(xid, &mut |logged| add(logged, &[]));
         }
@@ -293,14 +287,14 @@ impl Store {
             if let Err(error) = self.write_image(file, &mut first) {
                 panic!("could not write the image after a commit: {error}");
             }
-            return kept;
+            return;
         }
         let number = match added {
             // The record of a commit that does not wait stays in the memory of the log until the next write.
             Some(_) if !sync && !catalog && !wait => None,
             Some((number, durable)) if durable || wait => Some(number),
             _ if wait => Some(file.log.added()),
-            _ => return kept,
+            _ => return,
         };
         if let Some(number) = number
             && let Err(error) = file.log.wait(number, self.tasks.as_deref())
@@ -313,7 +307,6 @@ impl Store {
                 let _ = self.write_image(file, &mut first);
             }
         }
-        kept
     }
 
     /// The bytes of a record of the log: the rows of the sequences that changed, `nextXid` and the catalogs for a record of the catalog with the counter `next_xid` of the xids, the changes `heap` of the rows, and the step `two` of two phase commit of a transaction. The log is locked, so the record does not lock the heap.

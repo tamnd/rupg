@@ -4146,23 +4146,20 @@ impl Heap {
         state.unlock_rows(xid);
     }
 
-    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the bytes of its row locks, which a restart takes again. The image keeps its changes from then on, so the log of its commit has no changes. A transaction that truncated a table gives [`Logged::Large`], as the log of a commit has no pages from before a `TRUNCATE`, and the image keeps them. The result is false, with no call of `log`, for a transaction that loaded rows, which a restart does not keep.
+    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the bytes of its row locks, which a restart takes again. The image keeps its changes from then on, so the log of its commit has no changes. A transaction that truncated a table or loaded rows into the frozen columns gives [`Logged::Large`], as the log of a commit has no pages from before a `TRUNCATE` and no frozen values, and the image keeps them.
     pub(crate) fn prepare_logged(
         &self,
         xid: u32,
         meta: Vec<u8>,
         log: &mut dyn FnMut(Logged<'_>, &[u8]),
-    ) -> bool {
+    ) {
         let mut state = self.state();
-        if state.loading.contains_key(&xid) {
-            return false;
-        }
         state.prepared.insert(xid, meta);
         let mut locks = Vec::new();
         kept_row_locks(&state.row_locks, |x| x == xid).put(&mut locks);
-        let truncated = state.truncating.contains_key(&xid);
+        let large = state.truncating.contains_key(&xid) || state.loading.contains_key(&xid);
         match state.touched.remove(&xid) {
-            _ if truncated => log(Logged::Large, &locks),
+            _ if large => log(Logged::Large, &locks),
             Some(mut touched) => {
                 let mut out = Vec::new();
                 if state.log_commit(xid, &mut touched, &[], &mut out) {
@@ -4173,7 +4170,6 @@ impl Heap {
             }
             None => log(Logged::Nothing, &locks),
         }
-        true
     }
 
     /// The prepared transactions that a restart keeps, with the bytes of what the log keeps of each.

@@ -8585,6 +8585,78 @@ mod tests {
         });
     }
 
+    /// A prepared transaction that loaded rows into the frozen columns comes back after a crash, and `ROLLBACK PREPARED` takes the rows of the load away, and `COMMIT PREPARED` keeps them.
+    #[test]
+    fn a_prepared_load_comes_back_after_a_restart() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("ERROR"))
+                    .collect()
+            };
+            let load = |c: &mut Connection, from: i64| {
+                for at in 0..8 {
+                    let first = from + at * 3000;
+                    send(
+                        c,
+                        &query(&format!(
+                            "INSERT INTO t SELECT i, 'v' || (i % 70) FROM generate_series({first}, {}) i",
+                            first + 2999
+                        )),
+                    );
+                }
+            };
+            let sums = "SELECT count(*), sum(a), count(DISTINCT b) FROM t";
+            let gids = "SELECT gid FROM pg_prepared_xacts ORDER BY gid";
+            let store = open();
+            let (mut a, _) = connect_with(&store, 1234, &config);
+            send(&mut a, &query("CREATE TABLE t (a int, b text)"));
+            send(&mut a, &query("INSERT INTO t VALUES (0, 'zero')"));
+            let relation: u32 = rows(&mut a, "SELECT 't'::regclass::oid")[0][4..].parse().unwrap();
+            let database: u32 =
+                rows(&mut a, "SELECT oid FROM pg_database WHERE datname = current_database()")[0]
+                    [4..]
+                    .parse()
+                    .unwrap();
+            send(&mut a, &query("BEGIN"));
+            load(&mut a, 1);
+            assert!(store.heap().open_rows(database, relation) > 0);
+            send(&mut a, &query("PREPARE TRANSACTION 'load'"));
+
+            let back = open();
+            let (mut c, _) = connect_with(&back, 1235, &config);
+            assert_eq!(rows(&mut c, gids), ["row load"]);
+            assert_eq!(rows(&mut c, sums), ["row 1,0,1"]);
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'load'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, sums), ["row 1,0,1"]);
+            send(&mut c, &query("BEGIN"));
+            load(&mut c, 1);
+            send(&mut c, &query("PREPARE TRANSACTION 'load2'"));
+            drop(c);
+
+            let again = open();
+            let (mut c, _) = connect_with(&again, 1236, &config);
+            assert_eq!(rows(&mut c, gids), ["row load2"]);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'load2'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, sums), ["row 24001,288012000,71"]);
+            assert_eq!(rows(&mut c, "SELECT b FROM t WHERE a = 9001"), ["row v41"]);
+            drop(c);
+
+            let end = open();
+            let (mut c, _) = connect_with(&end, 1237, &config);
+            assert_eq!(rows(&mut c, gids), Vec::<String>::new());
+            assert_eq!(rows(&mut c, sums), ["row 24001,288012000,71"]);
+            send(&mut c, &query("INSERT INTO t VALUES (-1, 'last')"));
+            assert_eq!(rows(&mut c, "SELECT count(*) FROM t"), ["row 24002"]);
+        });
+    }
+
     /// A timed checkpoint writes the image only after a change: a commit that the log has, or the statistics of `ANALYZE` and the stats of `VACUUM`, which the log does not have. A load that read records from the log writes the image at its first timed checkpoint, and a load with an empty log does not.
     #[test]
     fn a_timed_checkpoint_writes_the_image_only_after_a_change() {
