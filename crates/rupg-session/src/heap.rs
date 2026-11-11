@@ -550,6 +550,13 @@ impl Tables {
         self.0.get(key)
     }
 
+    /// The table `key` for a change of the headers of its versions and of its pages only, as `VACUUM` makes. The frozen columns stay, so the values of the versions do not decode. A cold table gets its versions back from their headers.
+    fn headers_mut(&mut self, key: &(u32, u32)) -> Option<&mut Table> {
+        let table = self.0.get_mut(key)?;
+        table.warm();
+        Some(table)
+    }
+
     fn get_mut(&mut self, key: &(u32, u32)) -> Option<&mut Table> {
         let table = self.0.get_mut(key)?;
         table.thaw();
@@ -3934,7 +3941,7 @@ impl Heap {
             .chain(held(xmins, Some(pid)))
             .fold((*latest_completed + 1).max(INITDB_NEXT_XID), u32::min);
         drop(published);
-        let Some(table) = tables.get_mut(&(database, relation)) else {
+        let Some(table) = tables.headers_mut(&(database, relation)) else {
             return Vacuumed { reltuples: 0.0, pages: 0, dead_pages: 0 };
         };
         let generation = table.pages.generation;
@@ -3951,6 +3958,10 @@ impl Heap {
         let dead_pages = if indexed { table.lp_dead.len() } else { 0 };
         if !indexed {
             table.lp_dead.clear();
+        }
+        if !gone.is_empty() {
+            // The rows of the frozen columns are in the order of the versions, so the values decode back into the versions before some of the versions go.
+            table.touch();
         }
         table.purge(&gone);
         let mut pruned: Vec<Pruned> = scanned
