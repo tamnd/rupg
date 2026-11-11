@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The compare of two `numeric` values does not allocate. It compares the sign class, the weight and the trimmed digits in place, and gives the same order as before. `ANALYZE` sorts its sample with this compare, so it uses less time on `numeric` columns (#1502).
 - `VACUUM` keeps the frozen columns of a table when it changes only the headers of the versions, and does not decode all the values back into the versions. When `VACUUM` removes versions, the values decode first, as before. On the TPC-H SF0.1 load, with the numeric compare change, `VACUUM ANALYZE` goes from 3.85 s to 1.62 s, `CHECKPOINT` goes from 0.99 s to 0.66 s, and the peak memory of the server goes from 1071 MB to 411 MB (#1501).
 - A prepared statement keeps its composite constants when the catalog changes. Like PostgreSQL's plan cache, it only replans when a relation it reads changes, so after `ALTER TABLE ... ALTER COLUMN ... TYPE` or `ALTER TYPE ... ALTER ATTRIBUTE ... TYPE` the old constant fails with `42804 row type of datum tuple was altered after the datum's creation`. The isolation test `rowtypes-alter` passes (#1500)
 - After a checkpoint, the store reads back only the frozen columns of each table at the places that the image recorded, and does not parse the whole image again. On the TPC-H SF0.1 load, `CHECKPOINT` goes from 2.29 s to 1.01 s and the peak memory of the server goes from 1461 MB to 1072 MB (#1498).

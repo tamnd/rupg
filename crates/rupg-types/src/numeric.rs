@@ -372,11 +372,40 @@ impl Numeric {
 
     /// `cmp_numerics`: `NaN` is equal to itself and above every other value, and the display scale does not count.
     pub fn compare(&self, other: &Numeric) -> std::cmp::Ordering {
-        let left = self.to_bytes();
-        let right = other.to_bytes();
-        crate::numeric_layout::key(&left).cmp(crate::numeric_layout::key(&right))
+        // The order of the bytes of `numeric_layout::key`, without the bytes: the class, then the weight and the digits, which go the other way for two negative numbers.
+        let (class, weight, digits) = self.order_parts();
+        let (other_class, other_weight, other_digits) = other.order_parts();
+        let magnitude = || weight.cmp(&other_weight).then_with(|| digits.cmp(other_digits));
+        match class.cmp(&other_class) {
+            std::cmp::Ordering::Equal if class == ORDER_POSITIVE => magnitude(),
+            std::cmp::Ordering::Equal if class == ORDER_NEGATIVE => magnitude().reverse(),
+            order => order,
+        }
+    }
+
+    /// The class of the value in the order of [`crate::numeric_layout`], and the weight and the digits of a number with no zero digit at either end, as [`crate::numeric_layout::encode`] writes them.
+    fn order_parts(&self) -> (u8, i16, &[i16]) {
+        let lead = self.digits.iter().take_while(|&&digit| digit == 0).count();
+        let digits = &self.digits[lead..];
+        let tail = digits.iter().rev().take_while(|&&digit| digit == 0).count();
+        let digits = &digits[..digits.len() - tail];
+        #[expect(clippy::cast_possible_truncation, reason = "a weight is far below 2^15 digits")]
+        let weight = self.weight.wrapping_sub(lead as i16);
+        let class = match self.sign {
+            NumericSign::NegativeInfinity => 1,
+            NumericSign::Infinity => 5,
+            NumericSign::NaN => 6,
+            _ if digits.is_empty() => 3,
+            NumericSign::Negative => ORDER_NEGATIVE,
+            NumericSign::Positive => ORDER_POSITIVE,
+        };
+        (class, weight, digits)
     }
 }
+
+/// The classes of a negative and a positive number in the order of the values of [`crate::numeric_layout`].
+const ORDER_NEGATIVE: u8 = 2;
+const ORDER_POSITIVE: u8 = 4;
 
 /// The sum when one side is not a finite number, or `None` when both are.
 fn special_sum(a: NumericSign, b: NumericSign) -> Option<Numeric> {
@@ -1268,6 +1297,54 @@ mod tests {
 
     fn value(text: &str) -> Numeric {
         numeric_in(text, -1).unwrap()
+    }
+
+    #[test]
+    fn the_order_is_the_order_of_the_bytes_of_the_key() {
+        let texts = [
+            "-Infinity",
+            "-100000000",
+            "-10000",
+            "-9999.9999",
+            "-1.0001",
+            "-1",
+            "-1.00",
+            "-0.0001",
+            "-0.00000001",
+            "0",
+            "0.000",
+            "-0",
+            "0.00000001",
+            "0.0001",
+            "1",
+            "1.0",
+            "1.0001",
+            "9999",
+            "9999.9999",
+            "10000",
+            "10000.5",
+            "123456789.123456789",
+            "1e-20",
+            "1e20",
+            "-1e20",
+            "NaN",
+            "Infinity",
+        ];
+        let values: Vec<Numeric> = texts.iter().map(|t| value(t)).collect();
+        for a in &values {
+            for b in &values {
+                let (x, y) = (a.to_bytes(), b.to_bytes());
+                let bytes = crate::numeric_layout::key(&x).cmp(crate::numeric_layout::key(&y));
+                assert_eq!(a.compare(b), bytes, "{} and {}", text(a), text(b));
+            }
+        }
+        // A number with zero digits at its ends, as arithmetic can leave them.
+        let padded =
+            Numeric { sign: NumericSign::Positive, weight: 1, dscale: 0, digits: vec![0, 5, 0] };
+        assert_eq!(padded.compare(&value("5")), std::cmp::Ordering::Equal);
+        let negative =
+            Numeric { sign: NumericSign::Negative, weight: 0, dscale: 0, digits: vec![0] };
+        assert_eq!(negative.compare(&value("0")), std::cmp::Ordering::Equal);
     }
 
     #[test]
