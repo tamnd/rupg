@@ -14,7 +14,7 @@ use rupg_platform::{Io, OpenMode};
 
 use super::log::{self, Log};
 use super::{Db, State, Store};
-use crate::heap::{Heap, Imaged, Logged};
+use crate::heap::{Columned, Heap, Imaged, Logged};
 
 /// The first bytes of an image.
 const MAGIC: &[u8; 8] = b"rupg\x00img";
@@ -437,15 +437,20 @@ impl Store {
         Ok(())
     }
 
-    /// The frozen columns of the image that the checkpoint wrote take the place of the columns in the memory of the process, as the columns of a load of the image read a mapping of the file. A file that does not map, or does not read back, leaves the columns as they are.
+    /// The frozen columns of the image that the checkpoint wrote take the place of the columns in the memory of the process, as the columns of a load of the image read a mapping of the file. The checkpoint reads only the bytes of the frozen columns, at the places that [`Heap::image`] gave, and not the rest of the image. A file that does not map leaves the columns as they are, and so do the columns of a table that do not read back.
     fn map_image(&self, file: &ImageFile, imaged: Imaged) {
         let Some(map) = file.io.open(&file.path, OpenMode::Read).ok().and_then(|f| f.map()) else {
             return;
         };
-        let Ok((_, _, _, heap)) = parse(&mut Reader::mapped(&map)) else {
-            return;
-        };
-        self.heap.adopt(imaged, heap);
+        let mapped = imaged
+            .places()
+            .map(|at| {
+                let mut input = Reader::mapped(&map);
+                input.bytes(at).ok()?;
+                <Columned as Persist>::take(&mut input).ok()
+            })
+            .collect();
+        self.heap.adopt(imaged, mapped);
         let mut maps = file.maps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         maps.retain(|old| old.strong_count() > 0);
         maps.push(Arc::downgrade(&map));

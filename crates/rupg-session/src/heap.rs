@@ -602,19 +602,24 @@ impl Tables {
     }
 }
 
-/// The frozen columns that [`Heap::image`] wrote, by table, which [`Heap::adopt`] compares with the columns of the tables after the image, and the number of the changes that the log does not have at the image, of [`Heap::unlogged`].
+/// The frozen columns that [`Heap::image`] wrote, by table, each with the place of their bytes in the image, which [`Heap::adopt`] compares with the columns of the tables after the image, and the number of the changes that the log does not have at the image, of [`Heap::unlogged`].
 #[derive(Debug, Default)]
-pub(crate) struct Imaged(Vec<((u32, u32), Columned)>, u64);
+pub(crate) struct Imaged(Vec<((u32, u32), Columned, usize)>, u64);
 
 impl Imaged {
     /// The number of [`Heap::unlogged`] at the image.
     pub(crate) fn unlogged(&self) -> u64 {
         self.1
     }
+
+    /// The place in the image of the bytes of the frozen columns of each table, in the order of [`Heap::adopt`].
+    pub(crate) fn places(&self) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().map(|(.., at)| *at)
+    }
 }
 
 /// The frozen columns of a table, by place.
-type Columned = Vec<Arc<Stored>>;
+pub(crate) type Columned = Vec<Arc<Stored>>;
 
 /// The values of versions of a table in encoded columns, which take the place of the values of the versions. A frozen version has no values. A change of the table, other than new versions, or a read by rows decodes the values back into the versions.
 #[derive(Debug)]
@@ -4643,9 +4648,10 @@ impl Heap {
                 Some(frozen) => {
                     out.push(1);
                     (frozen.rows, end).put(out);
+                    let at = out.len();
                     frozen.columns.put(out);
                     frozen.moved.put(out);
-                    imaged.0.push((*key, frozen.columns.clone()));
+                    imaged.0.push((*key, frozen.columns.clone(), at));
                 }
                 None => out.push(0),
             }
@@ -4673,12 +4679,11 @@ impl Heap {
         imaged
     }
 
-    /// Gives the tables of `imaged` the frozen columns of `from`, the heap of the image that [`Heap::image`] wrote, when a table still has the columns that went to the image. The columns of `from` read a mapping of the image, so the columns in the memory of the process go. A table that changed after the image keeps its columns.
-    pub(crate) fn adopt(&self, imaged: Imaged, from: Heap) {
-        let mut from = from.state.into_inner().unwrap_or_else(PoisonError::into_inner);
+    /// Gives the tables of `imaged` the frozen columns `mapped`, which [`Heap::image`] wrote, one for each table in the order of [`Imaged::places`], when a table still has the columns that went to the image. The columns of `mapped` read a mapping of the image, so the columns in the memory of the process go. A table that changed after the image keeps its columns.
+    pub(crate) fn adopt(&self, imaged: Imaged, mapped: Vec<Option<Columned>>) {
         let mut state = self.state();
-        for (key, old) in imaged.0 {
-            let Some(new) = from.tables.0.get_mut(&key).and_then(|t| t.frozen.take()) else {
+        for ((key, old, _), new) in imaged.0.into_iter().zip(mapped) {
+            let Some(new) = new else {
                 continue;
             };
             let Some(table) = state.tables.0.get_mut(&key) else {
@@ -4689,17 +4694,17 @@ impl Heap {
             };
             let same = frozen.columns.len() == old.len()
                 && frozen.columns.iter().zip(&old).all(|(a, b)| Arc::ptr_eq(a, b))
-                && new.columns.len() == old.len()
-                && new.columns.iter().zip(&old).all(|(a, b)| a.rows == b.rows && a.kind == b.kind);
+                && new.len() == old.len()
+                && new.iter().zip(&old).all(|(a, b)| a.rows == b.rows && a.kind == b.kind);
             if !same {
                 continue;
             }
             for stored in table.columns.stored.values_mut() {
                 if let Some(at) = old.iter().position(|o| Arc::ptr_eq(o, stored)) {
-                    *stored = Arc::clone(&new.columns[at]);
+                    *stored = Arc::clone(&new[at]);
                 }
             }
-            frozen.columns = new.columns;
+            frozen.columns = new;
             // The versions of a load have no values once they are frozen, so their headers go to the cold encoding too.
             table.chill();
         }
