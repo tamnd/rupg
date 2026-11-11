@@ -565,7 +565,16 @@ impl Connection {
         while !self.lock_for_triggers(info, view, &rows, false)? {
             let reader = self.reader();
             super::rerun_row_types(plan, &reader)?;
+            let tids: Vec<u64> = rows
+                .iter()
+                .filter_map(|row| match row.last() {
+                    Some(Value::Int8(tid)) => Some(tid.cast_unsigned()),
+                    _ => None,
+                })
+                .collect();
+            let found = self.store.heap().chains(view.database, info.table, &tids);
             rows = plan.run(params, &reader)?;
+            super::keep_found(&mut rows, &found);
             let command = view.command;
             *view = reader.view().cloned().unwrap_or_default();
             view.command = command;
