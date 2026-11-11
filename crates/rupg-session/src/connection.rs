@@ -8585,6 +8585,69 @@ mod tests {
         });
     }
 
+    /// A prepared serializable transaction comes back after a crash with its `SIREAD` locks, and with a conflict out to a transaction with no record, through the log and through an image: a serializable read of its write fails, as a conflict out to an old pivot, and a write of what it read makes a pivot of the writer.
+    #[test]
+    fn a_prepared_serializable_transaction_comes_back_after_a_restart() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let failed = |c: &mut Connection, sql: &str| -> bool {
+                send(c, &query(sql)).iter().any(|l| l.starts_with("ERROR 40001"))
+            };
+            let serializable = "BEGIN ISOLATION LEVEL SERIALIZABLE";
+            let store = open();
+            let (mut a, _) = connect_with(&store, 1234, &config);
+            for sql in [
+                "CREATE TABLE x (a int)",
+                "CREATE TABLE y (a int)",
+                "CREATE TABLE z (a int)",
+                "INSERT INTO x VALUES (1)",
+                "INSERT INTO y VALUES (1)",
+                serializable,
+                "SELECT sum(a) FROM x",
+                "INSERT INTO y VALUES (2)",
+                "PREPARE TRANSACTION 'ssi'",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            drop(a);
+
+            let back = open();
+            let (mut c, _) = connect_with(&back, 1235, &config);
+            let (mut e, _) = connect_with(&back, 1236, &config);
+            // A serializable read of the table that the prepared transaction wrote fails.
+            send(&mut c, &query(serializable));
+            assert!(failed(&mut c, "SELECT count(*) FROM y"));
+            send(&mut c, &query("ROLLBACK"));
+            assert!(!failed(&mut c, "SELECT count(*) FROM y"));
+            // `c` has a conflict out to `e`, which commits first, and a write of `x`, which the prepared transaction read, makes `c` a pivot.
+            send(&mut c, &query(serializable));
+            send(&mut c, &query("SELECT count(*) FROM z"));
+            send(&mut e, &query(serializable));
+            send(&mut e, &query("INSERT INTO z VALUES (1)"));
+            send(&mut e, &query("COMMIT"));
+            assert!(!failed(&mut c, "SELECT count(*) FROM z"));
+            assert!(failed(&mut c, "INSERT INTO x VALUES (2)"));
+            send(&mut c, &query("ROLLBACK"));
+            back.checkpoint().unwrap();
+            drop((c, e));
+
+            let again = open();
+            let (mut c, _) = connect_with(&again, 1237, &config);
+            send(&mut c, &query(serializable));
+            assert!(failed(&mut c, "SELECT count(*) FROM y"));
+            send(&mut c, &query("ROLLBACK"));
+            send(&mut c, &query("COMMIT PREPARED 'ssi'"));
+            send(&mut c, &query(serializable));
+            let lines = send(&mut c, &query("SELECT count(*) FROM y"));
+            assert!(lines.iter().any(|l| l == "row 2"), "{lines:?}");
+            send(&mut c, &query("COMMIT"));
+        });
+    }
+
     /// A prepared transaction that loaded rows into the frozen columns comes back after a crash, and `ROLLBACK PREPARED` takes the rows of the load away, and `COMMIT PREPARED` keeps them.
     #[test]
     fn a_prepared_load_comes_back_after_a_restart() {

@@ -44,7 +44,7 @@ mod btree;
 mod cells;
 mod fsm;
 mod pages;
-mod ssi;
+pub(crate) mod ssi;
 
 /// The key of a row in a unique index with an expression or a predicate, or `None` for a row that is not in the index, as [`rupg_exec::index_key`] gives it. A function in an expression can read and change the heap, so the heap calls it only when it is not locked.
 pub(crate) type Derive<'a> = &'a dyn Fn(&Derived, &[Value]) -> Result<Option<Vec<Value>>>;
@@ -2558,6 +2558,16 @@ impl Heap {
     /// `40001` when the transaction must fail.
     pub(crate) fn serializable_pre_commit(&self, sxact: u64) -> Result<()> {
         self.ssi().pre_commit(sxact)
+    }
+
+    /// `AtPrepare_PredicateLocks`: what the log keeps of the record `sxact` of a transaction that prepares, or `None` when it has no record.
+    pub(crate) fn serializable_durable(&self, sxact: u64) -> Option<ssi::DurableSxact> {
+        self.ssi().durable(sxact)
+    }
+
+    /// `predicatelock_twophase_recover`: the record of serializable snapshot isolation of the prepared transaction `xid` that a restart prepares again, and its ID.
+    pub(crate) fn serializable_recover(&self, xid: u32, durable: &ssi::DurableSxact) -> u64 {
+        self.ssi().recover(xid, durable)
     }
 
     /// `ReleasePredicateLocks` at the end of the transaction of the record `sxact`.

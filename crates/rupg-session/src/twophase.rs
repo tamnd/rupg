@@ -1,4 +1,4 @@
-//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The log and the image keep each prepared transaction with its changes and its heavyweight locks, so a restart after a crash finds it prepared again, as `RecoverPreparedTransactions` does. A transaction that changed the catalog comes back with the lock of the catalog of its database and its changes of the catalog. A transaction that truncated or rewrote a table comes back with the pages of the table from before and after the `TRUNCATE`. A transaction that loaded rows into the frozen columns comes back with them. A restart does not keep the record of serializable snapshot isolation of a transaction.
+//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The log and the image keep each prepared transaction with its changes and its heavyweight locks, so a restart after a crash finds it prepared again, as `RecoverPreparedTransactions` does. A transaction that changed the catalog comes back with the lock of the catalog of its database and its changes of the catalog. A transaction that truncated or rewrote a table comes back with the pages of the table from before and after the `TRUNCATE`. A transaction that loaded rows into the frozen columns comes back with them. A serializable transaction comes back with its `SIREAD` locks, and with a conflict in and a conflict out, as its conflicts are not known.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,6 +10,7 @@ use rupg_func::AdvisoryKey;
 
 use crate::advisory::{Mode, Tag};
 use crate::connection::Pending;
+use crate::heap::ssi::DurableSxact;
 use crate::store::Lease;
 use rupg_pgcatalog::roles::Roles;
 
@@ -59,6 +60,8 @@ pub(crate) struct Durable {
     pub(crate) locks: Vec<HeldLock>,
     pub(crate) number: i32,
     pub(crate) lease: Option<DurableLease>,
+    /// The record of serializable snapshot isolation of a serializable transaction.
+    pub(crate) ssi: Option<DurableSxact>,
 }
 
 /// The changes of the catalog of a prepared transaction, as the record of a lease keeps them: the catalog with the changes of the transaction, the roles of the last commit when the transaction took the lease and the roles with its changes, and the rows of `pg_database` that it locked.
@@ -141,6 +144,7 @@ impl Durable {
             }
             lease.rows.put(&mut out);
         }
+        self.ssi.put(&mut out);
         out
     }
 
@@ -159,6 +163,7 @@ impl Durable {
             locks: Persist::take(&mut input)?,
             number: 0,
             lease: None,
+            ssi: None,
         };
         if !input.is_empty() {
             durable.number = Persist::take(&mut input)?;
@@ -173,6 +178,9 @@ impl Durable {
                 let rows = Persist::take(&mut input)?;
                 durable.lease = Some(DurableLease { catalog, base, roles, rows });
             }
+        }
+        if !input.is_empty() {
+            durable.ssi = Persist::take(&mut input)?;
         }
         if !input.is_empty() {
             return Err(corrupt("a prepared transaction has bytes after its end"));
@@ -237,6 +245,7 @@ impl PreparedXacts {
         xid: u32,
         locks: Vec<HeldLock>,
         lease: Option<DurableLease>,
+        ssi: Option<DurableSxact>,
     ) -> Option<Durable> {
         let list = self.list();
         let entry = list.iter().find(|entry| entry.xid == xid)?;
@@ -248,6 +257,7 @@ impl PreparedXacts {
             locks,
             number: entry.number,
             lease,
+            ssi,
         })
     }
 
@@ -301,15 +311,15 @@ impl PreparedXacts {
         Ok(list.remove(at))
     }
 
-    /// `RecoverPreparedTransactions`: the prepared transaction `xid` of the log or the image is prepared again, with its changes of the catalog, and with no writes to count and no record of serializable snapshot isolation.
-    pub(crate) fn restore(&self, xid: u32, durable: Durable) {
+    /// `RecoverPreparedTransactions`: the prepared transaction `xid` of the log or the image is prepared again, with its changes of the catalog and the record `sxact` of serializable snapshot isolation, and with no writes to count.
+    pub(crate) fn restore(&self, xid: u32, durable: Durable, sxact: u64) {
         self.list().push(Prepared {
             gid: durable.gid,
             xid,
             database: durable.database,
             owner: durable.owner,
             prepared: durable.prepared,
-            sxact: 0,
+            sxact,
             writes: BTreeMap::new(),
             number: durable.number,
             busy: None,
@@ -367,9 +377,23 @@ mod tests {
                 roles: Arc::new(changed),
                 rows: vec![5],
             }),
+            ssi: None,
         };
         assert_eq!(Durable::of_bytes(&durable.bytes()).unwrap(), durable);
+        // A record of a server that kept no record of serializable snapshot isolation reads with none.
+        let mut no_ssi = durable.bytes();
+        no_ssi.pop();
+        assert_eq!(Durable::of_bytes(&no_ssi).unwrap(), durable);
         durable.lease.as_mut().unwrap().roles = Arc::clone(&base);
+        durable.ssi = Some(DurableSxact {
+            xmin: 750,
+            read_only: false,
+            writes: vec![(5, 16384)],
+            reads: vec![
+                crate::heap::ssi::Target::Relation((5, 16385)),
+                crate::heap::ssi::Target::Tuple((5, 16384), 0x1_0002),
+            ],
+        });
         assert_eq!(Durable::of_bytes(&durable.bytes()).unwrap(), durable);
         let mut old = Vec::new();
         (durable.gid.clone(), durable.database, durable.owner, durable.prepared).put(&mut old);
