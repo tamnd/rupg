@@ -1140,7 +1140,10 @@ impl Connection {
                         Changed::Again => {
                             let reader = self.reader();
                             rerun_row_types(plan, &reader)?;
-                            let rows = plan.run(params, &reader)?;
+                            let tids: Vec<u64> = changes.iter().map(|c| c.0).collect();
+                            let found = heap.chains(view.database, info.table, &tids);
+                            let mut rows = plan.run(params, &reader)?;
+                            keep_found(&mut rows, &found);
                             // The write keeps its command, which the statements of the triggers came after.
                             let command = view.command;
                             view = reader.view().cloned().unwrap_or_default();
@@ -3478,6 +3481,13 @@ fn concurrently_dropped(
     };
     let now = objects(now);
     objects(before).iter().any(|oid| !now.contains(oid)).then_some(class)
+}
+
+/// `EvalPlanQual` rechecks the rows that the first scan found, so a row of the new run of the plan stays only when its version, in the last column, is in the update chain of one of them, as [`crate::heap::Heap::chains`] gives them.
+fn keep_found(rows: &mut Vec<Vec<Value>>, found: &std::collections::BTreeSet<u64>) {
+    rows.retain(
+        |row| matches!(row.last(), Some(Value::Int8(tid)) if found.contains(&tid.cast_unsigned())),
+    );
 }
 
 /// `EvalPlanQual` reads the rows of the functions of `FROM` from the copies of the first scan, as `ROW_MARK_COPY` keeps them, and `ExecEvalWholeRowVar` checks that a composite row of the copy still has the row type of the function. The plan runs again in place of the check, so a row type that changed after the first run started fails as the old row would.
@@ -9960,6 +9970,57 @@ mod tests {
                 == "ERROR 42804 row type of datum tuple was altered after the datum's creation"),
             "{lines:?}"
         );
+        drop(cmds);
+        b.join().unwrap();
+    }
+
+    /// After a concurrent update, READ COMMITTED rechecks only the rows the first scan found, following each one's update chain, as `EvalPlanQual` does. A row that came to match only through the other transaction's update is left alone (Hermitage PMP-write).
+    #[test]
+    fn rerun_keeps_first_rows() {
+        big_stack(rerun_keeps_first_rows_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn rerun_keeps_first_rows_cases() {
+        let store = Arc::new(Store::new());
+        let (mut a, _) = connect_to(&store, 1234);
+        send(
+            &mut a,
+            &query(
+                "CREATE TABLE test (id int PRIMARY KEY, value int); INSERT INTO test VALUES (1, 10), (2, 20)",
+            ),
+        );
+        send(&mut a, &query("BEGIN; UPDATE test SET value = value + 10"));
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        cmds.send("DELETE FROM test WHERE value = 20".to_owned()).unwrap();
+        let (mut c, _) = connect_to(&store, 1236);
+        let look = query("SELECT wait_event FROM pg_stat_activity WHERE pid = 1235");
+        let mut lines = Vec::new();
+        for _ in 0..2000 {
+            lines = send(&mut c, &look);
+            if lines.iter().any(|l| l == "row transactionid") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(lines.iter().any(|l| l == "row transactionid"), "{lines:?}");
+        send(&mut a, &query("COMMIT"));
+        let lines = out.recv().unwrap();
+        assert!(lines.iter().any(|l| l == "DELETE 0"), "{lines:?}");
+        let lines = send(&mut a, &query("SELECT id, value FROM test ORDER BY id"));
+        let rows: Vec<&String> = lines.iter().filter(|l| l.starts_with("row ")).collect();
+        assert_eq!(rows, ["row 1,20", "row 2,30"], "{lines:?}");
         drop(cmds);
         b.join().unwrap();
     }

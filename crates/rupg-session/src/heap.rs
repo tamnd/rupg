@@ -3428,6 +3428,25 @@ impl Heap {
         Ok(RowLocked::Done)
     }
 
+    /// `EvalPlanQual` rechecks only the rows that the first scan found, at the ends of their update chains: the IDs of the versions of the chains of `tids` of the table `relation`, from each ID to the last version. A row of a new run of the plan whose version is not one of them was not a row of the first scan, such as a row that a concurrent update made match the condition, and the write leaves it.
+    pub(crate) fn chains(&self, database: u32, relation: u32, tids: &[u64]) -> BTreeSet<u64> {
+        let mut state = self.state();
+        let mut out = BTreeSet::new();
+        let Some(table) = state.tables.get(&(database, relation)) else { return out };
+        for &tid in tids {
+            let mut tid = tid;
+            while out.insert(tid) {
+                let Some(at) = table.find(tid) else { break };
+                let next = table.versions[at].next;
+                if next == 0 || next == MOVED {
+                    break;
+                }
+                tid = next;
+            }
+        }
+        out
+    }
+
     /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again. When the change is done, `applied` has the index in `changes` of each row that changed, for `RETURNING`.
     ///
     /// # Errors
