@@ -12,7 +12,7 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// The errors of [`crate::twophase::PreparedXacts::reserve`], `0A000` for a transaction that used `LISTEN`, `UNLISTEN` or `NOTIFY`, that holds a lock at both levels, or that changed the catalog.
+    /// The errors of [`crate::twophase::PreparedXacts::reserve`], and `0A000` for a transaction that used `LISTEN`, `UNLISTEN` or `NOTIFY` or that holds a lock at both levels.
     pub(super) fn prepare_checks(&self, gid: &str) -> Result<(), Error> {
         let max = self
             .settings
@@ -44,6 +44,7 @@ impl Connection {
             number: self.activity.number.unwrap_or_default(),
             busy: Some(self.pid),
             lease: None,
+            recovered: None,
         };
         self.store.prepared().reserve(entry, max)
     }
@@ -61,13 +62,12 @@ impl Connection {
         self.store.heap().hand_over(xid, owner);
         self.store.locks().hand_over(self.pid, self.activity.fast.as_deref(), owner);
         self.sxact.set(0);
-        // The log gets the prepare before another session can end the transaction. A transaction that changed the catalog is not in the log, and a restart loses it.
-        if lease.is_none() {
-            let locks = self.store.locks().xact_holds(owner, None);
-            let locks = locks.into_iter().map(|(tag, mode, count)| HeldLock::of(tag, mode, count));
-            if let Some(durable) = self.store.prepared().durable(xid, locks.collect()) {
-                self.store.prepare(xid, &durable.bytes());
-            }
+        // The log gets the prepare, with the changes of the catalog, before another session can end the transaction.
+        let locks = self.store.locks().xact_holds(owner, None);
+        let locks = locks.into_iter().map(|(tag, mode, count)| HeldLock::of(tag, mode, count));
+        let durable = lease.as_ref().map(|lease| lease.durable(owner));
+        if let Some(durable) = self.store.prepared().durable(xid, locks.collect(), durable) {
+            self.store.prepare(xid, &durable.bytes());
         }
         self.store.prepared().prepared(self.pid, self.activity.take_writes(), lease);
         self.store.commit(0, false, true);
@@ -101,7 +101,9 @@ impl Connection {
             self.database_oid,
         )?;
         let heap = self.store.heap();
-        let lease = entry.lease.take();
+        let recovered =
+            entry.recovered.take().map(|lease| self.store.recovered_lease(entry.database, lease));
+        let lease = entry.lease.take().or(recovered);
         let defined = lease.is_some();
         if commit {
             if let Some(lease) = lease {

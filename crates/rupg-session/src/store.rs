@@ -17,7 +17,7 @@ use crate::connection::{Calls, Pending, Scans};
 use crate::guc::Source;
 use crate::heap::Heap;
 use crate::notify::Listeners;
-use crate::twophase::PreparedXacts;
+use crate::twophase::{DurableLease, PreparedXacts};
 
 mod image;
 mod log;
@@ -478,6 +478,24 @@ impl Store {
             report(false);
         }
         lease
+    }
+
+    /// The lock of the database `database` and of the rows of `pg_database` of `lease` go to `owner`, the owner of the locks of a prepared transaction that changed the catalog and that a restart prepared again. The counter of the OIDs takes the counter of the catalog of the transaction, so that no other object takes an OID of the transaction.
+    pub(crate) fn relock(&self, database: u32, owner: i32, lease: &DurableLease) {
+        let mut state = self.state();
+        state.next_oid = state.next_oid.max(lease.catalog.next_oid());
+        if let Some(db) = state.databases.get_mut(&database) {
+            db.locked = Some(owner);
+        }
+        for &row in &lease.rows {
+            state.row_locks.insert(row, owner);
+        }
+    }
+
+    /// The lease of the prepared transaction that a restart prepared again with the changes of the catalog `lease`, for its `COMMIT PREPARED` or `ROLLBACK PREPARED`. [`Store::relock`] gave it the lock of the database.
+    pub(crate) fn recovered_lease(self: &Arc<Self>, database: u32, lease: DurableLease) -> Lease {
+        let DurableLease { catalog, base, roles, rows: _ } = lease;
+        Lease { store: Arc::clone(self), database, catalog, base, roles }
     }
 
     /// The session whose transaction holds the lock of the database, or of the row of `pg_database`, that the session `pid` waits for.
@@ -1055,6 +1073,25 @@ impl Lease {
             && db.locked == Some(pid)
         {
             db.locked = Some(owner);
+        }
+    }
+
+    /// What the log keeps of the lease of the prepared transaction whose locks `owner` holds, after [`Lease::hand_over`]: the changes of the catalog and of the roles, and the rows of `pg_database` that the transaction locked.
+    pub(crate) fn durable(&self, owner: i32) -> DurableLease {
+        let state = self.store.state();
+        let mut rows: Vec<u32> = state
+            .row_locks
+            .iter()
+            .filter(|&(_, &holder)| holder == owner)
+            .map(|(&row, _)| row)
+            .collect();
+        drop(state);
+        rows.sort_unstable();
+        DurableLease {
+            catalog: Arc::clone(&self.catalog),
+            base: Arc::clone(&self.base),
+            roles: Arc::clone(&self.roles),
+            rows,
         }
     }
 

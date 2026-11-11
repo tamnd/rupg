@@ -8387,6 +8387,108 @@ mod tests {
         });
     }
 
+    /// A prepared transaction that changed the catalog comes back after a crash with its changes of the catalog and of the rows, the lock of the catalog of its database, and the number of the session that prepared it. `COMMIT PREPARED` after the restart publishes the changes, and `ROLLBACK PREPARED` discards them, from the log and from an image.
+    #[test]
+    fn a_prepared_transaction_that_changed_the_catalog_comes_back_after_a_restart() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("ERROR"))
+                    .collect()
+            };
+            let gids = "SELECT gid FROM pg_prepared_xacts ORDER BY gid";
+            let vxid = "SELECT DISTINCT virtualtransaction FROM pg_locks WHERE pid IS NULL";
+            // The prepared transaction holds `AccessExclusiveLock` on the table, so a read of it waits.
+            let held = |table: &str| {
+                format!(
+                    "SELECT count(*) FROM pg_locks WHERE pid IS NULL AND relation = '{table}'::regclass AND mode = 'AccessExclusiveLock'"
+                )
+            };
+            let store = open();
+            let (mut a, _) = connect_with(&store, 1234, &config);
+            send(&mut a, &query("CREATE TABLE base (a int)"));
+            send(&mut a, &query("INSERT INTO base VALUES (1)"));
+            for sql in [
+                "BEGIN",
+                "CREATE TABLE n (a int, b text)",
+                "INSERT INTO n VALUES (1, 'one')",
+                "ALTER TABLE base ADD COLUMN b text",
+                "PREPARE TRANSACTION 'ddl'",
+            ] {
+                send(&mut a, &query(sql));
+            }
+            let number = rows(&mut a, vxid);
+            assert_eq!(number.len(), 1, "{number:?}");
+
+            let back = open();
+            let (mut c, _) = connect_with(&back, 1235, &config);
+            assert_eq!(rows(&mut c, gids), ["row ddl"]);
+            assert_eq!(rows(&mut c, vxid), number);
+            assert!(rows(&mut c, "SELECT a FROM n")[0].contains("does not exist"));
+            assert_eq!(rows(&mut c, &held("base")), ["row 1"]);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'ddl'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, "SELECT a, b FROM n"), ["row 1,one"]);
+            assert_eq!(rows(&mut c, "SELECT a, b IS NULL FROM base"), ["row 1,t"]);
+            // The lock of the catalog went with the end of the transaction.
+            send(&mut c, &query("CREATE TABLE after (a int)"));
+            for sql in [
+                "BEGIN",
+                "DROP TABLE n",
+                "CREATE TABLE m (a int)",
+                "INSERT INTO m VALUES (7)",
+                "PREPARE TRANSACTION 'drop'",
+            ] {
+                send(&mut c, &query(sql));
+            }
+            back.checkpoint().unwrap();
+            drop(c);
+
+            let again = open();
+            let (mut c, _) = connect_with(&again, 1236, &config);
+            assert_eq!(rows(&mut c, gids), ["row drop"]);
+            assert_eq!(rows(&mut c, &held("n")), ["row 1"]);
+            assert!(rows(&mut c, "SELECT a FROM m")[0].contains("does not exist"));
+            drop(c);
+
+            let last = open();
+            let (mut c, _) = connect_with(&last, 1237, &config);
+            assert_eq!(rows(&mut c, gids), ["row drop"]);
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'drop'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, "SELECT a, b FROM n"), ["row 1,one"]);
+            assert!(rows(&mut c, "SELECT a FROM m")[0].contains("does not exist"));
+            for sql in [
+                "BEGIN",
+                "CREATE TABLE k (a int)",
+                "INSERT INTO k VALUES (5)",
+                "PREPARE TRANSACTION 'k'",
+            ] {
+                send(&mut c, &query(sql));
+            }
+            last.checkpoint().unwrap();
+            drop(c);
+
+            let end = open();
+            let (mut c, _) = connect_with(&end, 1238, &config);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'k'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, "SELECT a FROM k"), ["row 5"]);
+            assert_eq!(rows(&mut c, "SELECT count(*) FROM after"), ["row 0"]);
+            drop(c);
+
+            let done = open();
+            let (mut c, _) = connect_with(&done, 1239, &config);
+            assert_eq!(rows(&mut c, gids), Vec::<String>::new());
+            assert_eq!(rows(&mut c, "SELECT a FROM k"), ["row 5"]);
+            assert_eq!(rows(&mut c, "SELECT a, b FROM n"), ["row 1,one"]);
+            assert_eq!(rows(&mut c, "SELECT a, b IS NULL FROM base"), ["row 1,t"]);
+        });
+    }
+
     /// A timed checkpoint writes the image only after a change: a commit that the log has, or the statistics of `ANALYZE` and the stats of `VACUUM`, which the log does not have. A load that read records from the log writes the image at its first timed checkpoint, and a load with an empty log does not.
     #[test]
     fn a_timed_checkpoint_writes_the_image_only_after_a_change() {

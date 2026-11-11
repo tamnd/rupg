@@ -1,8 +1,9 @@
-//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The log and the image keep each prepared transaction with its changes and its heavyweight locks, so a restart after a crash finds it prepared again, as `RecoverPreparedTransactions` does. A restart does not keep a transaction that changed the catalog, truncated a table or loaded rows, its row locks, or its record of serializable snapshot isolation.
+//! The prepared transactions of two phase commit, as `twophase.c` keeps them in `TwoPhaseState`. A prepared transaction keeps its transaction ID in progress, its row locks, its heavyweight locks and its record of serializable snapshot isolation until `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it, from any session. The log and the image keep each prepared transaction with its changes and its heavyweight locks, so a restart after a crash finds it prepared again, as `RecoverPreparedTransactions` does. A transaction that changed the catalog comes back with the lock of the catalog of its database and its changes of the catalog. A restart does not keep a transaction that truncated a table or loaded rows, or its record of serializable snapshot isolation.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use rupg_catalog::Catalog;
 use rupg_common::persist::{Persist, Reader, corrupt};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::AdvisoryKey;
@@ -10,6 +11,7 @@ use rupg_func::AdvisoryKey;
 use crate::advisory::{Mode, Tag};
 use crate::connection::Pending;
 use crate::store::Lease;
+use rupg_pgcatalog::roles::Roles;
 
 /// `GIDSIZE`: the size of the buffer of a global identifier with its terminating zero.
 const GID_SIZE: usize = 200;
@@ -36,6 +38,8 @@ pub(crate) struct Prepared {
     pub(crate) busy: Option<i32>,
     /// The lock of the catalog of the database and the changes of the catalog, of a transaction that changed the catalog. `COMMIT PREPARED` publishes the changes, and `ROLLBACK PREPARED` discards them.
     pub(crate) lease: Option<Lease>,
+    /// The changes of the catalog of a transaction that changed the catalog and that a restart prepared again. The lock of the catalog of its database is the lock of the prepared transaction, and `COMMIT PREPARED` or `ROLLBACK PREPARED` makes a lease of them.
+    pub(crate) recovered: Option<DurableLease>,
 }
 
 impl Prepared {
@@ -45,7 +49,7 @@ impl Prepared {
     }
 }
 
-/// What the log and the image keep of a prepared transaction, as the state file of `pg_twophase` keeps it: the global identifier, the database, the owner, the time of the prepare and the heavyweight locks.
+/// What the log and the image keep of a prepared transaction, as the state file of `pg_twophase` keeps it: the global identifier, the database, the owner, the time of the prepare, the heavyweight locks, the number of the session that prepared it, and the changes of the catalog of a transaction that changed the catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Durable {
     pub(crate) gid: String,
@@ -53,9 +57,18 @@ pub(crate) struct Durable {
     pub(crate) owner: u32,
     pub(crate) prepared: i64,
     pub(crate) locks: Vec<HeldLock>,
+    pub(crate) number: i32,
+    pub(crate) lease: Option<DurableLease>,
 }
 
-rupg_common::persist_struct!(Durable { gid, database, owner, prepared, locks });
+/// The changes of the catalog of a prepared transaction, as the record of a lease keeps them: the catalog with the changes of the transaction, the roles of the last commit when the transaction took the lease and the roles with its changes, and the rows of `pg_database` that it locked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurableLease {
+    pub(crate) catalog: Arc<Catalog>,
+    pub(crate) base: Arc<Roles>,
+    pub(crate) roles: Arc<Roles>,
+    pub(crate) rows: Vec<u32>,
+}
 
 /// A heavyweight lock of a prepared transaction, as the record `TWOPHASE_RM_LOCK_ID` keeps it: the tag, the mode and the number of the holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,10 +120,27 @@ impl HeldLock {
 }
 
 impl Durable {
-    /// The bytes of the record.
+    /// The bytes of the record. The number of the session and the lease come after the fields of a record of an earlier server, so a record of an earlier server still reads.
     pub(crate) fn bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        self.put(&mut out);
+        self.gid.put(&mut out);
+        self.database.put(&mut out);
+        self.owner.put(&mut out);
+        self.prepared.put(&mut out);
+        self.locks.put(&mut out);
+        self.number.put(&mut out);
+        self.lease.is_some().put(&mut out);
+        if let Some(lease) = &self.lease {
+            lease.catalog.put(&mut out);
+            lease.base.put(&mut out);
+            // Roles that the transaction did not change are in the record once.
+            let changed = lease.roles != lease.base;
+            changed.put(&mut out);
+            if changed {
+                lease.roles.put(&mut out);
+            }
+            lease.rows.put(&mut out);
+        }
         out
     }
 
@@ -121,7 +151,29 @@ impl Durable {
     /// `XX001` for bytes that are not a record.
     pub(crate) fn of_bytes(bytes: &[u8]) -> Result<Durable> {
         let mut input = Reader::new(bytes);
-        let durable = Durable::take(&mut input)?;
+        let mut durable = Durable {
+            gid: Persist::take(&mut input)?,
+            database: Persist::take(&mut input)?,
+            owner: Persist::take(&mut input)?,
+            prepared: Persist::take(&mut input)?,
+            locks: Persist::take(&mut input)?,
+            number: 0,
+            lease: None,
+        };
+        if !input.is_empty() {
+            durable.number = Persist::take(&mut input)?;
+            if bool::take(&mut input)? {
+                let catalog = Arc::new(Catalog::take(&mut input)?);
+                let base = Arc::new(Roles::take(&mut input)?);
+                let roles = if bool::take(&mut input)? {
+                    Arc::new(Roles::take(&mut input)?)
+                } else {
+                    Arc::clone(&base)
+                };
+                let rows = Persist::take(&mut input)?;
+                durable.lease = Some(DurableLease { catalog, base, roles, rows });
+            }
+        }
         if !input.is_empty() {
             return Err(corrupt("a prepared transaction has bytes after its end"));
         }
@@ -179,8 +231,13 @@ impl PreparedXacts {
         }
     }
 
-    /// The record that the log keeps of the transaction `xid` that the session prepares, with the heavyweight locks `locks`.
-    pub(crate) fn durable(&self, xid: u32, locks: Vec<HeldLock>) -> Option<Durable> {
+    /// The record that the log keeps of the transaction `xid` that the session prepares, with the heavyweight locks `locks` and the changes of the catalog `lease`.
+    pub(crate) fn durable(
+        &self,
+        xid: u32,
+        locks: Vec<HeldLock>,
+        lease: Option<DurableLease>,
+    ) -> Option<Durable> {
         let list = self.list();
         let entry = list.iter().find(|entry| entry.xid == xid)?;
         Some(Durable {
@@ -189,6 +246,8 @@ impl PreparedXacts {
             owner: entry.owner,
             prepared: entry.prepared,
             locks,
+            number: entry.number,
+            lease,
         })
     }
 
@@ -242,7 +301,7 @@ impl PreparedXacts {
         Ok(list.remove(at))
     }
 
-    /// `RecoverPreparedTransactions`: the prepared transaction `xid` of the log or the image is prepared again, with no writes to count, no lease of the catalog and no record of serializable snapshot isolation.
+    /// `RecoverPreparedTransactions`: the prepared transaction `xid` of the log or the image is prepared again, with its changes of the catalog, and with no writes to count and no record of serializable snapshot isolation.
     pub(crate) fn restore(&self, xid: u32, durable: Durable) {
         self.list().push(Prepared {
             gid: durable.gid,
@@ -252,9 +311,10 @@ impl PreparedXacts {
             prepared: durable.prepared,
             sxact: 0,
             writes: BTreeMap::new(),
-            number: 0,
+            number: durable.number,
             busy: None,
             lease: None,
+            recovered: durable.lease,
         });
     }
 
@@ -272,5 +332,50 @@ impl PreparedXacts {
                 (entry.xid, entry.gid.clone(), entry.prepared, entry.owner, entry.database)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A record keeps the number of the session and the lease, and a record of a server before them still reads, with the session 0 and no lease.
+    #[test]
+    fn a_record_keeps_the_session_and_the_lease() {
+        let base = Arc::new(Roles::default());
+        let mut changed = Roles::default();
+        changed.comments.push(rupg_pgcatalog::roles::SharedComment {
+            class: 1262,
+            oid: 5,
+            text: Some("c".into()),
+        });
+        let lock = HeldLock::of(
+            Tag::Relation { database: 5, relation: 16384 },
+            crate::advisory::ROW_EXCLUSIVE,
+            2,
+        );
+        let mut durable = Durable {
+            gid: "g".into(),
+            database: 5,
+            owner: 10,
+            prepared: 77,
+            locks: vec![lock],
+            number: 3,
+            lease: Some(DurableLease {
+                catalog: Arc::new(Catalog::new()),
+                base: Arc::clone(&base),
+                roles: Arc::new(changed),
+                rows: vec![5],
+            }),
+        };
+        assert_eq!(Durable::of_bytes(&durable.bytes()).unwrap(), durable);
+        durable.lease.as_mut().unwrap().roles = Arc::clone(&base);
+        assert_eq!(Durable::of_bytes(&durable.bytes()).unwrap(), durable);
+        let mut old = Vec::new();
+        (durable.gid.clone(), durable.database, durable.owner, durable.prepared).put(&mut old);
+        durable.locks.put(&mut old);
+        let read = Durable::of_bytes(&old).unwrap();
+        assert_eq!((read.number, read.lease), (0, None));
+        assert_eq!(read.locks, durable.locks);
     }
 }
