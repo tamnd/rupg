@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE INDEX` and `CREATE INDEX CONCURRENTLY` fold the constant parts of the index predicate at build, as `RelationGetIndexPredicate` does, even on an empty table. An immutable function in the predicate that waits on an advisory lock no longer holds the catalog lock while it waits, so the isolation test `multiple-cic` passes (#1497)
 - A prepared serializable transaction comes back after a crash and restart with its `SIREAD` locks. As PostgreSQL does, it is treated as having a conflict in and a conflict out, because its conflicts are not known (#1496)
 - A prepared transaction that bulk-loaded rows into a table's frozen columns comes back after a crash and restart. `COMMIT PREPARED` then keeps the rows, and `ROLLBACK PREPARED` takes them away (#1495)
 - A prepared transaction that ran `TRUNCATE` or rewrote a table (for example `ALTER TABLE ... ADD COLUMN ... DEFAULT`) comes back after a crash and restart. `ROLLBACK PREPARED` then brings back the table's rows and pages from before the `TRUNCATE`, and `COMMIT PREPARED` keeps the rows after it (#1494)
