@@ -125,7 +125,7 @@ impl Store {
         Ok(store)
     }
 
-    /// `RecoverPreparedTransactions`: the prepared transactions of the image and the log are prepared again, and take their heavyweight locks again, and the lock of the catalog of their database for a transaction that changed the catalog.
+    /// `RecoverPreparedTransactions`: the prepared transactions of the image and the log are prepared again, and take their heavyweight locks again, the lock of the catalog of their database for a transaction that changed the catalog, and the `SIREAD` locks of a serializable transaction.
     ///
     /// # Errors
     ///
@@ -143,7 +143,9 @@ impl Store {
                     self.locks().request(tag, owner, mode, false, false);
                 }
             }
-            self.prepared().restore(xid, durable);
+            let sxact =
+                durable.ssi.as_ref().map_or(0, |ssi| self.heap.serializable_recover(xid, ssi));
+            self.prepared().restore(xid, durable, sxact);
         }
         Ok(())
     }

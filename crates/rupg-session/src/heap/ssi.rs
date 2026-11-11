@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use rupg_common::persist::{Persist, Reader, corrupt};
 use rupg_common::{Error, SqlState};
 
 /// A table in a database.
@@ -36,6 +37,40 @@ impl Target {
     }
 }
 
+impl Persist for Target {
+    fn put(&self, out: &mut Vec<u8>) {
+        let (kind, table, at) = match *self {
+            Self::Relation(table) => (0u8, table, 0),
+            Self::Page(table, page) => (1, table, page),
+            Self::Tuple(table, tid) => (2, table, tid),
+            Self::Index(table) => (3, table, 0),
+        };
+        (kind, table, at).put(out);
+    }
+
+    fn take(input: &mut Reader<'_>) -> rupg_common::Result<Self> {
+        let (kind, table, at): (u8, Table, u64) = Persist::take(input)?;
+        Ok(match kind {
+            0 => Self::Relation(table),
+            1 => Self::Page(table, at),
+            2 => Self::Tuple(table, at),
+            3 => Self::Index(table),
+            _ => return Err(corrupt("a SIREAD lock of a prepared transaction has a bad kind")),
+        })
+    }
+}
+
+/// What the log and the image keep of the record of a prepared serializable transaction, as the records `TWOPHASE_PREDICATELOCK_XACT` and `TWOPHASE_PREDICATELOCK_LOCK` keep it: `xmin` of its snapshot, whether it is read-only, the tables that it wrote and the targets of its `SIREAD` locks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurableSxact {
+    pub(crate) xmin: u32,
+    pub(crate) read_only: bool,
+    pub(crate) writes: Vec<Table>,
+    pub(crate) reads: Vec<Target>,
+}
+
+rupg_common::persist_struct!(DurableSxact { xmin, read_only, writes, reads });
+
 /// `max_pred_locks_per_page`: the most `SIREAD` locks of versions of one page that a transaction takes before it locks the page.
 const MAX_PER_PAGE: usize = 2;
 
@@ -53,6 +88,9 @@ pub(crate) struct Examined {
 
 /// `SerCommitSeqNo`: the order of the commits of the serializable transactions.
 type SeqNo = u64;
+
+/// `RecoverySerCommitSeqNo`: the order of the prepare of a transaction that a restart prepared again, before each other.
+const RECOVERY_SEQ_NO: SeqNo = 1;
 
 /// `FirstNormalSerCommitSeqNo`.
 const FIRST_NORMAL_SEQ_NO: SeqNo = 2;
@@ -102,6 +140,10 @@ struct Sxact {
     ro_unsafe: bool,
     /// `SXACT_FLAG_DEFERRABLE_WAITING`: the transaction is `DEFERRABLE` and waits for a safe snapshot.
     deferrable: bool,
+    /// `SXACT_FLAG_SUMMARY_CONFLICT_IN`: a conflict in from a transaction that has no record, as a restart leaves a prepared transaction.
+    summary_in: bool,
+    /// `SXACT_FLAG_SUMMARY_CONFLICT_OUT`: a conflict out to a transaction that has no record and that committed before this one.
+    summary_out: bool,
 }
 
 impl Sxact {
@@ -445,6 +487,19 @@ impl Ssi {
             // A transaction that rolls back makes no conflict.
             return Ok(());
         }
+        if !concurrent(sxact.xid) {
+            return Ok(());
+        }
+        // The writer has a conflict out to a transaction with no record, which committed first at a time that the snapshot of the reader does not tell, so one of the two fails.
+        if sxact.summary_out {
+            if sxact.prepared() {
+                return Err(failure("Canceled on conflict out to old pivot"));
+            }
+            if let Some(w) = self.xacts.get_mut(&writer) {
+                w.doomed = true;
+            }
+            return Ok(());
+        }
         // A read-only transaction appears to run first when the writer committed with no conflict out to a transaction that committed before the snapshot of the reader.
         if reader.read_only
             && sxact.committed()
@@ -453,7 +508,7 @@ impl Ssi {
         {
             return Ok(());
         }
-        if !concurrent(sxact.xid) || reader.out_conflicts.contains(&writer) {
+        if reader.out_conflicts.contains(&writer) {
             return Ok(());
         }
         self.flag_rw_conflict(me, writer, me)
@@ -528,27 +583,29 @@ impl Ssi {
     fn on_conflict_check(&mut self, reader: u64, writer: u64, me: u64) -> Result<(), Error> {
         let (Some(r), Some(w)) = (self.get(reader), self.get(writer)) else { return Ok(()) };
         // `R -> W -> T2`, where `W` committed with a conflict out to a transaction that committed before it.
-        let mut failed = w.committed() && w.conflict_out;
+        let mut failed = w.committed() && (w.conflict_out || w.summary_out);
         if !failed {
-            // `W` is a pivot with a conflict out to `T2`, which committed first.
-            failed = w.out_conflicts.iter().filter_map(|t2| self.get(*t2)).any(|t2| {
-                t2.prepare.is_some_and(|t2_prepare| {
-                    r.commit.is_none_or(|c| t2_prepare <= c)
-                        && w.commit.is_none_or(|c| t2_prepare <= c)
-                        && (!r.read_only || t2_prepare <= r.last_commit_before_snapshot)
-                })
-            });
+            // `W` is a pivot with a conflict out to `T2`, which committed first. A conflict out with no record may be one.
+            failed = w.summary_out
+                || w.out_conflicts.iter().filter_map(|t2| self.get(*t2)).any(|t2| {
+                    t2.prepare.is_some_and(|t2_prepare| {
+                        r.commit.is_none_or(|c| t2_prepare <= c)
+                            && w.commit.is_none_or(|c| t2_prepare <= c)
+                            && (!r.read_only || t2_prepare <= r.last_commit_before_snapshot)
+                    })
+                });
         }
         // `T0 -> R -> W`, where `W` committed first.
         if !failed
             && let Some(w_prepare) = w.prepare
             && !r.read_only
         {
-            failed = r.in_conflicts.iter().filter_map(|t0| self.get(*t0)).any(|t0| {
-                !t0.doomed
-                    && t0.commit.is_none_or(|c| c >= w_prepare)
-                    && (!t0.read_only || t0.last_commit_before_snapshot >= w_prepare)
-            });
+            failed = r.summary_in
+                || r.in_conflicts.iter().filter_map(|t0| self.get(*t0)).any(|t0| {
+                    !t0.doomed
+                        && t0.commit.is_none_or(|c| c >= w_prepare)
+                        && (!t0.read_only || t0.last_commit_before_snapshot >= w_prepare)
+                });
         }
         if !failed {
             return Ok(());
@@ -610,6 +667,49 @@ impl Ssi {
         Ok(())
     }
 
+    /// `AtPrepare_PredicateLocks`: what the log keeps of the record `id` of a transaction that prepares, or `None` when it has no record.
+    pub(crate) fn durable(&self, id: u64) -> Option<DurableSxact> {
+        let me = self.get(id)?;
+        Some(DurableSxact {
+            xmin: me.xmin,
+            read_only: me.read_only,
+            writes: me.writes.iter().copied().collect(),
+            reads: me.reads.iter().copied().collect(),
+        })
+    }
+
+    /// `predicatelock_twophase_recover`: the record of the prepared transaction `xid` that a restart prepares again, with its `SIREAD` locks. Its conflicts are not known, so it has a conflict in and a conflict out with no record, and it is prepared before each other transaction. The result is the ID of the record.
+    pub(crate) fn recover(&mut self, xid: u32, durable: &DurableSxact) -> u64 {
+        if self.last_commit < FIRST_NORMAL_SEQ_NO - 1 {
+            self.last_commit = FIRST_NORMAL_SEQ_NO - 1;
+        }
+        self.next_id += 1;
+        let id = self.next_id;
+        for &target in &durable.reads {
+            self.locks.entry(target).or_default().insert(id);
+        }
+        self.by_xid.insert(xid, id);
+        self.xacts.insert(
+            id,
+            Sxact {
+                xid,
+                xmin: durable.xmin,
+                last_commit_before_snapshot: RECOVERY_SEQ_NO,
+                prepare: Some(RECOVERY_SEQ_NO),
+                read_only: durable.read_only,
+                declared_read_only: durable.read_only,
+                // `predicatelock_twophase_postcommit` takes it that the transaction wrote.
+                did_write: true,
+                reads: durable.reads.iter().copied().collect(),
+                writes: durable.writes.iter().copied().collect(),
+                summary_in: true,
+                summary_out: true,
+                ..Sxact::default()
+            },
+        );
+        id
+    }
+
     /// The smallest `xmin` of the transactions that run, `SxactGlobalXmin`, or `None` when none runs.
     fn global_xmin(&self) -> Option<u32> {
         self.xacts.values().filter(|s| s.active()).map(|s| s.xmin).min()
@@ -637,6 +737,11 @@ impl Ssi {
                 me.read_only = true;
             }
             let read_only = me.read_only;
+            if !read_only && me.summary_out {
+                // The transaction that the conflict out with no record goes to is not known, so it may be the first one.
+                me.earliest_out_conflict_commit = FIRST_NORMAL_SEQ_NO;
+                me.conflict_out = true;
+            }
             let outs: Vec<u64> = me.out_conflicts.iter().copied().collect();
             let ins: Vec<u64> = me.in_conflicts.iter().copied().collect();
             let mut earliest = me.earliest_out_conflict_commit;

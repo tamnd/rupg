@@ -61,12 +61,13 @@ impl Connection {
         }
         self.store.heap().hand_over(xid, owner);
         self.store.locks().hand_over(self.pid, self.activity.fast.as_deref(), owner);
-        self.sxact.set(0);
+        let sxact = self.sxact.replace(0);
         // The log gets the prepare, with the changes of the catalog, before another session can end the transaction.
         let locks = self.store.locks().xact_holds(owner, None);
         let locks = locks.into_iter().map(|(tag, mode, count)| HeldLock::of(tag, mode, count));
         let durable = lease.as_ref().map(|lease| lease.durable(owner));
-        if let Some(durable) = self.store.prepared().durable(xid, locks.collect(), durable) {
+        let ssi = (sxact != 0).then(|| self.store.heap().serializable_durable(sxact)).flatten();
+        if let Some(durable) = self.store.prepared().durable(xid, locks.collect(), durable, ssi) {
             self.store.prepare(xid, &durable.bytes());
         }
         self.store.prepared().prepared(self.pid, self.activity.take_writes(), lease);
