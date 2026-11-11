@@ -722,6 +722,8 @@ struct Cold {
     vectors: Vec<[Box<[u8]>; 5]>,
     /// Each transaction that inserted versions, with the last command that did.
     xmins: Vec<(u32, u32)>,
+    /// The least and the greatest value of each column that [`Heap::variable_range`] found, by the place of the column. The versions of a cold table do not change and none is dead, so a range stays true until a change of the table takes the headers away.
+    ranges: HashMap<usize, Option<(Value, Value)>>,
 }
 
 impl Cold {
@@ -764,7 +766,7 @@ impl Cold {
                 return None;
             }
         }
-        Some(Cold { rows: versions.len(), vectors, xmins })
+        Some(Cold { rows: versions.len(), vectors, xmins, ranges: HashMap::new() })
     }
 
     /// Checks that each vector of headers decodes and that the vectors have all the rows, with the versions of one vector in memory at a time.
@@ -845,7 +847,7 @@ impl Persist for Cold {
             };
             vectors.push([field()?, field()?, field()?, field()?, field()?]);
         }
-        let cold = Cold { rows, vectors, xmins: Persist::take(input)? };
+        let cold = Cold { rows, vectors, xmins: Persist::take(input)?, ranges: HashMap::new() };
         // A decode checks the bytes, so a bad image does not load. The check decodes one vector at a time, so that it does not hold the versions of all the rows.
         cold.check()?;
         Ok(cold)
@@ -3816,36 +3818,58 @@ impl Heap {
     ) -> Option<(Value, Value)> {
         let mut guard = self.state();
         let state = &mut *guard;
+        let key = (database, relation);
+        // The plan of each query reads the range of the columns that it compares, so a cold table keeps the range of each column that it gave.
+        if let Some(range) = state
+            .tables
+            .meta(&key)
+            .and_then(|table| table.cold.as_ref())
+            .and_then(|cold| cold.ranges.get(&column))
+        {
+            return range.clone();
+        }
         let horizon = {
             let _published = self.published();
             state.horizon()
         };
         // The read keeps the frozen columns of the table, as [`Heap::btree_size`] does.
-        let table = state.tables.meta(&(database, relation))?;
+        let table = state.tables.meta(&key)?;
         let dead =
             |v: &Version| v.xmax != 0 && !state.running.contains(&v.xmax) && v.xmax < horizon;
         let mut range: Option<(Value, Value)> = None;
         let mut unordered = false;
-        table.each_version_row(Some(&[column]), |version, values| {
-            let Some(value) = values.get(column).filter(|v| !v.is_null() && !dead(version)) else {
-                return;
-            };
-            match &mut range {
-                None => range = Some((value.clone(), value.clone())),
-                Some((min, max)) => match (order(value, min), order(value, max)) {
-                    (Some(low), Some(high)) => {
-                        if low.is_lt() {
-                            *min = value.clone();
-                        }
-                        if high.is_gt() {
-                            *max = value.clone();
-                        }
+        let mut see = |value: &Value| match &mut range {
+            None => range = Some((value.clone(), value.clone())),
+            Some((min, max)) => match (order(value, min), order(value, max)) {
+                (Some(low), Some(high)) => {
+                    if low.is_lt() {
+                        *min = value.clone();
                     }
-                    _ => unordered = true,
-                },
-            }
-        });
-        if unordered { None } else { range }
+                    if high.is_gt() {
+                        *max = value.clone();
+                    }
+                }
+                _ => unordered = true,
+            },
+        };
+        // No version of a cold table is dead, and with no moved row the frozen rows are in the order of the versions, so the values of the column decode with no row for each version.
+        let stored = match (&table.cold, &table.frozen) {
+            (Some(_), Some(frozen)) if frozen.moved.is_empty() => frozen.columns.get(column),
+            _ => None,
+        };
+        match stored {
+            Some(stored) => Decoded::new(stored).filter(|v| !v.is_null()).for_each(|v| see(&v)),
+            None => table.each_version_row(Some(&[column]), |version, values| {
+                if let Some(value) = values.get(column).filter(|v| !v.is_null() && !dead(version)) {
+                    see(value);
+                }
+            }),
+        }
+        let range = if unordered { None } else { range };
+        if let Some(cold) = state.tables.settings_of(&key).and_then(|table| table.cold.as_mut()) {
+            cold.ranges.insert(column, range.clone());
+        }
+        range
     }
 
     /// `update_attstats`: replaces the rows of `pg_statistic` of a table for the columns of `rows`, outside of the transactions.
@@ -5096,8 +5120,12 @@ mod tests {
             settled(rows).iter().map(|v| (v.tid, v.made, v.xmin, v.len)).collect();
         assert_eq!(got, want);
         // A count of rows that the vectors do not have does not load.
-        let mut wrong =
-            Cold { rows: cold.rows + 1, vectors: cold.vectors.clone(), xmins: cold.xmins.clone() };
+        let mut wrong = Cold {
+            rows: cold.rows + 1,
+            vectors: cold.vectors.clone(),
+            xmins: cold.xmins.clone(),
+            ranges: HashMap::new(),
+        };
         let mut image = Vec::new();
         wrong.put(&mut image);
         assert!(Cold::take(&mut Reader::new(&image)).is_err());
@@ -5265,9 +5293,21 @@ mod tests {
         }
         assert_eq!(heap.btree_size(1, 7, 9, &shape), size);
         assert_eq!(heap.variable_range(1, 7, 0, order), range);
-        let state = heap.state();
-        let table = &state.tables.0[&(1, 7)];
-        assert!(table.frozen.is_some() && table.cold.is_some());
+        {
+            let state = heap.state();
+            let table = &state.tables.0[&(1, 7)];
+            assert!(table.frozen.is_some() && table.cold.is_some());
+            assert_eq!(table.cold.as_ref().unwrap().ranges.get(&0), Some(&range));
+        }
+        // The kept range serves the next plan, and a new version takes it away with the headers.
+        assert_eq!(heap.variable_range(1, 7, 0, order), range);
+        let xid = heap.begin(1);
+        let rows = vec![vec![Value::Int8(-4), Value::Int8(9)]];
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        heap.commit(xid);
+        assert!(heap.state().tables.0[&(1, 7)].cold.is_none());
+        assert_eq!(heap.variable_range(1, 7, 0, order), Some((Value::Int8(-4), Value::Int8(3000))));
+        assert_eq!(heap.variable_range(1, 7, 1, order), Some((Value::Int8(0), Value::Int8(9))));
     }
 
     #[test]
