@@ -9872,6 +9872,31 @@ mod tests {
         b.join().unwrap();
     }
 
+    /// A prepared statement keeps its composite constants when the catalog changes, as `PlanCacheRelCallback` invalidates only the plans that read the changed relation: after `ALTER TABLE ... ALTER COLUMN ... TYPE` of the row type, the old constant fails, as in `rowtypes-alter`, even after more changes of the catalog. A statement that reads the table is planned again with a new constant.
+    #[test]
+    fn prepared_row_constant_altered() {
+        let (mut a, _) = connect_to(&Arc::new(Store::new()), 1234);
+        send(&mut a, &query("CREATE TABLE rta (a int, b bytea)"));
+        send(
+            &mut a,
+            &query(
+                "PREPARE p AS SELECT '(1,\\\\x4649584d45)'::rta; \
+                 PREPARE q AS SELECT '(1,\\\\x4649584d45)'::rta FROM rta",
+            ),
+        );
+        let lines = send(&mut a, &query("EXECUTE p"));
+        assert!(lines.iter().any(|l| l == "row (1,\"\\\\x4649584d45\")"), "{lines:?}");
+        send(&mut a, &query("ALTER TABLE rta ALTER COLUMN b TYPE text"));
+        let altered = "ERROR 42804 row type of datum tuple was altered after the datum's creation";
+        for _ in 0..2 {
+            let lines = send(&mut a, &query("EXECUTE p"));
+            assert!(lines.iter().any(|l| l == altered), "{lines:?}");
+            send(&mut a, &query("CREATE TABLE IF NOT EXISTS other ()"));
+        }
+        let lines = send(&mut a, &query("EXECUTE q"));
+        assert!(lines.iter().any(|l| l == "SELECT 0"), "{lines:?}");
+    }
+
     /// `EvalPlanQual` reads the composite row of a function of `FROM` from the copy of the first scan: when the row type changed type during the first run, the recheck after a concurrent update fails as the old row would, as in `eval-plan-qual-rowtype-alter`. With no recheck the write takes the row of the first run.
     #[test]
     fn rerun_row_type_altered() {

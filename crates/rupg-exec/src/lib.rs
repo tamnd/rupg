@@ -1781,6 +1781,61 @@ impl Plan {
         &self.query
     }
 
+    /// `PlanCacheRelCallback` invalidates a cached plan only for a change of a relation that the plan reads, so the composite constants of a plan whose row type changed stay the datums that the first plan formed, and reading them fails. rupg plans a prepared statement again after any change of the catalog, so the new plan keeps the times of [`rupg_common::row_clock`] of the constants of the `old` plan, for each composite constant whose row type is not a relation that the plan reads. The constants pair up in the order of the walk of the queries, and the times stay new when the two plans do not have the same composite constants.
+    #[must_use]
+    pub fn keep_formed(mut self, old: &Plan) -> Plan {
+        let reads = scan::scanned_relations(&self.query);
+        let keep = |ty: u32| {
+            builtin::type_by_oid(ty).map(|row| row.relid).is_some_and(|relid| {
+                relid != 0 && !reads.0.contains(&relid) && !reads.1.contains(&relid)
+            })
+        };
+        fn formed(query: &Query) -> Vec<(u32, u64)> {
+            let mut out = Vec::new();
+            let mut query = query.clone();
+            query.each_expr_mut(0, &mut |expr, depth| {
+                expr.each_mut(depth, &mut |e, _| {
+                    if let ExprKind::Const(Value::Record(record)) = &e.kind {
+                        out.push((e.ty, record.formed));
+                    }
+                    false
+                });
+            });
+            out
+        }
+        fn put(query: &mut Query, times: &[(u32, u64)], keep: &dyn Fn(u32) -> bool) {
+            let mut at = 0;
+            query.each_expr_mut(0, &mut |expr, depth| {
+                expr.each_mut(depth, &mut |e, _| {
+                    let ty = e.ty;
+                    if let ExprKind::Const(Value::Record(record)) = &mut e.kind {
+                        if let Some(&(old_ty, time)) = times.get(at)
+                            && old_ty == ty
+                            && keep(ty)
+                        {
+                            record.formed = time;
+                        }
+                        at += 1;
+                    }
+                    false
+                });
+            });
+        }
+        let times = formed(&old.query);
+        if times.is_empty() || formed(&self.query).iter().map(|t| t.0).ne(times.iter().map(|t| t.0))
+        {
+            return self;
+        }
+        put(Arc::make_mut(&mut self.query), &times, &keep);
+        if let (Some(run), Some(old_run)) = (&mut self.run, &old.run) {
+            let times = formed(old_run);
+            if formed(run).iter().map(|t| t.0).eq(times.iter().map(|t| t.0)) {
+                put(Arc::make_mut(run), &times, &keep);
+            }
+        }
+        self
+    }
+
     /// The time of [`rupg_common::row_clock`] when the last run of the plan started, before it formed its composite datums.
     pub fn started(&self) -> u64 {
         self.started.load(Ordering::Relaxed)
