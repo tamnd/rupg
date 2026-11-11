@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- After a checkpoint, the store reads back only the frozen columns of each table at the places that the image recorded, and does not parse the whole image again. On the TPC-H SF0.1 load, `CHECKPOINT` goes from 2.29 s to 1.01 s and the peak memory of the server goes from 1461 MB to 1072 MB (#1498).
 - `CREATE INDEX` and `CREATE INDEX CONCURRENTLY` fold the constant parts of the index predicate at build, as `RelationGetIndexPredicate` does, even on an empty table. An immutable function in the predicate that waits on an advisory lock no longer holds the catalog lock while it waits, so the isolation test `multiple-cic` passes (#1497)
 - A prepared serializable transaction comes back after a crash and restart with its `SIREAD` locks. As PostgreSQL does, it is treated as having a conflict in and a conflict out, because its conflicts are not known (#1496)
 - A prepared transaction that bulk-loaded rows into a table's frozen columns comes back after a crash and restart. `COMMIT PREPARED` then keeps the rows, and `ROLLBACK PREPARED` takes them away (#1495)
