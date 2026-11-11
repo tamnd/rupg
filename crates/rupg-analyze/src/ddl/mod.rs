@@ -183,6 +183,8 @@ pub struct Defined {
     pub top_level: Option<TopLevel>,
     /// The new index of `CREATE INDEX CONCURRENTLY` on a table that is not temporary, or `None`. The first transaction of `DefineIndex` commits the index before the build, so after a failure of the build the caller keeps the index with `indisvalid` and `indisready` false.
     pub concurrent: Option<u32>,
+    /// The indexes that `REINDEX CONCURRENTLY` builds again, in the order of the builds. The first transaction of `ReindexRelationConcurrently` commits a copy of each, so after a failure of a build the caller keeps a copy of each that is not valid and not ready, as [`Catalog::copy_index_concurrently`] makes it.
+    pub reindexed: Vec<u32>,
     /// The tables of `CLUSTER` and `REPACK`, whose rows the caller writes again to their new files.
     pub repacked: Vec<Repack>,
     /// The new tables with `ON COMMIT DELETE ROWS` or `ON COMMIT DROP`, as `register_on_commit_action` keeps them. The caller does the action at each commit while the table exists.
@@ -444,6 +446,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         schema: None,
         top_level: None,
         concurrent: None,
+        reindexed: Vec::new(),
         repacked: Vec::new(),
         on_commit: Vec::new(),
         dropped: Vec::new(),
@@ -603,6 +606,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         schema: definer.schema,
         top_level: definer.top_level,
         concurrent: definer.concurrent,
+        reindexed: definer.reindexed,
         repacked: definer.repacked,
         on_commit: definer.on_commit,
         dropped: definer.dropped,
@@ -903,6 +907,8 @@ pub(crate) struct Definer<'a, 'c> {
     top_level: Option<TopLevel>,
     /// The index of [`Defined::concurrent`].
     concurrent: Option<u32>,
+    /// The indexes of [`Defined::reindexed`].
+    reindexed: Vec<u32>,
     /// The tables of [`Defined::repacked`].
     repacked: Vec<Repack>,
     /// The tables of [`Defined::on_commit`].

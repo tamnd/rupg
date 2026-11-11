@@ -30,7 +30,7 @@ const ACL_CREATE_TEMP: u32 = 1 << 10;
 pub(crate) const ACL_CONNECT: u32 = 1 << 11;
 const ACL_SET: u32 = 1 << 12;
 const ACL_ALTER_SYSTEM: u32 = 1 << 13;
-const ACL_MAINTAIN: u32 = 1 << 14;
+pub(crate) const ACL_MAINTAIN: u32 = 1 << 14;
 /// The grant option bits of all privileges, `ACLITEM_ALL_GOPTION_BITS`.
 const ALL_GRANT_OPTIONS: u32 = 0xFFFF << 16;
 

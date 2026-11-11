@@ -1,11 +1,11 @@
 //! The properties of the index access methods, of the indexes and of the index columns: `pg_indexam_has_property`, `pg_index_has_property` and `pg_index_column_has_property`. A port of `amutils.c` with the fields of the `IndexAmRoutine` of each built-in access method and its `amproperty` function.
 
 use rupg_catalog::RelKind;
-use rupg_common::Result;
+use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
-use crate::{Call, Kernel, Session, bad_value};
+use crate::{BrinRanges, Call, Kernel, Session, bad_value};
 
 /// `INDOPTION_DESC`.
 const DESC: i16 = 1;
@@ -269,12 +269,148 @@ fn pg_index_column_has_property(call: &Call<'_>, args: &[Value]) -> Result<Value
     Ok(answer(property(name_arg(args, 2)?, 0, index, *attno, call.session)))
 }
 
+/// `BRIN_AM_OID`.
+const BRIN: u32 = 3580;
+
+/// `BRIN_ALL_BLOCKRANGES`: the block number of `brin_summarize_range` that summarizes all the ranges.
+const ALL_BLOCK_RANGES: i64 = 0xFFFF_FFFF;
+
+/// `ShareUpdateExclusiveLock`.
+const SHARE_UPDATE_EXCLUSIVE: u8 = 4;
+
+/// The name, the kind, the access method and the table of the relation `oid`, from the catalog of the session or from the built-in catalogs. A built-in index is a `btree` index.
+fn relation_of(oid: u32, session: &dyn Session) -> Option<(String, RelKind, u32, u32)> {
+    if let Some(rel) = session.catalog().and_then(|c| c.relation(oid)) {
+        let (method, table) = rel.index.as_ref().map_or((0, 0), |i| (i.method, i.table));
+        return Some((rel.name.clone(), rel.kind, method, table));
+    }
+    let row = builtin::class_by_oid(oid)?;
+    let kind = if row.kind == b'i' { RelKind::Index } else { RelKind::Table };
+    Some((row.name.to_owned(), kind, BTREE, 0))
+}
+
+/// The checks of `brin_summarize_range` and `brin_desummarize_range` for the index `oid`, after the check of the block: `index_open` of an index, a BRIN index, the parent table and `MAINTAIN` on it. The table and the index get `ShareUpdateExclusiveLock`.
+fn brin_index(oid: u32, session: &dyn Session) -> Result<()> {
+    let Some((name, kind, method, table)) = relation_of(oid, session) else {
+        return Err(Error::internal(format!("could not open relation with OID {oid}")));
+    };
+    if table != 0 {
+        session.lock_relations(&[table], SHARE_UPDATE_EXCLUSIVE, None)?;
+    }
+    if !matches!(kind, RelKind::Index | RelKind::PartitionedIndex) {
+        return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not an index")));
+    }
+    session.lock_relations(&[oid], SHARE_UPDATE_EXCLUSIVE, None)?;
+    if kind != RelKind::Index || method != BRIN {
+        return Err(Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("\"{name}\" is not a BRIN index"),
+        ));
+    }
+    if table == 0 {
+        return Err(Error::new(
+            SqlState::UNDEFINED_TABLE,
+            format!("could not open parent table of index \"{name}\""),
+        ));
+    }
+    if !crate::acl::relation_allowed(table, crate::acl::ACL_MAINTAIN, session) {
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("must be owner of index {name}"),
+        ));
+    }
+    Ok(())
+}
+
+/// The error of a block number out of the range of a function.
+fn block_out_of_range(block: i64) -> Error {
+    Error::new(SqlState::INVALID_PARAMETER_VALUE, format!("block number out of range: {block}"))
+}
+
+/// `brin_summarize_range(regclass, bigint)`: the number of the ranges that got a summary, the range of the block, or all the ranges for `BRIN_ALL_BLOCKRANGES`.
+fn brin_summarize_range(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let index = oid_arg(args, 0)?;
+    let Some(Value::Int8(block)) = args.get(1) else { return Err(bad_value()) };
+    if !(0..=ALL_BLOCK_RANGES).contains(block) {
+        return Err(block_out_of_range(*block));
+    }
+    summarize(call, index, (*block != ALL_BLOCK_RANGES).then(|| u32::try_from(*block).unwrap_or(0)))
+}
+
+/// `brin_summarize_new_values(regclass)`: `brin_summarize_range` of all the ranges.
+fn brin_summarize_new_values(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    summarize(call, oid_arg(args, 0)?, None)
+}
+
+/// `brinsummarize` of the range of `block`, or of all the ranges for `None`, of a valid index.
+fn summarize(call: &Call<'_>, index: u32, block: Option<u32>) -> Result<Value> {
+    brin_index(index, call.session)?;
+    let valid = call
+        .session
+        .catalog()
+        .and_then(|c| c.relation(index))
+        .and_then(|r| r.index.as_ref())
+        .is_some_and(|i| i.valid);
+    let count =
+        if valid { call.session.brin_ranges(index, BrinRanges::Summarize(block))? } else { 0 };
+    Ok(Value::Int4(i32::try_from(count).unwrap_or(i32::MAX)))
+}
+
+/// `brin_desummarize_range(regclass, bigint)`: the range of the block loses its summary.
+fn brin_desummarize_range(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let index = oid_arg(args, 0)?;
+    let Some(Value::Int8(block)) = args.get(1) else { return Err(bad_value()) };
+    // `MaxBlockNumber`.
+    if !(0..ALL_BLOCK_RANGES).contains(block) {
+        return Err(block_out_of_range(*block));
+    }
+    brin_index(index, call.session)?;
+    let block = u32::try_from(*block).unwrap_or(u32::MAX);
+    call.session.brin_ranges(index, BrinRanges::Desummarize(block))?;
+    Ok(Value::text(""))
+}
+
+/// `GIN_AM_OID`.
+const GIN: u32 = 2742;
+
+/// `gin_clean_pending_list(regclass)`: the entries of the pending list of a GIN index go to its tree, and the result is the number of the pages of the list that went.
+fn gin_clean_pending_list(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = oid_arg(args, 0)?;
+    let session = call.session;
+    let Some((name, kind, method, table)) = relation_of(oid, session) else {
+        return Err(Error::internal(format!("could not open relation with OID {oid}")));
+    };
+    // `RowExclusiveLock`.
+    session.lock_relations(&[oid], 3, None)?;
+    if !matches!(kind, RelKind::Index | RelKind::PartitionedIndex) {
+        return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, format!("\"{name}\" is not an index")));
+    }
+    if kind != RelKind::Index || method != GIN {
+        return Err(Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("\"{name}\" is not a GIN index"),
+        ));
+    }
+    if table == 0 || !crate::acl::relation_allowed(table, crate::acl::ACL_MAINTAIN, session) {
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("must be owner of index {name}"),
+        ));
+    }
+    let pages = session.gin_clean_pending_list(oid)?;
+    Ok(Value::Int8(i64::try_from(pages).unwrap_or(i64::MAX)))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
         "pg_indexam_has_property" => pg_indexam_has_property,
         "pg_index_has_property" => pg_index_has_property,
         "pg_index_column_has_property" => pg_index_column_has_property,
+        "brin_summarize_range" => brin_summarize_range,
+        "brin_summarize_new_values" => brin_summarize_new_values,
+        "brin_desummarize_range" => brin_desummarize_range,
+        "gin_clean_pending_list" => gin_clean_pending_list,
         _ => return None,
     };
     Some(kernel)

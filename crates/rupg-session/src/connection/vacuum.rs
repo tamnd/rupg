@@ -16,7 +16,7 @@ use super::copy::{def_boolean, def_string};
 /// `ROLE_PG_CHECKPOINT`.
 const PG_CHECKPOINT: u32 = 4544;
 use super::{Connection, Done};
-use crate::heap::{Skip, View};
+use crate::heap::{BrinChange, Heap, Skip, View};
 use crate::{guc, query};
 use rupg_types::Value;
 use std::sync::Arc;
@@ -789,6 +789,24 @@ impl Connection {
         };
         let target = (self.database_oid, relid, self.pid);
         let vacuumed = self.heap().vacuum(target, skip, (indexed, parsed.freeze, truncate));
+        // `brinvacuumcleanup`: `brinsummarize` of the ranges with no summary that the heap fills, and `ginvacuumcleanup`: `ginInsertCleanup` of the pending list.
+        if indexed {
+            let heap = self.heap();
+            for index in catalog.relations() {
+                let Some(info) = index.index.as_ref().filter(|i| i.table == relid) else {
+                    continue;
+                };
+                if index.kind != RelKind::Index || !info.valid {
+                    continue;
+                }
+                if info.method == explain::BRIN_AM {
+                    let change = BrinChange::Summarize(None, false);
+                    brin_ranges(heap, catalog, self.database_oid, index.oid, change);
+                } else if info.method == GIN_AM {
+                    gin_pending_pages(heap, catalog, self.database_oid, index.oid, true);
+                }
+            }
+        }
         let rows = vacuumed.reltuples;
         // `lazy_vacuum`: with `INDEX_CLEANUP AUTO`, fewer pages with dead versions than a 50th of the heap bypass the vacuum of the indexes. With no `ambulkdelete` call, `btvacuumcleanup` gives no exact count, and the indexes keep their stats.
         let threshold = (f64::from(vacuumed.pages) * BYPASS_THRESHOLD_PAGES) as u32;
@@ -833,6 +851,19 @@ impl Connection {
         // Each index has the stats of its build, from the stats of the table before the statement.
         for index in &built {
             self.built_index_stats(new, index);
+        }
+        // `brinbuild`: each range of the table has a summary, and `ginbuild`: the pending list is empty. The revmaps and the pending lists of the indexes that are gone go.
+        let kept = |r: &Relation| {
+            r.index.as_ref().is_some_and(|i| matches!(i.method, explain::BRIN_AM | GIN_AM))
+        };
+        if built.iter().any(|r| kept(r)) || new.relations().count() < old.relations().count() {
+            let heap = self.heap();
+            for index in &built {
+                brin_ranges(heap, new, self.database_oid, index.oid, BrinChange::Build);
+                gin_pending_pages(heap, new, self.database_oid, index.oid, true);
+            }
+            let kept = new.relations().filter(|r| kept(r)).map(|r| r.oid).collect();
+            heap.index_state_keep(self.database_oid, &kept);
         }
         let mut tables: Vec<u32> =
             built.iter().filter_map(|r| r.index.as_ref()).map(|index| index.table).collect();
@@ -947,7 +978,7 @@ impl Connection {
         let tuples = entries.len() as f32;
         let types = derived.exprs.iter().map(|e| e.ty).collect();
         let shape = explain::shape_of(index, (0..key_count).collect(), types);
-        let size = crate::heap::Heap::btree_size_of(entries, &shape);
+        let size = Heap::btree_size_of(entries, &shape);
         Some((i32::try_from(size.blocks).unwrap_or(i32::MAX), tuples))
     }
 
@@ -1008,4 +1039,69 @@ impl Connection {
         heap.set_stats(self.database_oid, table, i32::try_from(blocks).unwrap_or(i32::MAX), live);
         live
     }
+}
+
+/// `GIN_AM_OID`.
+const GIN_AM: u32 = 2742;
+
+/// The bytes of the entries of a row in the pending list of a GIN index, an estimate: three keys of 20 bytes each, with their line pointers, as an array of three `int4` values gives.
+const GIN_PENDING_ROW: u64 = 64;
+
+/// `GIN_PAGE_FREESIZE`: the bytes of a page of the pending list for its entries.
+const GIN_PAGE_FREESIZE: u64 = 8160;
+
+/// The pages of the pending list of the GIN index `index` of the database `database` of `catalog`, from the rows of [`Heap::gin_pending`] at [`GIN_PENDING_ROW`] bytes each, which `flush` deletes, as `ginInsertCleanup` does. An insert flushes the list once its pages hold more than `gin_pending_list_limit` (the reloption, else `limit` in kilobytes), so the list has the rows after the last of those flushes. An index with `fastupdate` off has no list, and a relation that is not a GIN index has none either.
+pub(crate) fn gin_pending_pages(
+    heap: &Heap,
+    catalog: &Catalog,
+    database: u32,
+    index: u32,
+    flush: bool,
+) -> u64 {
+    gin_pending_pages_with(heap, catalog, (database, index), flush, 4096)
+}
+
+/// [`gin_pending_pages`] with the setting `gin_pending_list_limit` of `limit` kilobytes.
+pub(crate) fn gin_pending_pages_with(
+    heap: &Heap,
+    catalog: &Catalog,
+    (database, index): (u32, u32),
+    flush: bool,
+    limit: u64,
+) -> u64 {
+    let Some(rel) = catalog.relation(index) else { return 0 };
+    let Some(info) = rel.index.as_ref().filter(|i| i.method == GIN_AM) else { return 0 };
+    let option = |name: &str| {
+        rel.options
+            .iter()
+            .find_map(|o| o.split_once('=').filter(|(n, _)| *n == name).map(|(_, v)| v))
+    };
+    let fast = option("fastupdate").is_none_or(|v| {
+        !matches!(v.to_ascii_lowercase().as_str(), "false" | "off" | "no" | "0" | "f" | "n")
+    });
+    let rows = heap.gin_pending((database, info.table, index, rel.file), flush);
+    if !fast {
+        return 0;
+    }
+    let limit = option("gin_pending_list_limit").and_then(|v| v.parse().ok()).unwrap_or(limit);
+    let per_page = GIN_PAGE_FREESIZE / GIN_PENDING_ROW;
+    // The rows of a list whose pages hold more than the limit, after which the insert flushes the list.
+    let cycle = (limit * 1024 / GIN_PAGE_FREESIZE) * per_page + 1;
+    (rows % cycle).div_ceil(per_page)
+}
+
+/// A change of the revmap of the BRIN index `index` of the database `database` of `catalog`, for the pages of its table now, as [`Heap::brin`] makes it. The result is the number of the ranges that got a summary, or 0 for a relation that is not a BRIN index.
+pub(crate) fn brin_ranges(
+    heap: &Heap,
+    catalog: &Catalog,
+    database: u32,
+    index: u32,
+    change: BrinChange,
+) -> u32 {
+    let Some(rel) = catalog.relation(index) else { return 0 };
+    let Some(info) = rel.index.as_ref().filter(|i| i.method == explain::BRIN_AM) else {
+        return 0;
+    };
+    let blocks = heap.size(database, info.table).blocks;
+    heap.brin((database, index, rel.file), blocks, explain::pages_per_range(rel), change)
 }

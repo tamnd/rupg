@@ -1796,6 +1796,44 @@ impl rupg_func::Session for Reader<'_> {
         self.activity.and_then(|(activity, _)| activity.pending_function(func))
     }
 
+    fn brin_ranges(&self, index: u32, change: rupg_func::BrinRanges) -> Result<u32> {
+        let Some((_, store)) = self.activity else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "the block ranges of a BRIN index are not supported here",
+            ));
+        };
+        let change = match change {
+            rupg_func::BrinRanges::Summarize(block) => {
+                crate::heap::BrinChange::Summarize(block, true)
+            }
+            rupg_func::BrinRanges::Desummarize(block) => {
+                crate::heap::BrinChange::Desummarize(block)
+            }
+        };
+        let database = database_oid(store, self.database);
+        Ok(crate::connection::brin_ranges(store.heap(), &self.catalog, database, index, change))
+    }
+
+    fn gin_clean_pending_list(&self, index: u32) -> Result<u64> {
+        let Some((_, store)) = self.activity else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "the pending list of a GIN index is not supported here",
+            ));
+        };
+        let limit = self.settings().get("gin_pending_list_limit").and_then(|v| v.parse().ok());
+        let key = (database_oid(store, self.database), index);
+        let heap = store.heap();
+        Ok(crate::connection::gin_pending_pages_with(
+            heap,
+            &self.catalog,
+            key,
+            true,
+            limit.unwrap_or(4096),
+        ))
+    }
+
     fn reset_counters(&self, object: Option<u32>) {
         if let Some((activity, store)) = self.activity {
             store.reset_counters(activity.database(), object, now(self.clock));

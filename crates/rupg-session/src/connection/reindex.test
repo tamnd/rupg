@@ -317,6 +317,33 @@ CREATE FUNCTION
 fields ri_g:2278:4:-1
 row 
 SELECT 1
+> CREATE TABLE ri_dup (c1 int);
+CREATE TABLE
+> INSERT INTO ri_dup VALUES (1), (1), (2);
+INSERT 0 3
+> CREATE UNIQUE INDEX CONCURRENTLY ri_dup_u ON ri_dup (c1);
+ERROR 23505 could not create unique index "ri_dup_u"
+DETAIL Key (c1)=(1) is duplicated.
+> REINDEX INDEX CONCURRENTLY ri_dup_u;
+ERROR 23505 could not create unique index "ri_dup_u_ccnew"
+DETAIL Key (c1)=(1) is duplicated.
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'ri_dup'::regclass ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row ri_dup_u,f
+row ri_dup_u_ccnew,f
+SELECT 2
+> DROP INDEX ri_dup_u_ccnew;
+DROP INDEX
+> DELETE FROM ri_dup WHERE c1 = 1;
+DELETE 2
+> REINDEX INDEX CONCURRENTLY ri_dup_u;
+REINDEX
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'ri_dup'::regclass ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row ri_dup_u,t
+SELECT 1
+> DROP TABLE ri_dup;
+DROP TABLE
 > DROP FUNCTION ri_f, ri_g;
 DROP FUNCTION
 > DROP ROLE regress_ri_user;

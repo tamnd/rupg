@@ -451,6 +451,7 @@ impl Definer<'_, '_> {
             if self.rebuild(index).is_err() {
                 continue;
             }
+            self.reindexed.push(index);
             self.collect(None, ObjRef::new(PG_CLASS, index));
             if verbose {
                 let shown = self.qualified_relation(index);
