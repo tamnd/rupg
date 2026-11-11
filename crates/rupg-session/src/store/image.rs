@@ -125,7 +125,7 @@ impl Store {
         Ok(store)
     }
 
-    /// `RecoverPreparedTransactions`: the prepared transactions of the image and the log are prepared again, and take their heavyweight locks again.
+    /// `RecoverPreparedTransactions`: the prepared transactions of the image and the log are prepared again, and take their heavyweight locks again, and the lock of the catalog of their database for a transaction that changed the catalog.
     ///
     /// # Errors
     ///
@@ -134,6 +134,9 @@ impl Store {
         for (xid, meta) in self.heap.prepared() {
             let durable = crate::twophase::Durable::of_bytes(&meta)?;
             let owner = crate::twophase::Prepared::lock_owner(xid);
+            if let Some(lease) = &durable.lease {
+                self.relock(durable.database, owner, lease);
+            }
             for lock in &durable.locks {
                 let (tag, mode, count) = lock.lock()?;
                 for _ in 0..count {
@@ -168,17 +171,24 @@ impl Store {
         }
     }
 
-    /// The rows of the tables that a commit of a log dropped go, as the drop of a table writes no log of its rows.
+    /// The rows of the tables that a commit of a log dropped go, as the drop of a table writes no log of its rows. The tables that a prepared transaction created stay.
     pub(crate) fn drop_lost_tables(&self) {
         let catalogs = self.catalogs();
+        let pending: Vec<_> = self
+            .heap
+            .prepared()
+            .iter()
+            .filter_map(|(_, meta)| crate::twophase::Durable::of_bytes(meta).ok())
+            .filter_map(|durable| Some((durable.database, durable.lease?.catalog)))
+            .collect();
         for database in self.heap.databases() {
-            match catalogs.iter().find(|(row, _)| row.oid == database) {
-                Some((_, catalog)) => {
-                    self.heap
-                        .drop_tables(database, |relation| catalog.relation(relation).is_some());
-                }
-                None => self.heap.drop_tables(database, |_| false),
-            }
+            let committed = catalogs.iter().find(|(row, _)| row.oid == database);
+            self.heap.drop_tables(database, |relation| {
+                committed.is_some_and(|(_, catalog)| catalog.relation(relation).is_some())
+                    || pending.iter().any(|(db, catalog)| {
+                        *db == database && catalog.relation(relation).is_some()
+                    })
+            });
         }
     }
 
