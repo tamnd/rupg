@@ -145,7 +145,7 @@ impl Prepared {
             return Ok(None);
         }
         let params = Params { types: self.params.clone(), variable: true };
-        let plan = query::plan(node, reader, &params)?;
+        let plan = query::plan(node, reader, &params)?.keep_formed(plan);
         let columns = query::returns_rows(&plan).then(|| query::columns(&plan));
         let changed = match (&columns, &self.columns) {
             (Some(new), Some(old)) => {
