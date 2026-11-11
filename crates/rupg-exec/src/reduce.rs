@@ -358,6 +358,56 @@ fn function(oid: u32, args: &[Expr]) -> bool {
         )
 }
 
+/// The keys of the rows that are left of one side of an `=`: a bitmap over the range of the keys when the keys are dense, as the keys of a table often are, or else a hash set.
+enum Found {
+    Bits { min: i64, bits: Vec<u64> },
+    Set(rupg_kernels::hash::HashSet<i64>),
+}
+
+impl Found {
+    /// The keys `keys` of the rows that `alive` marks.
+    fn of(keys: &[Option<i64>], alive: &[bool]) -> Found {
+        let left =
+            || keys.iter().zip(alive).filter_map(|(key, &alive)| if alive { *key } else { None });
+        let (mut min, mut max, mut count) = (i64::MAX, i64::MIN, 0_u64);
+        for key in left() {
+            min = min.min(key);
+            max = max.max(key);
+            count += 1;
+        }
+        if count == 0 {
+            return Found::Bits { min: 0, bits: Vec::new() };
+        }
+        // A bitmap has one bit for each key of the range, which is at most 8 bytes for each key that is left.
+        let span = max.abs_diff(min);
+        if span < count.saturating_mul(64).max(1 << 16) && span < 1 << 32 {
+            let mut bits = vec![0_u64; usize::try_from(span / 64 + 1).unwrap_or(0)];
+            for key in left() {
+                let at = key.abs_diff(min);
+                if let Some(word) = usize::try_from(at / 64).ok().and_then(|w| bits.get_mut(w)) {
+                    *word |= 1 << (at % 64);
+                }
+            }
+            return Found::Bits { min, bits };
+        }
+        Found::Set(left().collect())
+    }
+
+    fn contains(&self, key: i64) -> bool {
+        match self {
+            Found::Bits { min, bits } => {
+                let at = key.abs_diff(*min);
+                key >= *min
+                    && usize::try_from(at / 64)
+                        .ok()
+                        .and_then(|word| bits.get(word))
+                        .is_some_and(|word| word >> (at % 64) & 1 == 1)
+            }
+            Found::Set(set) => set.contains(&key),
+        }
+    }
+}
+
 /// The rows of one relation for the reduction: true for each row that is left, and the key of each row for each key column of the relation.
 struct Side {
     alive: Vec<bool>,
@@ -414,23 +464,31 @@ pub(crate) fn run(
         sides.push(Some(Side { alive, keys }));
     }
     drop(tables);
+    // The number of changes of each side, and for each direction of each `=` the number of changes of the other side when the direction last ran. A side only loses rows, so a direction whose other side did not change since it ran keeps all the rows again, and does not run.
+    let mut changes = vec![0_usize; width];
+    let mut ran = vec![[None::<usize>; 2]; plan.edges.len()];
     // spec/14 section 14.8.2: each pass keeps the rows of each side of each `=` whose key the other side has, until a pass keeps all the rows.
     for _ in 0..8 {
         let mut changed = false;
-        for &[a, b] in &plan.edges {
-            for ((x, kx), (y, ky)) in [(a, b), (b, a)] {
+        for (edge, &[a, b]) in plan.edges.iter().enumerate() {
+            for (direction, ((x, kx), (y, ky))) in [(a, b), (b, a)].into_iter().enumerate() {
                 let Some(other) = &sides[y] else { continue };
-                let found: rupg_kernels::hash::HashSet<i64> = other.keys[ky]
-                    .iter()
-                    .zip(&other.alive)
-                    .filter_map(|(key, &alive)| if alive { *key } else { None })
-                    .collect();
+                if sides[x].is_none() || ran[edge][direction] == Some(changes[y]) {
+                    continue;
+                }
+                ran[edge][direction] = Some(changes[y]);
+                let found = Found::of(&other.keys[ky], &other.alive);
                 let Some(side) = &mut sides[x] else { continue };
+                let mut lost = false;
                 for (alive, key) in side.alive.iter_mut().zip(&side.keys[kx]) {
-                    if *alive && !key.is_some_and(|key| found.contains(&key)) {
+                    if *alive && !key.is_some_and(|key| found.contains(key)) {
                         *alive = false;
-                        changed = true;
+                        lost = true;
                     }
+                }
+                if lost {
+                    changes[x] += 1;
+                    changed = true;
                 }
             }
         }
@@ -462,4 +520,32 @@ pub(crate) fn run(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Found;
+
+    #[test]
+    fn the_keys_that_are_left_are_the_same_in_a_bitmap_and_in_a_set() {
+        let cases: Vec<Vec<Option<i64>>> = vec![
+            (1..=5000).map(Some).collect(),
+            (0..3000).map(|i| Some(i * 3 - 4000)).chain([None, Some(i64::MIN + 1)]).collect(),
+            vec![Some(i64::MIN), Some(i64::MAX), Some(0), None],
+            vec![Some(7), Some(7), Some(-7)],
+            (0..100).map(|i| Some(i * 1_000_000_007)).collect(),
+            vec![None, None],
+        ];
+        for keys in cases {
+            let alive: Vec<bool> = (0..keys.len()).map(|i| i % 7 != 3).collect();
+            let found = Found::of(&keys, &alive);
+            let want: std::collections::HashSet<i64> =
+                keys.iter().zip(&alive).filter_map(|(k, &a)| if a { *k } else { None }).collect();
+            let probes =
+                keys.iter().flatten().flat_map(|&k| [k, k.wrapping_add(1), k.wrapping_sub(1)]);
+            for probe in probes.chain([i64::MIN, i64::MAX, 0, -1, 64, 65]) {
+                assert_eq!(found.contains(probe), want.contains(&probe), "key {probe}");
+            }
+        }
+    }
 }

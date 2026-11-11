@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The semi-join reduction keeps dense integer keys in a bitmap and does not run an edge again when the rows of its other side did not change. On TPC-H SF0.1, the run of q5 goes from 0.175 s to 0.107 s, and the reduction is no longer in the profile of q9 (#1507).
 - `CREATE INDEX ... USING brin` takes the options `n_distinct_per_range` and `false_positive_rate` of the bloom classes and `values_per_range` of the minmax-multi classes, with the bounds errors of PostgreSQL. The regression tests `brin_bloom` and `brin_multi` pass (#1506)
 - A cold table keeps the least and the greatest value of each column that the planner read with `get_actual_variable_range`, and a change of the table drops them with the headers. The planner does not decode the whole column again for each query. On TPC-H SF0.1, the plan time of q5 goes from 1.31 s to 0.11 s on a loaded server, and q21 goes from 0.52 s to 0.22 s, q9 from 0.57 s to 0.30 s and q8 from 0.31 s to 0.14 s (#1504).
 - `brin_summarize_new_values`, `brin_summarize_range`, `brin_desummarize_range` and `gin_clean_pending_list` work, with the checks, errors and counts of PostgreSQL. A failed `REINDEX CONCURRENTLY` leaves the invalid `<index>_ccnew` copy, as in PostgreSQL. The regression tests `brin` and `gin` pass (#1505)
