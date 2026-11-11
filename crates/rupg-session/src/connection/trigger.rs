@@ -564,6 +564,7 @@ impl Connection {
     ) -> Result<Vec<Vec<Value>>, Error> {
         while !self.lock_for_triggers(info, view, &rows, false)? {
             let reader = self.reader();
+            super::rerun_row_types(plan, &reader)?;
             rows = plan.run(params, &reader)?;
             let command = view.command;
             *view = reader.view().cloned().unwrap_or_default();

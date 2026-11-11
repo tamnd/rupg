@@ -435,6 +435,7 @@ impl Connection {
             // `GetTupleForTrigger` locks the rows of the leaves with triggers before the triggers fire.
             if !self.lock_for_triggers(info, &done.view, &rows, true)? {
                 let reader = self.reader();
+                super::rerun_row_types(plan, &reader)?;
                 rows = plan.run(params, &reader)?;
                 done.view = reader.view().cloned().unwrap_or_default();
                 continue;
@@ -469,6 +470,7 @@ impl Connection {
             }
             // The rows that this command changed stay as they are in the new run.
             let reader = self.reader();
+            super::rerun_row_types(plan, &reader)?;
             rows = plan.run(params, &reader)?;
             done.view = reader.view().cloned().unwrap_or_default();
         }

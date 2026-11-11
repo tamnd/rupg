@@ -7,6 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use rupg_analyze::{
@@ -36,6 +37,8 @@ pub struct Plan {
     row_security: Option<u32>,
     /// The relations that [`Plan::query`] reads, also in its subqueries, its queries of `WITH` and its sublinks, in the order of [`scan::check_scannable`], and the ones that it reads with their children of `INHERITS`. The first start of a copy finds them, and the copies share them, as they share the query.
     reads: Arc<OnceLock<(Vec<u32>, Vec<u32>)>>,
+    /// The time of [`rupg_common::row_clock`] when the last run of the plan started: the composite datums of the run are formed after it, as [`Plan::started`] gives.
+    started: Arc<AtomicU64>,
 }
 
 /// The query of a `SELECT` with the simple subqueries and views of `FROM` merged into it, as `pull_up_simple_subquery` merges them, or `None` when no subquery merges. A view with `security_barrier` stays a subquery.
@@ -435,6 +438,7 @@ pub fn prepare(mut query: Query, session: &dyn Session) -> Result<Plan> {
         run: None,
         row_security,
         reads: Arc::default(),
+        started: Arc::default(),
     })
 }
 
@@ -1441,6 +1445,7 @@ fn run_sub(
         run: None,
         row_security: None,
         reads: Arc::default(),
+        started: Arc::default(),
     };
     let Some(locking) = plan.locking() else {
         return run_query(query, params, session, cache, outer, exists);
@@ -1776,6 +1781,11 @@ impl Plan {
         &self.query
     }
 
+    /// The time of [`rupg_common::row_clock`] when the last run of the plan started, before it formed its composite datums.
+    pub fn started(&self) -> u64 {
+        self.started.load(Ordering::Relaxed)
+    }
+
     /// The columns of the result. The junk columns of `ORDER BY` do not count. A query that writes has the columns of its `RETURNING`, or none.
     pub fn columns(&self) -> &[Target] {
         if let Some(write) = &self.query.write {
@@ -2008,6 +2018,7 @@ impl Plan {
                     run: None,
                     row_security: self.row_security,
                     reads: Arc::default(),
+                    started: Arc::default(),
                 };
                 (plan, read.contains(&n))
             })
@@ -2094,6 +2105,7 @@ impl Plan {
             run,
             row_security: self.row_security,
             reads: Arc::default(),
+            started: Arc::default(),
         })
     }
 
@@ -2113,6 +2125,7 @@ impl Plan {
     ///
     /// `25006` for `INSERT`, `UPDATE`, `DELETE`, `FOR UPDATE` or `FOR SHARE` in a read-only transaction, and `42809` for a lock on the rows of a sequence.
     pub fn start(&self, session: &dyn Session) -> Result<()> {
+        self.started.store(rupg_common::row_clock::now(), Ordering::Relaxed);
         let writes = self.query.write.is_some() || self.modifying_cte();
         if writes && session.setting("transaction_read_only").as_deref() == Some("on") {
             let name = self.query.write.as_ref().map_or("SELECT", |w| w.kind.name());

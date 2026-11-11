@@ -532,6 +532,27 @@ pub fn check_row_type(ty: u32, record: &Record, session: &dyn Session) -> Result
     Ok(())
 }
 
+/// [`check_row_type`] for a datum of the row type `ty` formed at the time `formed` of [`rupg_common::row_clock`], such as the row of a function of `FROM` that `EvalPlanQual` reads from the copy of the first scan, as `ROW_MARK_COPY` keeps it.
+///
+/// # Errors
+///
+/// `42804` when a column of the row type changed type after `formed`.
+pub fn check_row_type_since(ty: u32, formed: u64, session: &dyn Session) -> Result<()> {
+    let Some(relid) = builtin::type_by_oid(ty).map(|row| row.relid).filter(|&relid| relid != 0)
+    else {
+        return Ok(());
+    };
+    let latest = session.latest_catalog();
+    let Some(catalog) = latest.as_deref().or_else(|| session.catalog()) else { return Ok(()) };
+    if catalog.row_altered(relid) > formed {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "row type of datum tuple was altered after the datum's creation",
+        ));
+    }
+    Ok(())
+}
+
 /// The type and the typmod of each column of the relation of a row type: a system catalog or a relation of the catalog of the session.
 fn row_columns(ty: u32, session: &dyn Session) -> Option<Vec<(u32, i32)>> {
     let relid = builtin::type_by_oid(ty).filter(|row| row.relid != 0)?.relid;

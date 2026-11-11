@@ -1139,6 +1139,7 @@ impl Connection {
                         }
                         Changed::Again => {
                             let reader = self.reader();
+                            rerun_row_types(plan, &reader)?;
                             let rows = plan.run(params, &reader)?;
                             // The write keeps its command, which the statements of the triggers came after.
                             let command = view.command;
@@ -3477,6 +3478,17 @@ fn concurrently_dropped(
     };
     let now = objects(now);
     objects(before).iter().any(|oid| !now.contains(oid)).then_some(class)
+}
+
+/// `EvalPlanQual` reads the rows of the functions of `FROM` from the copies of the first scan, as `ROW_MARK_COPY` keeps them, and `ExecEvalWholeRowVar` checks that a composite row of the copy still has the row type of the function. The plan runs again in place of the check, so a row type that changed after the first run started fails as the old row would.
+fn rerun_row_types(plan: &Plan, session: &dyn rupg_func::Session) -> Result<(), Error> {
+    let formed = plan.started();
+    for relation in &plan.query().relations {
+        for (call, _) in relation.function.iter().flat_map(|function| &function.calls) {
+            rupg_func::check_row_type_since(call.ty, formed, session)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -9856,6 +9868,73 @@ mod tests {
         send(&mut a, &query("SELECT pg_advisory_unlock_all()"));
         let lines = out.recv().unwrap();
         assert!(lines.iter().any(|l| l == "CREATE INDEX"), "{lines:?}");
+        drop(cmds);
+        b.join().unwrap();
+    }
+
+    /// `EvalPlanQual` reads the composite row of a function of `FROM` from the copy of the first scan: when the row type changed type during the first run, the recheck after a concurrent update fails as the old row would, as in `eval-plan-qual-rowtype-alter`. With no recheck the write takes the row of the first run.
+    #[test]
+    fn rerun_row_type_altered() {
+        big_stack(rerun_row_type_altered_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn rerun_row_type_altered_cases() {
+        let store = Arc::new(Store::new());
+        let (mut a, _) = connect_to(&store, 1234);
+        send(
+            &mut a,
+            &query(
+                "CREATE TYPE rta AS (b bytea); \
+                 CREATE FUNCTION rta_func() RETURNS rta LANGUAGE plpgsql AS \
+                 $$ BEGIN RETURN ROW('\\x4649584d45'::bytea); END; $$; \
+                 CREATE FUNCTION rta_exec(cmd text) RETURNS int LANGUAGE plpgsql AS \
+                 $$ BEGIN EXECUTE cmd; RETURN 1; END; $$; \
+                 CREATE TABLE tgt (s text, n int); INSERT INTO tgt VALUES (NULL, NULL)",
+            ),
+        );
+        let update = |to: &str| {
+            format!(
+                "UPDATE tgt SET s = x.b::text, \
+                 n = (SELECT rta_exec('ALTER TYPE rta ALTER ATTRIBUTE b TYPE {to}')) \
+                 FROM rta_func() x RETURNING s"
+            )
+        };
+        let lines = send(&mut a, &query(&update("text")));
+        assert!(lines.iter().any(|l| l == "row \\x4649584d45"), "{lines:?}");
+        send(&mut a, &query("BEGIN; UPDATE tgt SET n = 0"));
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        cmds.send(update("bytea")).unwrap();
+        // A reads `pg_stat_activity` from a snapshot that lasts to the end of its transaction, so a third session looks at the wait.
+        let (mut c, _) = connect_to(&store, 1236);
+        let look = query("SELECT wait_event FROM pg_stat_activity WHERE pid = 1235");
+        let mut lines = Vec::new();
+        for _ in 0..2000 {
+            lines = send(&mut c, &look);
+            if lines.iter().any(|l| l == "row transactionid") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(lines.iter().any(|l| l == "row transactionid"), "{lines:?}");
+        send(&mut a, &query("COMMIT"));
+        let lines = out.recv().unwrap();
+        assert!(
+            lines.iter().any(|l| l
+                == "ERROR 42804 row type of datum tuple was altered after the datum's creation"),
+            "{lines:?}"
+        );
         drop(cmds);
         b.join().unwrap();
     }
