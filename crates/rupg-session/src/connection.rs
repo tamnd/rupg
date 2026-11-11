@@ -8277,7 +8277,7 @@ mod tests {
         });
     }
 
-    /// A prepared transaction comes back after a restart, from the log and from an image that a checkpoint wrote while it was prepared: `pg_prepared_xacts` has it, its changes stay invisible, it holds its advisory lock again, and `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it after the restart. A transaction in progress is gone.
+    /// A prepared transaction comes back after a restart, from the log and from an image that a checkpoint wrote while it was prepared: `pg_prepared_xacts` has it, its changes stay invisible, it holds its advisory lock and its row locks again, a row lock stays on the new version of an update that a commit after the prepare made, and `COMMIT PREPARED` or `ROLLBACK PREPARED` ends it after the restart. A transaction in progress is gone.
     #[test]
     fn prepared_transactions_come_back_after_a_restart() {
         use rupg_platform::sim::SimIo;
@@ -8294,10 +8294,26 @@ mod tests {
             };
             let all = "SELECT a, b FROM t ORDER BY a";
             let gids = "SELECT gid FROM pg_prepared_xacts ORDER BY gid";
+            // True when another transaction holds a row lock on the row `a` of `r` that conflicts with `FOR UPDATE`.
+            let locked = |c: &mut Connection, a: i32| {
+                let out = rows(c, &format!("SELECT a FROM r WHERE a = {a} FOR UPDATE NOWAIT"));
+                match out.as_slice() {
+                    [row] if row.contains("could not obtain lock") => true,
+                    [row] if row == &format!("row {a}") => false,
+                    _ => panic!("{out:?}"),
+                }
+            };
             let store = open();
             let (mut a, _) = connect_with(&store, 1234, &config);
             send(&mut a, &query("CREATE TABLE t (a int, b text)"));
             send(&mut a, &query("INSERT INTO t VALUES (1, 'one'), (2, 'two')"));
+            send(&mut a, &query("CREATE TABLE r (a int, b text)"));
+            send(&mut a, &query("INSERT INTO r VALUES (1, 'one'), (2, 'two')"));
+            for sql in
+                ["BEGIN", "SELECT a FROM r WHERE a = 1 FOR UPDATE", "PREPARE TRANSACTION 'g3'"]
+            {
+                send(&mut a, &query(sql));
+            }
             for sql in [
                 "BEGIN",
                 "INSERT INTO t VALUES (3, 'three')",
@@ -8308,16 +8324,31 @@ mod tests {
                 send(&mut a, &query(sql));
             }
             store.checkpoint().unwrap();
-            for sql in ["BEGIN", "DELETE FROM t WHERE a = 1", "PREPARE TRANSACTION 'g2'"] {
+            for sql in [
+                "BEGIN",
+                "DELETE FROM t WHERE a = 1",
+                "PREPARE TRANSACTION 'g2'",
+                "BEGIN",
+                "SELECT a FROM r WHERE a = 2 FOR KEY SHARE",
+                "PREPARE TRANSACTION 'g4'",
+                "UPDATE r SET b = 'two!' WHERE a = 2",
+            ] {
                 send(&mut a, &query(sql));
             }
+            assert!(locked(&mut a, 1));
+            assert!(locked(&mut a, 2));
             let (mut b, _) = connect_with(&store, 1235, &config);
             send(&mut b, &query("BEGIN; INSERT INTO t VALUES (99, 'gone')"));
 
             let back = open();
             let (mut c, _) = connect_with(&back, 1236, &config);
-            assert_eq!(rows(&mut c, gids), ["row g1", "row g2"]);
+            assert_eq!(rows(&mut c, gids), ["row g1", "row g2", "row g3", "row g4"]);
             assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two"]);
+            assert_eq!(rows(&mut c, "SELECT b FROM r ORDER BY a"), ["row one", "row two!"]);
+            assert!(locked(&mut c, 1));
+            assert!(locked(&mut c, 2));
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'g3'"), Vec::<String>::new());
+            assert!(!locked(&mut c, 1));
             assert_eq!(
                 rows(&mut c, "SELECT mode FROM pg_locks WHERE locktype = 'advisory'"),
                 ["row ExclusiveLock"]
@@ -8330,14 +8361,19 @@ mod tests {
 
             let again = open();
             let (mut c, _) = connect_with(&again, 1237, &config);
-            assert_eq!(rows(&mut c, gids), ["row g2"]);
+            assert_eq!(rows(&mut c, gids), ["row g2", "row g4"]);
             assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
+            assert!(!locked(&mut c, 1));
+            assert!(locked(&mut c, 2));
             again.checkpoint().unwrap();
             drop(c);
 
             let last = open();
             let (mut c, _) = connect_with(&last, 1238, &config);
-            assert_eq!(rows(&mut c, gids), ["row g2"]);
+            assert_eq!(rows(&mut c, gids), ["row g2", "row g4"]);
+            assert!(locked(&mut c, 2));
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'g4'"), Vec::<String>::new());
+            assert!(!locked(&mut c, 2));
             assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'g2'"), Vec::<String>::new());
             assert_eq!(rows(&mut c, all), ["row 1,one", "row 2,two!", "row 3,three"]);
             drop(c);

@@ -175,6 +175,8 @@ struct State {
     truncating: HashMap<u32, Vec<(u32, u32)>>,
     /// The transaction that each waiting transaction waits for, the edges of the wait graph of `DeadLockCheck`.
     waits: HashMap<u32, u32>,
+    /// The version and the strength of each wait of [`State::waits`] for a row, which ends when the transaction that it waits for no longer blocks the row.
+    row_waits: HashMap<u32, ((u32, u32, u64), RowStrength)>,
     /// The new versions of the transactions in progress whose keys a deferrable unique index must check again.
     rechecks: Vec<Recheck>,
     /// The number of the values that the writes moved to the TOAST tables, whose OIDs the counter did not give yet.
@@ -235,6 +237,64 @@ type RowLocks = HashMap<(u32, u32, u64), Lockers>;
 
 /// The lockers of a version: the transaction, the strength and the command that took the lock.
 type Lockers = Vec<(u32, RowStrength, u32)>;
+
+/// The row locks of [`State::row_locks`] that the transactions of `keep` hold, with only those lockers, in the order of the versions, for the log and the image of the prepared transactions.
+fn kept_row_locks(locks: &RowLocks, keep: impl Fn(u32) -> bool) -> Vec<((u32, u32, u64), Lockers)> {
+    let mut kept: Vec<_> = locks
+        .iter()
+        .filter_map(|(row, lockers)| {
+            let lockers: Lockers = lockers.iter().copied().filter(|&(x, _, _)| keep(x)).collect();
+            (!lockers.is_empty()).then_some((*row, lockers))
+        })
+        .collect();
+    kept.sort_unstable_by_key(|(row, _)| *row);
+    kept
+}
+
+/// [`Heap::row_blocked`] on the state of the heap.
+fn row_blocked(
+    state: &mut State,
+    (database, relation, tid): (u32, u32, u64),
+    (holder, strength): (u32, RowStrength),
+) -> bool {
+    let State { tables, row_locks, row_queues, .. } = state;
+    // A transaction that waits in the queue of the version with a strength that conflicts holds its tuple lock.
+    if row_queues.get(&(database, relation, tid)).is_some_and(|queue| {
+        queue.iter().any(|&(waiter, wanted)| waiter == holder && row_conflict(wanted, strength))
+    }) {
+        return true;
+    }
+    let Some(table) = tables.get(&(database, relation)) else { return false };
+    let mut tid = tid;
+    loop {
+        let locked = row_locks.get(&(database, relation, tid)).is_some_and(|lockers| {
+            lockers
+                .iter()
+                .any(|&(locker, held, _)| locker == holder && row_conflict(held, strength))
+        });
+        let Some(at) = table.find(tid) else { return locked };
+        let version = &table.versions[at];
+        if locked || version.xmax == holder {
+            return true;
+        }
+        if version.xmax == 0 || matches!(version.next, 0 | MOVED) || version.next == tid {
+            return false;
+        }
+        tid = version.next;
+    }
+}
+
+/// Adds the row locks of [`kept_row_locks`] to `locks`, after a restart.
+fn restore_row_locks(locks: &mut RowLocks, kept: Vec<((u32, u32, u64), Lockers)>) {
+    for (row, lockers) in kept {
+        let held = locks.entry(row).or_default();
+        for locker in lockers {
+            if !held.contains(&locker) {
+                held.push(locker);
+            }
+        }
+    }
+}
 
 /// The waits of [`State::row_queues`] by the version: the transaction and the strength that it wants.
 type RowQueues = HashMap<(u32, u32, u64), Vec<(u32, RowStrength)>>;
@@ -3913,24 +3973,39 @@ impl Heap {
     }
 
     /// Records that `xid` waits for `holder`, as `LockAcquire` adds an edge to the wait graph.
-    pub(crate) fn wait(&self, xid: u32, holder: u32) {
-        self.state().waits.insert(xid, holder);
+    pub(crate) fn wait(&self, xid: u32, holder: u32, row: Option<((u32, u32, u64), RowStrength)>) {
+        let mut state = self.state();
+        state.waits.insert(xid, holder);
+        match row {
+            Some(row) => state.row_waits.insert(xid, row),
+            None => state.row_waits.remove(&xid),
+        };
     }
 
     /// The end of the wait of `xid`.
     pub(crate) fn waited(&self, xid: u32) {
-        self.state().waits.remove(&xid);
+        let mut state = self.state();
+        state.waits.remove(&xid);
+        state.row_waits.remove(&xid);
     }
 
     /// The process IDs of the sessions whose transactions the transactions of the session `pid` wait for.
+    ///
+    /// A wait for a row whose holder no longer blocks the row, after a rollback to a savepoint of the holder, does not count, though the session did not see it yet, as `LockRelease` grants the lock to the waiter at once.
     pub(crate) fn blockers(&self, pid: i32) -> Vec<i32> {
-        let state = self.state();
+        let mut state = self.state();
         let mut pids = Vec::new();
-        for (xid, holder) in &state.waits {
-            if state.owners.get(xid) != Some(&pid) {
+        let waits: Vec<(u32, u32)> = state.waits.iter().map(|(&x, &h)| (x, h)).collect();
+        for (xid, holder) in waits {
+            if state.owners.get(&xid) != Some(&pid) {
                 continue;
             }
-            if let Some(&holder) = state.owners.get(holder)
+            if let Some(&(row, strength)) = state.row_waits.get(&xid)
+                && !row_blocked(&mut state, row, (holder, strength))
+            {
+                continue;
+            }
+            if let Some(&holder) = state.owners.get(&holder)
                 && holder != pid
                 && !pids.contains(&holder)
             {
@@ -3962,35 +4037,10 @@ impl Heap {
     /// True while the transaction `holder` changed the version `tid` of the table `relation` of the database, or a later version of its update chain, or holds a lock on it that conflicts with `strength`. A rollback to a savepoint takes away the change and the locks of its commands, and a wait for the lock then ends, as for the end of the subtransaction in `XactLockTableWait`.
     pub(crate) fn row_blocked(
         &self,
-        (database, relation, tid): (u32, u32, u64),
+        row: (u32, u32, u64),
         (holder, strength): (u32, RowStrength),
     ) -> bool {
-        let mut state = self.state();
-        let State { tables, row_locks, row_queues, .. } = &mut *state;
-        // A transaction that waits in the queue of the version with a strength that conflicts holds its tuple lock.
-        if row_queues.get(&(database, relation, tid)).is_some_and(|queue| {
-            queue.iter().any(|&(waiter, wanted)| waiter == holder && row_conflict(wanted, strength))
-        }) {
-            return true;
-        }
-        let Some(table) = tables.get(&(database, relation)) else { return false };
-        let mut tid = tid;
-        loop {
-            let locked = row_locks.get(&(database, relation, tid)).is_some_and(|lockers| {
-                lockers
-                    .iter()
-                    .any(|&(locker, held, _)| locker == holder && row_conflict(held, strength))
-            });
-            let Some(at) = table.find(tid) else { return locked };
-            let version = &table.versions[at];
-            if locked || version.xmax == holder {
-                return true;
-            }
-            if version.xmax == 0 || matches!(version.next, 0 | MOVED) || version.next == tid {
-                return false;
-            }
-            tid = version.next;
-        }
+        row_blocked(&mut self.state(), row, (holder, strength))
     }
 
     /// True while a transaction is in progress.
@@ -4055,6 +4105,7 @@ impl Heap {
         state.combos.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
+        state.row_waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
         state.unlock_rows(xid);
     }
@@ -4090,32 +4141,35 @@ impl Heap {
         state.truncating.remove(&xid);
         state.owners.remove(&xid);
         state.waits.remove(&xid);
+        state.row_waits.remove(&xid);
         state.rechecks.retain(|recheck| recheck.xid != xid);
         state.unlock_rows(xid);
     }
 
-    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the image keeps its changes from then on, so the log of its commit has no changes. The result is false, with no call of `log`, for a transaction that truncated a table or loaded rows, which a restart does not keep.
+    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the bytes of its row locks, which a restart takes again. The image keeps its changes from then on, so the log of its commit has no changes. The result is false, with no call of `log`, for a transaction that truncated a table or loaded rows, which a restart does not keep.
     pub(crate) fn prepare_logged(
         &self,
         xid: u32,
         meta: Vec<u8>,
-        log: &mut dyn FnMut(Logged<'_>),
+        log: &mut dyn FnMut(Logged<'_>, &[u8]),
     ) -> bool {
         let mut state = self.state();
         if state.truncating.contains_key(&xid) || state.loading.contains_key(&xid) {
             return false;
         }
         state.prepared.insert(xid, meta);
+        let mut locks = Vec::new();
+        kept_row_locks(&state.row_locks, |x| x == xid).put(&mut locks);
         match state.touched.remove(&xid) {
             Some(mut touched) => {
                 let mut out = Vec::new();
                 if state.log_commit(xid, &mut touched, &[], &mut out) {
-                    log(Logged::Changes(&out));
+                    log(Logged::Changes(&out), &locks);
                 } else {
-                    log(Logged::Large);
+                    log(Logged::Large, &locks);
                 }
             }
-            None => log(Logged::Nothing),
+            None => log(Logged::Nothing, &locks),
         }
         true
     }
@@ -4125,14 +4179,26 @@ impl Heap {
         self.state().prepared.iter().map(|(&xid, meta)| (xid, meta.clone())).collect()
     }
 
-    /// The redo of a prepare from the log, after [`Heap::redo`] of its changes: the transaction `xid` is in progress again as a prepared transaction with the bytes `meta`, whose locks the owner [`crate::twophase::Prepared::lock_owner`] holds.
-    pub(crate) fn redo_prepare(&self, xid: u32, meta: Vec<u8>) {
+    /// The redo of a prepare from the log, after [`Heap::redo`] of its changes: the transaction `xid` is in progress again as a prepared transaction with the bytes `meta`, whose heavyweight locks the owner [`crate::twophase::Prepared::lock_owner`] holds, and which holds again the row locks that [`Heap::prepare_logged`] gave, from the rest of `input`. A record of a server before the row locks of the prepared transactions has no more bytes.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` for bytes of row locks that do not read.
+    pub(crate) fn redo_prepare(
+        &self,
+        xid: u32,
+        meta: Vec<u8>,
+        input: &mut Reader<'_>,
+    ) -> Result<()> {
+        let locks = if input.is_empty() { Vec::new() } else { Persist::take(input)? };
         let mut state = self.state();
+        restore_row_locks(&mut state.row_locks, locks);
         state.next_xid = state.next_xid.max(xid.wrapping_add(1));
         Arc::make_mut(&mut state.running).insert(xid);
         state.owners.insert(xid, -xid.cast_signed());
         state.prepared.insert(xid, meta);
         self.publish(&state);
+        Ok(())
     }
 
     /// The redo of `COMMIT PREPARED` or `ROLLBACK PREPARED` from the log. A transaction that the image or the log does not have as prepared ended before the image, so its end does nothing.
@@ -4578,6 +4644,7 @@ impl Heap {
         // An image of a server with no prepared transaction ends with the tables, as an image of an earlier server did.
         if !prepared.is_empty() {
             prepared.put(out);
+            kept_row_locks(&state.row_locks, |x| prepared.contains_key(&x)).put(out);
         }
         imaged
     }
@@ -4659,6 +4726,10 @@ impl Heap {
                 running.insert(xid);
                 state.owners.insert(xid, -xid.cast_signed());
             }
+            // An image of a server before the row locks of the prepared transactions ends with the transactions.
+            if !input.is_empty() {
+                restore_row_locks(&mut state.row_locks, Persist::take(input)?);
+            }
         }
         Ok(Heap {
             state: RwLock::new(state),
@@ -4732,8 +4803,9 @@ impl Heap {
         state.next_xid = state.next_xid.max(xid.wrapping_add(1));
         state.latest_completed = state.latest_completed.max(xid);
         self.publish(&state);
+        let mut updated = Vec::new();
         for _ in 0..input.count()? {
-            let key = Persist::take(input)?;
+            let key: (u32, u32) = Persist::take(input)?;
             let generation: Option<u16> = Persist::take(input)?;
             let table = state.tables.entry(key);
             if let Some(generation) = generation
@@ -4760,6 +4832,20 @@ impl Heap {
                     let version = &mut table.versions[at];
                     (version.xmax, version.cmax, version.next) = (xmax, cmax, next);
                     table.pages.touch(page_of(tid));
+                }
+                if next != 0 && next != MOVED {
+                    updated.push((key, tid, next));
+                }
+            }
+        }
+        // The new version of an update keeps the row locks of the prepared transactions, as `compute_new_xmax_infomask` kept them when the update ran.
+        if !state.row_locks.is_empty() {
+            for ((database, relation), old, next) in updated {
+                if let Some(lockers) = state.row_locks.get(&(database, relation, old)).cloned() {
+                    restore_row_locks(
+                        &mut state.row_locks,
+                        vec![((database, relation, next), lockers)],
+                    );
                 }
             }
         }
@@ -5381,11 +5467,11 @@ mod tests {
             .unwrap(),
             wait
         );
-        heap.wait(b, a);
+        heap.wait(b, a, None);
         assert_eq!(heap.deadlock(b), None);
         assert_eq!(heap.blockers(2), [1]);
         assert_eq!(heap.blockers(1), [] as [i32; 0]);
-        heap.wait(a, b);
+        heap.wait(a, b, None);
         let cycle = heap.deadlock(b).unwrap();
         assert_eq!(cycle, [Wait { pid: 2, xid: a, holder: 1 }, Wait { pid: 1, xid: b, holder: 2 }]);
         heap.waited(a);

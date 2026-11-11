@@ -554,9 +554,12 @@ impl Connection {
                     let context =
                         format!("while locking tuple {} in relation \"{name}\"", tid_text(tid));
                     let row = (view.database, relation, tid);
-                    self.reader().wait_xact_while(view.xid, holder, &context, |heap| {
-                        heap.row_blocked(row, (holder, KEY_SHARE))
-                    })?;
+                    self.reader().wait_xact_while(
+                        view.xid,
+                        holder,
+                        &context,
+                        Some((row, KEY_SHARE)),
+                    )?;
                 }
             }
         }
