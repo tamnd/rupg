@@ -24,3 +24,17 @@ RESET
 search_path="$user", public
 > create index on oo (id int4_ops)
 CREATE INDEX
+> create index oo_b on oo using brin (t text_bloom_ops(false_positive_rate=0.26))
+ERROR 22023 value 0.26 out of bounds for option "false_positive_rate"
+> create index oo_b on oo using brin (t text_bloom_ops(n_distinct_per_range=-1.1))
+ERROR 22023 value -1.1 out of bounds for option "n_distinct_per_range"
+> create index oo_b on oo using brin (t text_bloom_ops(n_distinct_per_range=-0.5, false_positive_rate=0.05))
+CREATE INDEX
+> create index oo_m on oo using brin (id int4_minmax_multi_ops(values_per_range=257))
+ERROR 22023 value 257 out of bounds for option "values_per_range"
+> create index oo_m on oo using brin (id int4_minmax_multi_ops(siglen=16))
+ERROR 22023 unrecognized parameter "siglen"
+> create index oo_m on oo using brin (id int4_minmax_multi_ops(values_per_range=16))
+CREATE INDEX
+> create index oo_n on oo using brin (id int4_minmax_ops(values_per_range=16))
+ERROR 22023 operator class int4_minmax_ops has no options

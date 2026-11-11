@@ -28,6 +28,20 @@ const GIST_TSVECTOR_OPS: u32 = 3655;
 const GTSVECTOR_OPTIONS: &[reloptions::Opt] =
     &[reloptions::Opt { name: "siglen", kind: Kind::Int(1, 2024), toast: false }];
 
+/// `brin_bloom_options`: `n_distinct_per_range`, the number of distinct values in a block range, a fraction of the rows of the range when it is below 0, and `false_positive_rate`, the target rate of false positives of the bloom filter.
+const BRIN_BLOOM_OPTIONS: &[reloptions::Opt] = &[
+    reloptions::Opt {
+        name: "n_distinct_per_range",
+        kind: Kind::Real(-1.0, 2_147_483_647.0),
+        toast: false,
+    },
+    reloptions::Opt { name: "false_positive_rate", kind: Kind::Real(0.0001, 0.25), toast: false },
+];
+
+/// `brin_minmax_multi_options`: `values_per_range`, the number of values that the summary of a block range keeps.
+const BRIN_MINMAX_MULTI_OPTIONS: &[reloptions::Opt] =
+    &[reloptions::Opt { name: "values_per_range", kind: Kind::Int(8, 256), toast: false }];
+
 /// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in families and classes.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
@@ -410,20 +424,31 @@ impl Definer<'_, '_> {
         ))
     }
 
-    /// The options that the options procedure of the family of the class accepts, as `index_opclass_options` gives them to it: `siglen` of `gtsvector_options` for the family `tsvector_ops` of `gist`. The options of the other families are not supported yet.
+    /// The options that the options procedure of the family of the class accepts, as `index_opclass_options` gives them to it: `siglen` of `gtsvector_options` for the family `tsvector_ops` of `gist`, and the options of `brin_bloom_options` and `brin_minmax_multi_options` for the built-in families of `brin` that have them. The options of the other families are not supported yet.
     pub(super) fn opclass_options(
         &self,
         class: u32,
         at: Option<usize>,
     ) -> Result<&'static [reloptions::Opt]> {
-        let family = match self.catalog.opclass(class) {
-            Some(c) => c.family,
-            None => builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.family),
+        let (family, intype) = match self.catalog.opclass(class) {
+            Some(c) => (c.family, c.intype),
+            None => builtin::opclasses()
+                .iter()
+                .find(|c| c.oid == class)
+                .map_or((0, 0), |c| (c.family, c.intype)),
         };
-        match family {
-            GIST_TSVECTOR_OPS => Ok(GTSVECTOR_OPTIONS),
-            _ => Err(not_yet("operator class options", at)),
+        if family == GIST_TSVECTOR_OPS {
+            return Ok(GTSVECTOR_OPTIONS);
         }
+        let procs = builtin::amprocs(family, intype).iter();
+        for name in procs.filter_map(|r| builtin::proc_by_oid(r.proc)).map(|p| p.name) {
+            match name {
+                "brin_bloom_options" => return Ok(BRIN_BLOOM_OPTIONS),
+                "brin_minmax_multi_options" => return Ok(BRIN_MINMAX_MULTI_OPTIONS),
+                _ => {}
+            }
+        }
+        Err(not_yet("operator class options", at))
     }
 
     /// `OpclassnameGetOpcid` and `get_opclass_oid` of `ResolveOpClass`: the class of the access method that the name gives, of the catalog or built in, and the type that it indexes.
