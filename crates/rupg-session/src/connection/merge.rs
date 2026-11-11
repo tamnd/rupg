@@ -70,6 +70,7 @@ impl Connection {
         let (actions, applied) = loop {
             if !info.instead && !self.lock_matched(info, (merge, fire), &view, &rows)? {
                 let reader = self.reader();
+                super::rerun_row_types(plan, &reader)?;
                 rows = plan.run(params, &reader)?;
                 view = reader.view().cloned().unwrap_or_default();
                 continue;
@@ -121,6 +122,7 @@ impl Connection {
                 break (actions, applied);
             }
             let reader = self.reader();
+            super::rerun_row_types(plan, &reader)?;
             rows = plan.run(params, &reader)?;
             view = reader.view().cloned().unwrap_or_default();
         };
@@ -463,6 +465,7 @@ impl Connection {
                 results[seq] = None;
             }
             let reader = self.reader();
+            super::rerun_row_types(plan, &reader)?;
             rows = plan.run(params, &reader)?;
             view = reader.view().cloned().unwrap_or_default();
         }

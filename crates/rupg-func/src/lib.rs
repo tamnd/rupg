@@ -120,8 +120,8 @@ pub use hash::{
 };
 pub use identify::{ddl_command, dropped_object};
 pub use io::{
-    anyarray_array, base_type, check_row_type, input, input_soft, input_supported, is_row_type,
-    output, output_supported, receive, send, to_text,
+    anyarray_array, base_type, check_row_type, check_row_type_since, input, input_soft,
+    input_supported, is_row_type, output, output_supported, receive, send, to_text,
 };
 pub use json::jsonb_subscript_fetch;
 pub use jsonbuild::{

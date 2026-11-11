@@ -44,6 +44,7 @@ impl Plan {
             run: None,
             row_security: self.row_security,
             reads: Arc::default(),
+            started: Arc::default(),
         }
     }
 
@@ -99,6 +100,7 @@ impl Plan {
                 run: None,
                 row_security: None,
                 reads: Arc::default(),
+                started: Arc::default(),
             }
         });
         Some(Locking { plan, locks, limits })
