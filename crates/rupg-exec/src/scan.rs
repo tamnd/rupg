@@ -2263,6 +2263,97 @@ fn int_key(value: &Value) -> Option<i64> {
     })
 }
 
+/// The integer key of a column in each tuple, with `None` for a null, or `None` when a value is not an integer.
+fn int_keys(tables: &Tables, tuples: &[Vec<usize>], var: Var) -> Option<Vec<Option<i64>>> {
+    let mut keys = Vec::with_capacity(tuples.len());
+    for tuple in tuples {
+        let key = tables.with_column(tuple, var, |value| match value {
+            Value::Null => Some(None),
+            value => int_key(value).map(Some),
+        })?;
+        keys.push(key);
+    }
+    Some(keys)
+}
+
+/// The rows of a side of a join for each integer key, in one array in the order of the keys. A row comes before the rows that follow it with the same key.
+struct IntIndex {
+    rows: Vec<usize>,
+    places: Starts,
+}
+
+/// Where the rows of a key start in [`IntIndex::rows`]: in an array with a place for each key from `min`, when the keys are dense, or in a hash map.
+enum Starts {
+    Dense { min: i64, starts: Vec<u32> },
+    Sparse(rupg_kernels::hash::HashMap<i64, (u32, u32)>),
+}
+
+impl IntIndex {
+    /// The index of the keys of the rows of a side, or `None` when the side has too many rows.
+    fn of(keys: &[Option<i64>]) -> Option<IntIndex> {
+        let count = keys.iter().flatten().count();
+        u32::try_from(count).ok()?;
+        let (min, max) =
+            keys.iter().flatten().fold((i64::MAX, i64::MIN), |(lo, hi), &k| (lo.min(k), hi.max(k)));
+        let span = u64::try_from(i128::from(max) - i128::from(min)).unwrap_or(u64::MAX);
+        let limit = u64::try_from(count.saturating_mul(4)).unwrap_or(u64::MAX).max(1 << 16);
+        if count > 0 && span < limit && span < 1 << 28 {
+            let place = |k: i64| usize::try_from(k.abs_diff(min)).unwrap_or(usize::MAX);
+            let mut starts = vec![0_u32; place(max) + 2];
+            for &k in keys.iter().flatten() {
+                starts[place(k) + 1] += 1;
+            }
+            for at in 1..starts.len() {
+                starts[at] += starts[at - 1];
+            }
+            let mut next = starts.clone();
+            let mut rows = vec![0; count];
+            for (row, k) in keys.iter().enumerate() {
+                if let Some(k) = k {
+                    let at = &mut next[place(*k)];
+                    rows[*at as usize] = row;
+                    *at += 1;
+                }
+            }
+            return Some(IntIndex { rows, places: Starts::Dense { min, starts } });
+        }
+        let mut pairs: Vec<(i64, usize)> =
+            keys.iter().enumerate().filter_map(|(row, k)| k.map(|k| (k, row))).collect();
+        pairs.sort_unstable();
+        let mut map = rupg_kernels::hash::HashMap::default();
+        let mut start = 0;
+        for at in 1..=pairs.len() {
+            if at == pairs.len() || pairs[at].0 != pairs[start].0 {
+                map.insert(pairs[start].0, (u32::try_from(start).ok()?, u32::try_from(at).ok()?));
+                start = at;
+            }
+        }
+        let rows = pairs.into_iter().map(|(_, row)| row).collect();
+        Some(IntIndex { rows, places: Starts::Sparse(map) })
+    }
+
+    /// The rows with the key `key`.
+    fn get(&self, key: i64) -> &[usize] {
+        let (start, end) = match &self.places {
+            Starts::Dense { min, starts } => {
+                if key < *min {
+                    return &[];
+                }
+                let Ok(at) = usize::try_from(key.abs_diff(*min)) else { return &[] };
+                match (starts.get(at), starts.get(at + 1)) {
+                    (Some(&start), Some(&end)) => (start, end),
+                    _ => return &[],
+                }
+            }
+            Starts::Sparse(map) => match map.get(&key) {
+                Some(&range) => range,
+                None => return &[],
+            },
+        };
+        &self.rows[start as usize..end as usize]
+    }
+}
+
 /// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` that a hash can test, with a column or an expression of each side, or an `OR` of such `=`s, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
 fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
     let JoinInput { left, right, on, kind, left_relations, right_relations } = input;
@@ -2337,8 +2428,18 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     let mut out = Vec::new();
     let mut index: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
     let mut left_keys = Vec::new();
+    // An `=` of two columns of integers needs no copy of the values. The rows of the right side are in one array in the order of their keys, and a key finds its rows directly when the keys are dense.
+    let ints = match hash {
+        Some((Side::Var(l), Side::Var(r))) if l.attnum > 0 && r.attnum > 0 && !left.is_empty() => {
+            int_keys(tables, &right, *r)
+                .and_then(|keys| IntIndex::of(&keys))
+                .and_then(|found| Some((found, int_keys(tables, &left, *l)?)))
+        }
+        _ => None,
+    };
     if let Some((l, r)) = hash
         && !left.is_empty()
+        && ints.is_none()
     {
         for (i, tuple) in right.iter().enumerate() {
             if let Some(k) = key(value(tuple, r)?) {
@@ -2369,9 +2470,10 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     let mut tuple = Vec::new();
     for (n, l) in left.iter().enumerate() {
         let candidates: &[usize] = match hash {
-            Some(_) => match &left_keys[n] {
-                Some(k) => index.get(k).map_or(&[], Vec::as_slice),
-                None => &[],
+            Some(_) => match (&ints, left_keys.get(n)) {
+                (Some((found, keys)), _) => keys[n].map_or(&[][..], |k| found.get(k)),
+                (None, Some(Some(k))) => index.get(k).map_or(&[], Vec::as_slice),
+                (None, _) => &[],
             },
             None if !arm_indexes.is_empty() => {
                 union.clear();
@@ -2432,4 +2534,37 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod int_index_tests {
+    use super::{IntIndex, Starts};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn an_integer_index_gives_the_rows_of_each_key_in_order() {
+        let dense: Vec<Option<i64>> = (0..5000_i64)
+            .map(|i| if i % 7 == 0 { None } else { Some(1000 + (i * 13) % 900) })
+            .collect();
+        let sparse: Vec<Option<i64>> = (0..3000_i64)
+            .map(|i| if i % 11 == 0 { None } else { Some(((i % 500) - 250) * 1_000_003) })
+            .collect();
+        for (keys, want_dense) in [(dense, true), (sparse, false)] {
+            let found = IntIndex::of(&keys).unwrap();
+            assert_eq!(matches!(found.places, Starts::Dense { .. }), want_dense);
+            let mut want: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+            for (row, k) in keys.iter().enumerate() {
+                if let Some(k) = k {
+                    want.entry(*k).or_default().push(row);
+                }
+            }
+            for (k, rows) in &want {
+                assert_eq!(found.get(*k), rows.as_slice());
+            }
+            for k in [i64::MIN, -1, 999, 1900, 2000, i64::MAX, 7] {
+                assert_eq!(found.get(k), want.get(&k).map_or(&[][..], Vec::as_slice));
+            }
+        }
+        assert!(IntIndex::of(&[None, None]).unwrap().get(0).is_empty());
+    }
 }
