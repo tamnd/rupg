@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A prepared statement keeps its composite constants when the catalog changes. Like PostgreSQL's plan cache, it only replans when a relation it reads changes, so after `ALTER TABLE ... ALTER COLUMN ... TYPE` or `ALTER TYPE ... ALTER ATTRIBUTE ... TYPE` the old constant fails with `42804 row type of datum tuple was altered after the datum's creation`. The isolation test `rowtypes-alter` passes (#1500)
 - After a checkpoint, the store reads back only the frozen columns of each table at the places that the image recorded, and does not parse the whole image again. On the TPC-H SF0.1 load, `CHECKPOINT` goes from 2.29 s to 1.01 s and the peak memory of the server goes from 1461 MB to 1072 MB (#1498).
 - In `READ COMMITTED`, when an `UPDATE`, `DELETE` or `MERGE` reruns after a concurrent update and a function in `FROM` returns a composite type whose column changed type since the first run started, it now fails with `42804 row type of datum tuple was altered after the datum's creation`, as PostgreSQL's `EvalPlanQual` does with the row it copied from the first scan. The isolation test `eval-plan-qual-rowtype-alter` passes (#1499)
 - `CREATE INDEX` and `CREATE INDEX CONCURRENTLY` fold the constant parts of the index predicate at build, as `RelationGetIndexPredicate` does, even on an empty table. An immutable function in the predicate that waits on an advisory lock no longer holds the catalog lock while it waits, so the isolation test `multiple-cic` passes (#1497)
