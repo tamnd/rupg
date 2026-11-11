@@ -229,6 +229,15 @@ pub struct HeapSize {
     pub vm_blocks: u32,
 }
 
+/// A change of the revmap of a BRIN index, for [`Session::brin_ranges`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrinRanges {
+    /// `brin_summarize_range`: a summary for each range of the heap with none for `None`, else for the range with the block, also for a last range that the heap does not fill.
+    Summarize(Option<u32>),
+    /// `brin_desummarize_range`: the range with the block loses its summary.
+    Desummarize(u32),
+}
+
 /// The values of all the columns of a version as the store keeps them, and the ID of the version, for [`Session::table_shared_rows_by_key`].
 pub type SharedRow = (Arc<[Value]>, u64);
 
@@ -794,6 +803,24 @@ pub trait Session {
     fn pending_function(&self, func: u32) -> Option<FunctionCounts> {
         let _ = func;
         None
+    }
+    /// `brinsummarize` and `brinRevmapDesummarizeRange` for the BRIN index `index` of the database of the session, which the caller checked: the number of the ranges that got a summary.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` for a session with no rows.
+    fn brin_ranges(&self, index: u32, change: BrinRanges) -> Result<u32> {
+        let _ = (index, change);
+        Err(not_yet("the block ranges of a BRIN index"))
+    }
+    /// `ginInsertCleanup` of the GIN index `index` of the database of the session, which the caller checked: the number of the pages of the pending list that it deleted.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` for a session with no rows.
+    fn gin_clean_pending_list(&self, index: u32) -> Result<u64> {
+        let _ = index;
+        Err(not_yet("the pending list of a GIN index"))
     }
     /// `pgstat_reset_counters` for `None`, which sets the counters of the relations and the functions of the database of the session to 0, and `pgstat_reset` of one relation or function, which sets its counters to 0 when it has an entry.
     fn reset_counters(&self, object: Option<u32>) {

@@ -54,6 +54,7 @@ pub fn object_address(
         schema: None,
         top_level: None,
         concurrent: None,
+        reindexed: Vec::new(),
     };
     definer.object_address(objtype, object)
 }

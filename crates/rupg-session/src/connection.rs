@@ -75,6 +75,7 @@ use copy_from::Begin;
 pub(crate) use explain::{btree_shape, planned};
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
+pub(crate) use vacuum::{brin_ranges, gin_pending_pages_with};
 use writes::Writes;
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
@@ -2068,9 +2069,48 @@ impl Connection {
                     return Err(error);
                 }
                 Arc::make_mut(&mut lease.catalog).advance_oid(work.next_oid());
+                if analyzed && !defined.reindexed.is_empty() {
+                    // The first transaction of `ReindexRelationConcurrently` committed a copy of each index, so after a failure of a build the copies stay, invalid and not ready.
+                    let catalog = Arc::make_mut(&mut lease.catalog);
+                    let mut copies = Vec::new();
+                    for &index in &defined.reindexed {
+                        if catalog.relation(index).is_some() {
+                            copies.push((index, catalog.copy_index_concurrently(index)?));
+                        }
+                    }
+                    let catalog = Arc::clone(&lease.catalog);
+                    if let Some(lease) = held.take() {
+                        lease.commit();
+                    }
+                    drop(held);
+                    return Err(self.copy_build_error(error, &catalog, &copies));
+                }
                 Err(error)
             }
         }
+    }
+
+    /// The error of the build of an index of `REINDEX CONCURRENTLY`, which builds the copy of each index of `copies`: a duplicate key of the unique index names its copy.
+    fn copy_build_error(&self, error: Error, catalog: &Catalog, copies: &[(u32, u32)]) -> Error {
+        if error.state() != SqlState::UNIQUE_VIOLATION {
+            return error;
+        }
+        for &(index, copy) in copies {
+            let (Some(old), Some(new)) = (catalog.relation(index), catalog.relation(copy)) else {
+                continue;
+            };
+            if error.message() != format!("could not create unique index \"{}\"", old.name) {
+                continue;
+            }
+            let table = old.index.as_ref().map_or(0, |i| i.table);
+            let renamed = Error::new(
+                SqlState::UNIQUE_VIOLATION,
+                format!("could not create unique index \"{}\"", new.name),
+            )
+            .with_detail_opt(error.detail().map(str::to_owned));
+            return rupg_func::with_table_constraint(renamed, table, &new.name, &self.reader());
+        }
+        error
     }
 
     /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used. `REFRESH MATERIALIZED VIEW` fills the materialized view with the rows of its query, as `refresh_matview_datafill` writes them, and the `INSERT` reads the materialized view, which gives its query there. The scans of the system catalogs of the query of `CREATE TABLE AS` read `old`, so that they do not see the new table.

@@ -199,6 +199,21 @@ struct State {
     multixacts: (u64, u64),
     /// The prepared transactions that a restart keeps, by their transaction IDs, with the bytes of what the log keeps of each, as the state files of `pg_twophase` keep them. A prepared transaction stays in `running`, and the image keeps its changes as the changes of a commit.
     prepared: BTreeMap<u32, Vec<u8>>,
+    /// The revmap of each BRIN index: the block ranges that have a summary, by the OID of the database and the OID of the index, with the file of the index that the ranges belong to. A new file is a new build. rupg keeps no summary tuples, as a scan of a BRIN index reads all the rows of the table, so only the count of the ranges that `brin_summarize_range` summarizes depends on the revmap.
+    brin: BTreeMap<(u32, u32), (u32, BTreeSet<u32>)>,
+    /// The pending list of each GIN index with `fastupdate`: [`Table::made`] of its table at the last flush of the list, by the OID of the database and the OID of the index, with the file of the index. The versions that the table got after it are the rows of the list.
+    gin_pending: BTreeMap<(u32, u32), (u32, u64)>,
+}
+
+/// A change of the revmap of a BRIN index, for [`Heap::brin`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BrinChange {
+    /// `brinbuild`: a summary for each range of the heap, and for the first range of an empty heap.
+    Build,
+    /// `brinsummarize`: a summary for each range with none, of all the heap for `None`, else of the range with the block. `true` summarizes a last range that the heap does not fill.
+    Summarize(Option<u32>, bool),
+    /// `brinRevmapDesummarizeRange`: the range with the block loses its summary.
+    Desummarize(u32),
 }
 
 /// The strength of a row lock, `LockTupleMode`, in the order of `LockClauseStrength` from 1.
@@ -3958,6 +3973,87 @@ impl Heap {
         self.state_read().unlogged
     }
 
+    /// A change of the revmap of the BRIN index `index` of the database `database`, whose file is `file`, with `pages_per_range` of `per_range`, for a table of `blocks` pages. The result is the number of the ranges that got a summary. An index with no revmap or with the revmap of another file has the revmap of a build first, as after a restart from an earlier image.
+    pub(crate) fn brin(
+        &self,
+        (database, index, file): (u32, u32, u32),
+        blocks: u32,
+        per_range: u32,
+        change: BrinChange,
+    ) -> u32 {
+        let per_range = u64::from(per_range.max(1));
+        let blocks = u64::from(blocks);
+        // The ranges from the range of the block `start` to the end of the heap, with a last range that the heap does not fill when `partial` is true.
+        let ranges = |start: u64, partial: bool| {
+            let end = if partial { blocks.div_ceil(per_range) } else { blocks / per_range };
+            let first = start / per_range;
+            (first..end).filter_map(|range| u32::try_from(range).ok())
+        };
+        let built = || -> BTreeSet<u32> {
+            let mut built: BTreeSet<u32> = ranges(0, true).collect();
+            built.insert(0);
+            built
+        };
+        let mut state = self.state();
+        state.unlogged += 1;
+        let entry = state.brin.entry((database, index)).or_insert_with(|| (file, built()));
+        if entry.0 != file || matches!(change, BrinChange::Build) {
+            *entry = (file, built());
+        }
+        let summarized = &mut entry.1;
+        match change {
+            BrinChange::Build => 0,
+            BrinChange::Summarize(None, partial) => {
+                let count = ranges(0, partial).filter(|&range| summarized.insert(range)).count();
+                u32::try_from(count).unwrap_or(u32::MAX)
+            }
+            BrinChange::Summarize(Some(block), partial) => {
+                let start = u64::from(block) / per_range * per_range;
+                let fits = start + per_range <= blocks || (partial && start < blocks);
+                let range = u32::try_from(start / per_range).unwrap_or(u32::MAX);
+                u32::from(fits && summarized.insert(range))
+            }
+            BrinChange::Desummarize(block) => {
+                let range = u32::try_from(u64::from(block) / per_range).unwrap_or(u32::MAX);
+                summarized.remove(&range);
+                0
+            }
+        }
+    }
+
+    /// The BRIN and GIN indexes of the database `database` that are not in `kept` lose their revmaps and their pending lists.
+    pub(crate) fn index_state_keep(&self, database: u32, kept: &BTreeSet<u32>) {
+        let mut state = self.state();
+        let before = state.brin.len() + state.gin_pending.len();
+        state.brin.retain(|&(db, index), _| db != database || kept.contains(&index));
+        state.gin_pending.retain(|&(db, index), _| db != database || kept.contains(&index));
+        if state.brin.len() + state.gin_pending.len() != before {
+            state.unlogged += 1;
+        }
+    }
+
+    /// The rows of the pending list of the GIN index `index` of the table `table` of the database `database`, whose file is `file`: the versions that the table got after the last flush. `flush` empties the list, as `ginInsertCleanup` does. An index with no list or with the list of another file has an empty list, as after its build.
+    pub(crate) fn gin_pending(
+        &self,
+        (database, table, index, file): (u32, u32, u32, u32),
+        flush: bool,
+    ) -> u64 {
+        let mut state = self.state();
+        let made = state.tables.meta(&(database, table)).map_or(0, |table| table.made);
+        let entry = state.gin_pending.get(&(database, index)).copied();
+        let rows = match entry {
+            Some((f, mark)) if f == file => made.saturating_sub(mark),
+            _ => 0,
+        };
+        if flush || entry.is_none_or(|(f, _)| f != file) {
+            if entry != Some((file, made)) {
+                state.unlogged += 1;
+            }
+            state.gin_pending.insert((database, index), (file, made));
+        }
+        rows
+    }
+
     /// `vac_update_relstats`: sets `relpages` and `reltuples` of a table, outside of the transactions.
     pub(crate) fn set_stats(&self, database: u32, relation: u32, relpages: i32, reltuples: f32) {
         let mut state = self.state();
@@ -4710,8 +4806,8 @@ impl Heap {
                 None => out.push(0),
             }
         }
-        // An image of a server with no prepared transaction ends with the tables, as an image of an earlier server did.
-        if !prepared.is_empty() {
+        // An image of a server with no prepared transaction and no revmap of a BRIN index ends with the tables, as an image of an earlier server did.
+        if !prepared.is_empty() || !state.brin.is_empty() || !state.gin_pending.is_empty() {
             prepared.put(out);
             kept_row_locks(&state.row_locks, |x| prepared.contains_key(&x)).put(out);
             let mut truncated: Vec<_> = state
@@ -4728,6 +4824,11 @@ impl Heap {
             for (key, xid, command, pages) in truncated {
                 (*key, *xid, *command).put(out);
                 pages.put(out);
+            }
+            // The revmaps of the BRIN indexes and the pending lists of the GIN indexes, after the prepared transactions, as an earlier image ends with them.
+            if !state.brin.is_empty() || !state.gin_pending.is_empty() {
+                state.brin.put(out);
+                state.gin_pending.put(out);
             }
         }
         imaged
@@ -4826,6 +4927,11 @@ impl Heap {
                     table.truncated.push((xid, command, pages));
                     state.truncating.entry(xid).or_default().push(key);
                 }
+            }
+            // The revmaps of the BRIN indexes and the pending lists of the GIN indexes. An earlier image ends with the pages from before the `TRUNCATE`.
+            if !input.is_empty() {
+                state.brin = Persist::take(input)?;
+                state.gin_pending = Persist::take(input)?;
             }
         }
         Ok(Heap {
@@ -5255,6 +5361,48 @@ mod tests {
         let state = heap.state();
         let table = &state.tables.0[&(1, 7)];
         assert!(table.cold.is_some() && table.frozen.is_some() && table.kept.is_none());
+    }
+
+    /// `brin_summarize_range` of `brin.sql`: a build of an empty table summarizes the first range, the inserts summarize nothing, and a range that the heap does not fill gets a summary from the function but not from `VACUUM`. The revmaps and the pending lists of the GIN indexes stay through an image.
+    #[test]
+    fn brin_ranges_and_gin_pending_lists() {
+        use BrinChange::{Build, Desummarize, Summarize};
+        let heap = Heap::default();
+        let brin = |blocks, change| heap.brin((1, 20, 21), blocks, 2, change);
+        assert_eq!(brin(0, Build), 0);
+        // Three pages: the range of blocks 0 and 1 has its summary from the build.
+        assert_eq!(brin(3, Summarize(Some(0), true)), 0);
+        assert_eq!(brin(3, Summarize(Some(1), true)), 0);
+        assert_eq!(brin(3, Summarize(Some(2), true)), 1);
+        assert_eq!(brin(3, Summarize(None, true)), 0);
+        // A range past the end of the heap gets no summary.
+        assert_eq!(brin(3, Summarize(Some(4), true)), 0);
+        assert_eq!(brin(3, Desummarize(2)), 0);
+        assert_eq!(brin(3, Desummarize(100_000_000)), 0);
+        // `VACUUM` leaves the last range that the heap does not fill.
+        assert_eq!(brin(3, Summarize(None, false)), 0);
+        assert_eq!(brin(4, Summarize(None, false)), 1);
+        assert_eq!(brin(4, Desummarize(0)), 0);
+        assert_eq!(brin(4, Summarize(Some(0), true)), 1);
+        // A new file of the index is a new build.
+        assert_eq!(heap.brin((1, 20, 22), 6, 2, Summarize(None, true)), 0);
+        assert_eq!(heap.brin((1, 20, 22), 6, 2, Desummarize(5)), 0);
+
+        let xid = heap.begin(1);
+        assert_eq!(heap.gin_pending((1, 7, 30, 31), true), 0);
+        let rows = (0..5).map(|i| vec![Value::Int8(i)]).collect();
+        heap.insert(7, &view(heap.snapshot(), xid, 0), rows, (&[], &none), &[]).unwrap();
+        heap.commit(xid);
+        assert_eq!(heap.gin_pending((1, 7, 30, 31), false), 5);
+
+        let mut image = Vec::new();
+        heap.image(&mut image);
+        let back = Heap::from_image(&mut Reader::new(&image)).unwrap();
+        assert_eq!(back.brin((1, 20, 22), 6, 2, Summarize(None, true)), 1);
+        assert_eq!(back.gin_pending((1, 7, 30, 31), true), 5);
+        assert_eq!(back.gin_pending((1, 7, 30, 31), false), 0);
+        back.index_state_keep(1, &BTreeSet::new());
+        assert!(back.state().brin.is_empty() && back.state().gin_pending.is_empty());
     }
 
     #[test]

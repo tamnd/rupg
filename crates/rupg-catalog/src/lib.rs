@@ -2725,6 +2725,60 @@ impl Catalog {
         Ok(())
     }
 
+    /// `index_concurrently_create_copy` of `REINDEX CONCURRENTLY`: a new index with the definition of `index`, named `index_ccnew`, with `_ccnew1` and so on when the name is taken, which is not valid and not ready, as the first transaction of `ReindexRelationConcurrently` commits it before the build. The copy is for no constraint, so it depends on the columns of its table, not on a constraint. The result is the OID of the copy.
+    ///
+    /// # Errors
+    ///
+    /// `XX000` when `index` is not an index.
+    pub fn copy_index_concurrently(&mut self, index: u32) -> Result<u32> {
+        let old = self.relations.get(&index).ok_or_else(|| no_object("relation", index))?.clone();
+        let Some(info) = old.index.as_ref() else {
+            return Err(Error::internal(format!("relation {index} is not an index")));
+        };
+        let name = self.choose_relation_name(&old.name, None, "ccnew", old.namespace, true);
+        let oid = self.new_oid();
+        let mut copy = old.clone();
+        copy.oid = oid;
+        copy.file = oid;
+        copy.name = name;
+        if let Some(info) = copy.index.as_mut() {
+            info.primary = false;
+            info.immediate = true;
+            info.clustered = false;
+            info.replica_identity = false;
+            info.valid = false;
+            info.ready = false;
+            info.parent = 0;
+        }
+        let table = info.table;
+        let constrained = self.constraints.values().any(|c| c.index == index);
+        let keys = info.keys.clone();
+        self.relations.insert(oid, copy);
+        let old_ref = ObjRef::new(PG_CLASS, index);
+        let me = ObjRef::new(PG_CLASS, oid);
+        let copied: Vec<(ObjRef, DepKind)> = self
+            .depends
+            .iter()
+            .filter(|d| d.object == old_ref && d.referenced.class != PG_CONSTRAINT)
+            .map(|d| (d.referenced, d.kind))
+            .collect();
+        if constrained {
+            let mut simple: Vec<i16> = keys.iter().copied().filter(|&k| k != 0).collect();
+            simple.sort_unstable();
+            simple.dedup();
+            if simple.is_empty() {
+                self.depend(me, ObjRef::new(PG_CLASS, table), DepKind::Auto);
+            }
+            for key in simple {
+                self.depend(me, ObjRef::column(table, key), DepKind::Auto);
+            }
+        }
+        for (referenced, kind) in copied {
+            self.depend(me, referenced, kind);
+        }
+        Ok(oid)
+    }
+
     /// Sets `conislocal` and `coninhcount` of a constraint that a parent table gives.
     pub fn set_constraint_inherited(
         &mut self,
