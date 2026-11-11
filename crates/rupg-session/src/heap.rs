@@ -4146,7 +4146,7 @@ impl Heap {
         state.unlock_rows(xid);
     }
 
-    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the bytes of its row locks, which a restart takes again. The image keeps its changes from then on, so the log of its commit has no changes. The result is false, with no call of `log`, for a transaction that truncated a table or loaded rows, which a restart does not keep.
+    /// `EndPrepare` for the rows: the transaction `xid`, which stays in progress, becomes a prepared transaction that a restart keeps, with the bytes `meta` of what the log keeps of it. `log` gets once while the heap is locked the bytes of its changes, as [`Heap::commit_logged`] gives them for a commit, and the bytes of its row locks, which a restart takes again. The image keeps its changes from then on, so the log of its commit has no changes. A transaction that truncated a table gives [`Logged::Large`], as the log of a commit has no pages from before a `TRUNCATE`, and the image keeps them. The result is false, with no call of `log`, for a transaction that loaded rows, which a restart does not keep.
     pub(crate) fn prepare_logged(
         &self,
         xid: u32,
@@ -4154,13 +4154,15 @@ impl Heap {
         log: &mut dyn FnMut(Logged<'_>, &[u8]),
     ) -> bool {
         let mut state = self.state();
-        if state.truncating.contains_key(&xid) || state.loading.contains_key(&xid) {
+        if state.loading.contains_key(&xid) {
             return false;
         }
         state.prepared.insert(xid, meta);
         let mut locks = Vec::new();
         kept_row_locks(&state.row_locks, |x| x == xid).put(&mut locks);
+        let truncated = state.truncating.contains_key(&xid);
         match state.touched.remove(&xid) {
+            _ if truncated => log(Logged::Large, &locks),
             Some(mut touched) => {
                 let mut out = Vec::new();
                 if state.log_commit(xid, &mut touched, &[], &mut out) {
@@ -4618,8 +4620,9 @@ impl Heap {
                 None => table.each_kept_row(None, |v| !gone(&v.xmin), put),
             }
             table.made.put(out);
-            // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts.
-            table.truncated.first().map_or(&table.pages, |(.., pages)| pages).put(out);
+            // The pages of the heap before the `TRUNCATE` of a transaction in progress, which aborts. A prepared transaction keeps the pages after its `TRUNCATE`, and the pages before it come after the prepared transactions.
+            let truncated = table.truncated.first().filter(|(x, ..)| !prepared.contains_key(x));
+            truncated.map_or(&table.pages, |(.., pages)| pages).put(out);
             table.statistics.put(out);
             table.lp_dead.put(out);
             table.fixed.put(out);
@@ -4645,6 +4648,21 @@ impl Heap {
         if !prepared.is_empty() {
             prepared.put(out);
             kept_row_locks(&state.row_locks, |x| prepared.contains_key(&x)).put(out);
+            let mut truncated: Vec<_> = state
+                .tables
+                .0
+                .iter()
+                .filter_map(|(key, table)| {
+                    let (xid, command, pages) = table.truncated.first()?;
+                    prepared.contains_key(xid).then_some((key, xid, command, pages))
+                })
+                .collect();
+            truncated.sort_unstable_by_key(|&(key, ..)| key);
+            put_count(out, truncated.len());
+            for (key, xid, command, pages) in truncated {
+                (*key, *xid, *command).put(out);
+                pages.put(out);
+            }
         }
         imaged
     }
@@ -4729,6 +4747,20 @@ impl Heap {
             // An image of a server before the row locks of the prepared transactions ends with the transactions.
             if !input.is_empty() {
                 restore_row_locks(&mut state.row_locks, Persist::take(input)?);
+            }
+            // The pages from before the `TRUNCATE` of each table that a prepared transaction truncated, which `ROLLBACK PREPARED` brings back. An earlier image ends with the row locks.
+            if !input.is_empty() {
+                for _ in 0..input.count()? {
+                    let (key, xid, command): ((u32, u32), u32, u32) = Persist::take(input)?;
+                    let pages = Persist::take(input)?;
+                    let Some(table) = state.tables.0.get_mut(&key) else {
+                        return Err(rupg_common::persist::corrupt(
+                            "a prepared transaction truncated a table that is not in the image",
+                        ));
+                    };
+                    table.truncated.push((xid, command, pages));
+                    state.truncating.entry(xid).or_default().push(key);
+                }
             }
         }
         Ok(Heap {

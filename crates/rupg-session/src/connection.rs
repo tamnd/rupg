@@ -8489,6 +8489,102 @@ mod tests {
         });
     }
 
+    /// A prepared transaction that truncated or rewrote a table comes back after a crash with the rows from before the `TRUNCATE` and the rows after it, and `ROLLBACK PREPARED` brings back the rows from before, and `COMMIT PREPARED` keeps the rows after, through the log and through an image.
+    #[test]
+    fn a_prepared_truncate_comes_back_after_a_restart() {
+        use rupg_platform::sim::SimIo;
+        big_stack(|| {
+            let io = Arc::new(SimIo::new(1));
+            let path = std::path::PathBuf::from("/data/data.rupg");
+            let config = [("max_prepared_transactions".to_string(), "10".to_string())];
+            let open = || Arc::new(Store::new().with_image(io.clone(), path.clone()).unwrap());
+            let rows = |c: &mut Connection, sql: &str| -> Vec<String> {
+                send(c, &query(sql))
+                    .into_iter()
+                    .filter(|l| l.starts_with("row ") || l.contains("ERROR"))
+                    .collect()
+            };
+            let gids = "SELECT gid FROM pg_prepared_xacts ORDER BY gid";
+            let all = "SELECT * FROM t ORDER BY a";
+            let store = open();
+            let (mut a, _) = connect_with(&store, 1234, &config);
+            send(&mut a, &query("CREATE TABLE t (a int)"));
+            send(&mut a, &query("CREATE TABLE other (a int)"));
+            send(&mut a, &query("INSERT INTO t VALUES (1), (2)"));
+            for sql in
+                ["BEGIN", "TRUNCATE t", "INSERT INTO t VALUES (3)", "PREPARE TRANSACTION 'tr'"]
+            {
+                send(&mut a, &query(sql));
+            }
+            send(&mut a, &query("INSERT INTO other VALUES (1)"));
+
+            let back = open();
+            let (mut c, _) = connect_with(&back, 1235, &config);
+            assert_eq!(rows(&mut c, gids), ["row tr"]);
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'tr'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 1", "row 2"]);
+            // The rollback brings back the pages from before the `TRUNCATE`, so a new row goes after the old rows.
+            send(&mut c, &query("INSERT INTO t VALUES (9)"));
+            assert_eq!(
+                rows(&mut c, "SELECT ctid, a FROM t ORDER BY a"),
+                ["row (0,1),1", "row (0,2),2", "row (0,3),9"]
+            );
+            send(&mut c, &query("DELETE FROM t WHERE a = 9"));
+            for sql in
+                ["BEGIN", "TRUNCATE t", "INSERT INTO t VALUES (4)", "PREPARE TRANSACTION 'tr2'"]
+            {
+                send(&mut c, &query(sql));
+            }
+            send(&mut c, &query("INSERT INTO other VALUES (2)"));
+            drop(c);
+
+            let again = open();
+            let (mut c, _) = connect_with(&again, 1236, &config);
+            assert_eq!(rows(&mut c, gids), ["row tr2"]);
+            again.checkpoint().unwrap();
+            drop(c);
+
+            let last = open();
+            let (mut c, _) = connect_with(&last, 1237, &config);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'tr2'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 4"]);
+            for sql in [
+                "BEGIN",
+                "ALTER TABLE t ADD COLUMN b text DEFAULT 'x'",
+                "PREPARE TRANSACTION 'alter'",
+            ] {
+                send(&mut c, &query(sql));
+            }
+            drop(c);
+
+            let end = open();
+            let (mut c, _) = connect_with(&end, 1238, &config);
+            assert_eq!(rows(&mut c, gids), ["row alter"]);
+            assert_eq!(rows(&mut c, "COMMIT PREPARED 'alter'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 4,x"]);
+            for sql in ["BEGIN", "TRUNCATE other", "PREPARE TRANSACTION 'other'"] {
+                send(&mut c, &query(sql));
+            }
+            end.checkpoint().unwrap();
+            drop(c);
+
+            let then = open();
+            let (mut c, _) = connect_with(&then, 1240, &config);
+            assert_eq!(rows(&mut c, gids), ["row other"]);
+            assert_eq!(rows(&mut c, "ROLLBACK PREPARED 'other'"), Vec::<String>::new());
+            assert_eq!(rows(&mut c, "SELECT * FROM other ORDER BY a"), ["row 1", "row 2"]);
+            drop(c);
+
+            let done = open();
+            let (mut c, _) = connect_with(&done, 1239, &config);
+            assert_eq!(rows(&mut c, gids), Vec::<String>::new());
+            assert_eq!(rows(&mut c, all), ["row 4,x"]);
+            assert_eq!(rows(&mut c, "SELECT * FROM other ORDER BY a"), ["row 1", "row 2"]);
+            send(&mut c, &query("INSERT INTO t VALUES (5)"));
+            assert_eq!(rows(&mut c, all), ["row 4,x", "row 5,x"]);
+        });
+    }
+
     /// A timed checkpoint writes the image only after a change: a commit that the log has, or the statistics of `ANALYZE` and the stats of `VACUUM`, which the log does not have. A load that read records from the log writes the image at its first timed checkpoint, and a load with an empty log does not.
     #[test]
     fn a_timed_checkpoint_writes_the_image_only_after_a_change() {
