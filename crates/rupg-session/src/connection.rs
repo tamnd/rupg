@@ -1765,7 +1765,31 @@ impl Connection {
                 return self.detach_concurrently(node, text, notices, role);
             }
         }
+        if let Node::IndexStmt(stmt) = node {
+            self.fold_index_predicate(stmt, notices);
+        }
         self.define_allowed(node, text, notices, role, call)
+    }
+
+    /// `RelationGetIndexPredicate` of `index_build`: the build folds the constant parts of the predicate of the new index of `stmt`, as `eval_const_expressions` does, so that an immutable function with constant arguments runs, also for a table with no rows. The fold runs before the definition takes the lock of the catalog, so that a function that waits, as for an advisory lock, does not stop the definitions of the other sessions. The fold keeps a part that fails, and the definition reports the errors of the predicate.
+    fn fold_index_predicate(&self, stmt: &rupg_sql::nodes::IndexStmt, notices: &mut Vec<Notice>) {
+        let (Some(relation), Some(predicate)) = (&stmt.relation, &stmt.whereClause) else {
+            return;
+        };
+        let relation = RangeVar { inh: false, ..(**relation).clone() };
+        let select = SelectStmt {
+            fromClause: vec![Some(relation.into())],
+            whereClause: Some(predicate.clone()),
+            ..SelectStmt::default()
+        };
+        let reader = self.reader();
+        let select = Node::SelectStmt(Box::new(select));
+        if let Ok(mut query) = rupg_analyze::analyze(&select, &reader, &Params::default())
+            && let Some(filter) = query.filter.take()
+        {
+            rupg_exec::fold_qual(&query, filter, &reader);
+        }
+        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
     }
 
     /// The waits of `DefineIndex` for `CREATE INDEX CONCURRENTLY` before the build and before the validation of the index `index`: each waits for the transactions that hold a lock on its table that conflicts with `ShareLock`, the writers, as `WaitForLockers` waits. A failure of a wait leaves the index invalid, as the failure of the build does.
@@ -9780,6 +9804,58 @@ mod tests {
                 send(&mut a, &query("DELETE FROM k"));
             }
         }
+        drop(cmds);
+        b.join().unwrap();
+    }
+
+    /// The build of `CREATE INDEX CONCURRENTLY` folds the predicate of the index, also on a table with no rows, so an immutable function of the predicate that takes an advisory lock waits for it. The wait does not hold the lock of the catalog, so another `CREATE INDEX CONCURRENTLY` runs, as in the isolation test `multiple-cic`.
+    #[test]
+    fn index_predicate_fold_waits() {
+        big_stack(index_predicate_fold_waits_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn index_predicate_fold_waits_cases() {
+        let store = Arc::new(Store::new());
+        let (mut a, _) = connect_to(&store, 1234);
+        send(
+            &mut a,
+            &query(
+                "CREATE TABLE one (id int); CREATE TABLE two (id int); \
+                 CREATE FUNCTION lck_shr(bigint) RETURNS bool IMMUTABLE LANGUAGE plpgsql AS \
+                 $$ BEGIN PERFORM pg_advisory_lock_shared($1); RETURN true; END; $$",
+            ),
+        );
+        send(&mut a, &query("SELECT pg_advisory_lock(281457)"));
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        let look = query("SELECT wait_event FROM pg_stat_activity WHERE pid = 1235");
+        cmds.send("CREATE INDEX CONCURRENTLY one_i ON one (id) WHERE lck_shr(281457)".into())
+            .unwrap();
+        let mut lines = Vec::new();
+        for _ in 0..2000 {
+            lines = send(&mut a, &look);
+            if lines.iter().any(|l| l == "row advisory") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(lines.iter().any(|l| l == "row advisory"), "{lines:?}");
+        let lines = send(&mut a, &query("CREATE INDEX CONCURRENTLY two_i ON two (id)"));
+        assert!(lines.iter().any(|l| l == "CREATE INDEX"), "{lines:?}");
+        send(&mut a, &query("SELECT pg_advisory_unlock_all()"));
+        let lines = out.recv().unwrap();
+        assert!(lines.iter().any(|l| l == "CREATE INDEX"), "{lines:?}");
         drop(cmds);
         b.join().unwrap();
     }
