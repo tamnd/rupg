@@ -551,8 +551,10 @@ impl Col {
             Data::Int(v) => v[i] as u64,
             Data::Float(v) => float_word(v[i]),
             Data::Code(v, _) => u64::from(v[i]),
+            // The integer of a `numeric` of the scale of the column, which [`Shape::Dec`] keeps.
+            Data::Dec(v, _) => v[i] as u64,
             Data::Const(v) => int_of(v).map_or(0, |v| v as u64),
-            Data::Values(_) | Data::Dec(..) => return None,
+            Data::Values(_) => return None,
         })
     }
 }
@@ -5199,7 +5201,11 @@ fn key_shape(exec: &Exec<'_>, key: &Expr) -> Shape {
     };
     match column {
         Some(place) if exec.dict_of[place] != usize::MAX => Shape::Code(exec.dict_of[place]),
-        _ => Shape::Int(key.ty),
+        Some(place) => match exec.stored.get(place).map(|stored| stored.kind) {
+            Some(Kind::Numeric(scale)) if key.ty == oid::NUMERIC => Shape::Dec(scale),
+            _ => Shape::Int(key.ty),
+        },
+        None => Shape::Int(key.ty),
     }
 }
 
@@ -5267,6 +5273,7 @@ fn infallible(places: &[(usize, u32)], shapes: &[Shape]) -> bool {
     places.iter().all(|&(p, ty)| match shapes[p] {
         Shape::Int(t) => t == ty && rupg_func::extended_hash_int(ty, 0, 0).is_some(),
         Shape::Code(_) => rupg_func::extended_hash_text(ty, b"", 0).is_some(),
+        Shape::Dec(_) => false,
     })
 }
 
@@ -5324,7 +5331,7 @@ fn word_hash(
             Shape::Code(d) => {
                 dicts[d].text(words[p] as u32).and_then(|b| rupg_func::extended_hash_text(ty, b, 0))
             }
-            Shape::Int(_) => None,
+            Shape::Int(_) | Shape::Dec(_) => None,
         };
         let one = match one {
             Some(one) => one,
@@ -5505,6 +5512,8 @@ enum Shape {
     Int(u32),
     /// A code of a dictionary of [`Exec::dicts`].
     Code(usize),
+    /// The integer of a `numeric` of the scale.
+    Dec(u8),
 }
 
 impl Shape {
@@ -5512,6 +5521,7 @@ impl Shape {
         match &col.data {
             Data::Int(_) => Some(Shape::Int(col.ty)),
             Data::Code(_, d) => Some(Shape::Code(*d)),
+            Data::Dec(_, scale) => Some(Shape::Dec(*scale)),
             // A constant integer has its integer as its word, as a column of integers.
             Data::Const(v) if v.is_null() || int_of(v).is_some() => Some(Shape::Int(col.ty)),
             _ => None,
@@ -5522,6 +5532,9 @@ impl Shape {
         match self {
             Shape::Int(ty) => int_value(ty, word as i64),
             Shape::Code(d) => dicts[d].value(word as u32),
+            Shape::Dec(scale) => {
+                Value::Numeric(Numeric::from_decimal(i128::from(word as i64), u32::from(scale)))
+            }
         }
     }
 }
@@ -5627,7 +5640,8 @@ fn word_order(
     type PlaceKey<'d> = (Place<'d>, bool, bool, usize);
     let place_of = |&(k, descending, nulls_first): &(usize, bool, bool)| -> Option<PlaceKey<'_>> {
         let by = match shapes[k] {
-            Shape::Int(_) => Place::Int,
+            // The integers of a key of `numeric` have one scale, so they sort as the values.
+            Shape::Int(_) | Shape::Dec(_) => Place::Int,
             Shape::Code(d) => {
                 let dict = match &dicts[d] {
                     Dict::Stored(stored) if stored.kind == Kind::Text => stored.dict.as_ref()?,
@@ -6055,6 +6069,16 @@ mod tests {
     use std::hash::BuildHasher;
 
     use super::*;
+
+    #[test]
+    fn a_numeric_key_of_a_group_gives_its_value_back_from_its_word() {
+        let col = Col { data: Data::Dec(vec![12345, -7], 2), nulls: None, ty: oid::NUMERIC };
+        let shape = Shape::of(&col).unwrap();
+        assert!(shape == Shape::Dec(2));
+        for i in 0..2 {
+            assert_eq!(shape.value(col.word(i).unwrap(), &[]), col.value(i, &[]));
+        }
+    }
 
     #[test]
     fn the_decimal_math_with_no_null_checks_each_overflow() {
