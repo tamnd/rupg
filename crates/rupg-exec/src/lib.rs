@@ -1493,6 +1493,13 @@ fn run_query(
     {
         return Ok(rows);
     }
+    if !exists
+        && (outer.is_empty() || !correlated(query))
+        && !filled
+        && let Some(rows) = columnar::run_join(query, params, session, cache, want)?
+    {
+        return Ok(rows);
+    }
     let base = cache.tables(query, session, true, params)?;
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.

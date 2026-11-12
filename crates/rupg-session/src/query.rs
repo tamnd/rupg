@@ -1273,6 +1273,19 @@ impl rupg_func::Session for Reader<'_> {
         self.planned(query).map(|(_, tables)| tables)
     }
 
+    fn share_plan(&self, query: &rupg_analyze::Query, other: Option<&rupg_analyze::Query>) {
+        let address = std::ptr::from_ref(query) as usize;
+        match other {
+            Some(other) => {
+                let planned = self.planned(other);
+                self.plans.borrow_mut().insert(address, planned);
+            }
+            None => {
+                self.plans.borrow_mut().remove(&address);
+            }
+        }
+    }
+
     fn tasks(&self) -> Option<&dyn rupg_platform::Tasks> {
         self.activity.and_then(|(_, store)| store.tasks())
     }
