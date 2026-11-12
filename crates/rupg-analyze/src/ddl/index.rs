@@ -206,12 +206,8 @@ impl Definer<'_, '_> {
                     "index access method handler function 3 did not return an IndexAmRoutine struct",
                 ));
             }
-            _ => {
-                return Err(Error::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!("access method \"{method_name}\" does not exist"),
-                ));
-            }
+            // An access method of an extension, as `CREATE ACCESS METHOD` of its script makes it.
+            _ => self.index_method(method_name)?,
         };
         let method = am.oid;
         let unsupported = if stmt.unique && !stmt.iswithoutoverlaps && !am.can_unique {
@@ -337,6 +333,14 @@ impl Definer<'_, '_> {
         let usage = self.check_usage_on_types(&refs);
         self.an.temp_path = path;
         usage?;
+        // `ambuild` of pgvector checks the column and the options before it reads a row. A partitioned table has no rows, and its partitions build their own indexes.
+        if kind != b'p'
+            && let Some(ann) = self.ann_method(method)
+        {
+            for column in &columns[..key_count] {
+                self.ann_build_check(ann, column, &options)?;
+            }
+        }
         let pages = self.index_pages(table, method);
         let new = NewIndex {
             table,
@@ -689,7 +693,10 @@ impl Definer<'_, '_> {
             if let Some(what) = unsupported {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("access method \"{}\" does not support {what}", method_name(method)),
+                    format!(
+                        "access method \"{}\" does not support {what}",
+                        self.method_name(method)
+                    ),
                 )
                 .at_opt(at));
             }
@@ -733,7 +740,7 @@ impl Definer<'_, '_> {
         let legacy = parts.len() == 1 && LEGACY_OPCLASSES.contains(&parts[0]);
         if parts.is_empty() || legacy {
             return default_opclass_in(Some(self.catalog), ty, method)
-                .ok_or_else(|| no_default_opclass(ty, method));
+                .ok_or_else(|| no_default_opclass_named(ty, &self.method_name(method)));
         }
         let shown = parts.join(".");
         let (class, intype) = self.opclass_by_name(method, &parts)?;
@@ -756,7 +763,11 @@ const BT_EQUAL_STRATEGY: i16 = 3;
 
 /// The error of `ResolveOpClass` for a type with no default operator class for the access method.
 pub(super) fn no_default_opclass(ty: u32, method: u32) -> Error {
-    let method_name = method_name(method);
+    no_default_opclass_named(ty, method_name(method))
+}
+
+/// [`no_default_opclass`] for the access method of the name `method_name`.
+fn no_default_opclass_named(ty: u32, method_name: &str) -> Error {
     Error::new(
         SqlState::UNDEFINED_OBJECT,
         format!(

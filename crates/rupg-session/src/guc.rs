@@ -222,8 +222,21 @@ const COMPAT_VERSIONS: [EnumOption; 6] = [
     EnumOption { name: "19", value: 19, hidden: false },
 ];
 
-/// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7). `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
-static EXTRA: [Parameter; 2] = [
+/// The values of `hnsw.iterative_scan`, as `hnsw_iterative_scan_options` of pgvector gives them.
+const HNSW_ITERATIVE_SCAN: [EnumOption; 3] = [
+    EnumOption { name: "off", value: 0, hidden: false },
+    EnumOption { name: "relaxed_order", value: 1, hidden: false },
+    EnumOption { name: "strict_order", value: 2, hidden: false },
+];
+
+/// The values of `ivfflat.iterative_scan`, as `ivfflat_iterative_scan_options` of pgvector gives them.
+const IVFFLAT_ITERATIVE_SCAN: [EnumOption; 2] = [
+    EnumOption { name: "off", value: 0, hidden: false },
+    EnumOption { name: "relaxed_order", value: 1, hidden: false },
+];
+
+/// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7), then the parameters of the libraries of the extensions that rupg ships, which `_PG_init` of the library defines: `hnsw.` and `ivfflat.` of pgvector, as with `shared_preload_libraries = 'vector'`. `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
+static EXTRA: [Parameter; 9] = [
     Parameter {
         name: "rupg.compat_version",
         context: Context::Backend,
@@ -242,6 +255,69 @@ static EXTRA: [Parameter; 2] = [
         extra_desc: None,
         flags: flag::NOT_IN_SAMPLE | flag::DISALLOW_IN_FILE,
         kind: Kind::String { boot: Some(env!("CARGO_PKG_VERSION")) },
+    },
+    Parameter {
+        name: "hnsw.ef_search",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the size of the dynamic candidate list for search",
+        extra_desc: Some("Valid range is 1..1000."),
+        flags: 0,
+        kind: Kind::Int { boot: 40, min: 1, max: 1000 },
+    },
+    Parameter {
+        name: "hnsw.iterative_scan",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the mode for iterative scans",
+        extra_desc: None,
+        flags: 0,
+        kind: Kind::Enum { boot: 0, options: &HNSW_ITERATIVE_SCAN },
+    },
+    Parameter {
+        name: "hnsw.max_scan_tuples",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the max number of tuples to visit for iterative scans",
+        extra_desc: None,
+        flags: 0,
+        kind: Kind::Int { boot: 20000, min: 1, max: i32::MAX },
+    },
+    Parameter {
+        name: "hnsw.scan_mem_multiplier",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the multiple of work_mem to use for iterative scans",
+        extra_desc: None,
+        flags: 0,
+        kind: Kind::Real { boot: 1.0, min: 1.0, max: 1000.0 },
+    },
+    Parameter {
+        name: "ivfflat.probes",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the number of probes",
+        extra_desc: Some("Valid range is 1..lists."),
+        flags: 0,
+        kind: Kind::Int { boot: 1, min: 1, max: 32768 },
+    },
+    Parameter {
+        name: "ivfflat.iterative_scan",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the mode for iterative scans",
+        extra_desc: None,
+        flags: 0,
+        kind: Kind::Enum { boot: 0, options: &IVFFLAT_ITERATIVE_SCAN },
+    },
+    Parameter {
+        name: "ivfflat.max_probes",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the max number of probes for iterative scans",
+        extra_desc: None,
+        flags: 0,
+        kind: Kind::Int { boot: 32768, min: 1, max: 32768 },
     },
 ];
 

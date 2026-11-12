@@ -34,6 +34,14 @@ fn index_options(method: u32) -> &'static [Opt] {
 }
 
 impl Definer<'_, '_> {
+    /// `amoptions` of a built-in access method or of an access method of pgvector.
+    fn index_options(&self, method: u32) -> &'static [Opt] {
+        match self.ann_method(method) {
+            Some(ann) => ann.options(),
+            None => index_options(method),
+        }
+    }
+
     /// `DefineRelation`: the options of `WITH` with no namespace, checked as the options of a table.
     pub(super) fn create_table_options(&self, defs: &[Option<Node>]) -> Result<Vec<String>> {
         let options = reloptions::transform_create(defs, None, HEAP_NAMESPACES)?;
@@ -59,7 +67,7 @@ impl Definer<'_, '_> {
         defs: &[Option<Node>],
     ) -> Result<Vec<String>> {
         let options = reloptions::transform(&[], defs, None, &[], false)?;
-        reloptions::validate(&options, index_options(method), false)?;
+        reloptions::validate(&options, self.index_options(method), false)?;
         Ok(options)
     }
 
@@ -88,7 +96,7 @@ impl Definer<'_, '_> {
             }
             b'p' => {}
             b'v' => reloptions::validate(&options, reloptions::VIEW, false)?,
-            b'i' | b'I' => reloptions::validate(&options, index_options(method), false)?,
+            b'i' | b'I' => reloptions::validate(&options, self.index_options(method), false)?,
             kind => {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
