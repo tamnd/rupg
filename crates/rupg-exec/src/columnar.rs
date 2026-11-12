@@ -707,6 +707,7 @@ fn in_set(expr: &Expr, params: &[Value], session: &dyn Session, cache: &Cache) -
     if !one || !INTEGERS.contains(&outer.ty) || other.is_some() {
         return None;
     }
+    cache.unordered.set(true);
     let rows = crate::run_sub(&sub.query, params, session, cache, &[], false).ok()?;
     let mut set = FxSet::default();
     let mut null = false;
@@ -2328,6 +2329,15 @@ fn order_free(query: &Query) -> bool {
     free && aggs > 0
 }
 
+/// True when the set of the rows of a query does not change with the order of the rows of its table: no `LIMIT`, no `OFFSET`, no `DISTINCT ON`, no aggregate and no volatile function.
+fn set_free(query: &Query) -> bool {
+    query.limit.is_none()
+        && query.offset.is_none()
+        && !query.distinct_on
+        && agg::calls(query).is_empty()
+        && !query.targets.iter().map(|t| &t.expr).chain(&query.filter).any(crate::volatile)
+}
+
 /// True for an aggregate of [`order_free`].
 fn order_free_agg(agg: &Aggref) -> bool {
     let Some(proc) = builtin::proc_by_oid(agg.oid) else { return false };
@@ -2349,6 +2359,7 @@ pub(crate) fn run(
     session: &dyn Session,
     cache: &Cache,
     want: Option<usize>,
+    unordered: bool,
 ) -> Result<Option<Vec<Vec<Value>>>> {
     let [relation] = query.relations.as_slice() else { return Ok(None) };
     if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
@@ -2373,8 +2384,9 @@ pub(crate) fn run(
     if scan::unique_key(query, params, session) {
         return Ok(None);
     }
-    // An index scan gives its rows in the order of the index, which the columns do not keep. The order does not change one row of aggregates that do not read the order.
-    if !order_free(query)
+    // An index scan gives its rows in the order of the index, which the columns do not keep. The order does not change one row of aggregates that do not read the order, or the set of rows that a test of `ANY` reads.
+    if !(unordered && set_free(query))
+        && !order_free(query)
         && session
             .join_order(query)
             .is_some_and(|planned| planned.iter().any(|s| !s.keys.is_empty()))

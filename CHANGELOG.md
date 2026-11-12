@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector scan runs a subquery of `ANY` or `ALL` also when the planner gives it an index scan, because the test reads its rows as a set. A subquery with `LIMIT`, `OFFSET`, `DISTINCT ON`, an aggregate or a volatile function keeps the order of the index (#1525).
 - The vector scan runs a correlated subquery of one value only for the keys of the rows that pass the conditions before it, as the domain of the unnesting of Neumann and Kemper. A short scan finds these keys, and the lifted `GROUP BY` reads only the rows whose key is one of them. So TPC-H q17 makes about 20 groups instead of 20k (#1523).
 - The pgvector types `halfvec` and `sparsevec` and the `bit` distances work: their text and binary I/O with pgvector's errors, their type modifiers, the casts among `vector`, `halfvec`, `sparsevec` and arrays, the distance operators and functions, the arithmetic, `l2_norm`, `l2_normalize`, `subvector`, `binary_quantize`, the comparisons, `avg` and `sum` of `halfvec`, and `hamming_distance` and `jaccard_distance` with `<~>` and `<%>` (#1524)
 - The vector scan runs `x IN (SELECT ...)` and `x NOT IN (SELECT ...)` in a condition when the subquery reads no column of the query, `x` is an integer and the subquery gives one integer column, such as the `IN` of `partsupp` in TPC-H q20. The subquery runs once into a set of integers, and the nulls give the same results as in Postgres (#1521).

@@ -409,6 +409,7 @@ fn semi_set(
         Some(target) if INTEGERS.contains(&target.expr.ty) => {}
         _ => return Ok(None),
     }
+    cache.unordered.set(true);
     let rows = crate::run_sub(&sub.query, params, session, cache, &[], false)?;
     let mut set = FxSet::default();
     for row in &rows {
