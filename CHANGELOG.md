@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector join through unique keys runs a condition `x IN (SELECT ...)` of one table, such as the one of TPC-H q18: the subquery runs one time, and its integers select the rows of the table before the join (#1514).
 - The vector engine groups the rows by a `numeric` key, such as `c_acctbal` of TPC-H q10, as a word of the key, so that a join with such a key does not go to the row engine (#1513).
 - The `+`, `-`, `*` and the comparisons of `numeric` vectors with no null use `i64` math with one check of overflow for all the rows, with no `i128` math and no null flag for each row (#1512).
 - The vector join of a query with groups also reads a table of fewer than 65536 rows, such as a dimension table. Such a table makes its columns from the values of its rows and does not freeze. TPC-H q3, q5, q7, q8, q9, q14 and q19 now run on this join (#1511).

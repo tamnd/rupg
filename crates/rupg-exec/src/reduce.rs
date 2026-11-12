@@ -253,7 +253,7 @@ fn aggregate(agg: &Aggref) -> bool {
 }
 
 /// The relation of a condition `x IN (SELECT ...)` that the reduction can test on the rows of one relation, as `pull_up_sublinks` makes a semi-join of it. `x` must be an expression that cannot fail and reads one relation, the test must be an `=` of two integers or two dates, and the subquery must read no column of the query and must not fail, as [`harmless_query`] tells. The subquery then gives the same rows for each row of the relation.
-fn semi_join(cond: &Expr, session: &dyn Session) -> Option<usize> {
+pub(crate) fn semi_join(cond: &Expr, session: &dyn Session) -> Option<usize> {
     let ExprKind::SubLink(sub) = &cond.kind else { return None };
     if sub.kind != SubLinkKind::Any
         || sub.volatile

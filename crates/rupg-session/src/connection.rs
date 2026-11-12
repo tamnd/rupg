@@ -4900,6 +4900,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/group_numeric_key.test")));
     }
 
+    /// The conditions `x IN (SELECT ...)` of one table in a join of the vectors through unique keys give the rows of Postgres, also for nulls in the table and in the subquery, two such conditions, integers of other widths and a subquery with no row.
+    #[test]
+    fn vector_semi_join() {
+        big_stack(|| script(include_str!("connection/vector_semi_join.test")));
+    }
+
     /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
     #[test]
     fn date_part_scan() {
