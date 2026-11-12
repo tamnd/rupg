@@ -441,6 +441,30 @@ fn use_types(catalog: &Catalog) {
             minitval: a.minitval.clone(),
         })
     }));
+    types.extend(catalog.opclasses().map(|c| {
+        builtin::SessionType::Opclass(builtin::SessionOpclass {
+            oid: c.oid,
+            method: c.method,
+            name: c.name.clone(),
+            family: c.family,
+            intype: c.intype,
+            default: c.default,
+            keytype: c.keytype,
+        })
+    }));
+    types.extend(catalog.amops().map(|a| {
+        builtin::SessionType::Amop(builtin::AmopRow {
+            oid: a.oid,
+            family: a.family,
+            left: a.left,
+            right: a.right,
+            strategy: a.strategy,
+            purpose: a.purpose,
+            operator: a.operator,
+            method: a.method,
+            sort_family: a.sortfamily,
+        })
+    }));
     builtin::use_session_types(types);
 }
 

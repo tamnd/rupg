@@ -258,7 +258,7 @@ pub(crate) fn find_amop(
     test: impl Fn(&rupg_pgcatalog::builtin::AmopRow) -> bool,
 ) -> Option<rupg_pgcatalog::builtin::AmopRow> {
     if let Some(row) = rupg_pgcatalog::builtin::amops_of_operator(op).find(|a| test(a)) {
-        return Some(*row);
+        return Some(row);
     }
     CLASSES.with(|c| c.borrow().amops.iter().find(|a| a.operator == op && test(a)).copied())
 }

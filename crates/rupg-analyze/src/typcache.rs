@@ -65,9 +65,10 @@ fn is_complex(ty: u32) -> bool {
     types::row(types::base(ty)).is_some_and(|t| t.relid != 0)
 }
 
-/// `GetDefaultOpClass`: the default operator class of the type for the access method. An exact match comes first. Else the one class that the type has a binary cast to, or the one for a preferred type of its category when there are more.
+/// `GetDefaultOpClass`: the default operator class of the type for the access method, built in or of the catalog of the session. An exact match comes first. Else the one class that the type has a binary cast to, or the one for a preferred type of its category when there are more.
 pub fn default_opclass(ty: u32, method: u32) -> Option<&'static OpclassRow> {
-    let classes = builtin::opclasses().iter().filter(|c| c.method == method && c.default);
+    let classes = builtin::opclasses().iter().chain(builtin::session_opclasses());
+    let classes = classes.filter(|c| c.method == method && c.default);
     choose_default(ty, classes.map(|c| (c, c.intype)))
 }
 
