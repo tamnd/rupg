@@ -611,6 +611,12 @@ pub(crate) fn read(
     }
     // A write and a row lock read the whole rows of their tables, so only a plain query copies just the columns that it reads.
     let plain = query.write.is_none() && query.row_marks.is_empty();
+    // A condition of `WHERE` that is a constant false or null keeps no row, as the one-time filter of PostgreSQL, so a plain query reads no row of its tables. The run of the query with no input row of [`crate::lift`] has this condition.
+    let never = narrow.is_some()
+        && plain
+        && conds
+            .iter()
+            .any(|c| matches!(c.kind, ExprKind::Const(Value::Bool(false) | Value::Null)));
     let mut rows = Vec::with_capacity(query.relations.len());
     let mut places = vec![None; query.relations.len()];
     // A correlated `EXISTS` of one table does not stop the reduction, because [`tuples`] then tests it after the joins, on the tuples of the rows that can join.
@@ -634,6 +640,10 @@ pub(crate) fn read(
             || relation.values.is_some()
             || work
         {
+            rows.push(Rc::default());
+            continue;
+        }
+        if never {
             rows.push(Rc::default());
             continue;
         }

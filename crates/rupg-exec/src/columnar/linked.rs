@@ -6,7 +6,11 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Join, JoinKind, Query, SubLinkKind};
+use std::cmp::Ordering;
+
+use rupg_analyze::{
+    BoolOp, Expr, ExprKind, FromItem, Join, JoinKind, Query, SortGroup, SubLinkKind,
+};
 use rupg_column::builder::{self, Values};
 use rupg_column::segment::Kind;
 use rupg_column::stored::{Stored, VECTOR};
@@ -18,12 +22,12 @@ use super::{
     Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, kind_of,
     numeric_kind, plain, unsupported,
 };
-use crate::{Cache, reduce, scan};
+use crate::{Cache, reduce, scan, sort};
 
 /// No row.
 const NONE: u32 = u32::MAX;
 
-/// The rows of a query with groups whose tables join through keys that are unique on one side, or `None` when the query does not have this form.
+/// The rows of a query with groups, or of a query with `ORDER BY` as [`sorted_rows`] tells, whose tables join through keys that are unique on one side, or `None` when the query does not have this form.
 ///
 /// # Errors
 ///
@@ -279,11 +283,83 @@ fn finish(
         .collect();
     let mut source = Source::new(rows, stored, places, types, tables);
     source.links = links;
+    // With no groups, the run gives one row more than `LIMIT`, so that a row equal to the last row in the keys of the sort shows.
+    let mut limit = None;
+    if !query.grouped
+        && let Some(Expr { kind: ExprKind::Const(Value::Int8(n)), .. }) = &mut virt.limit
+    {
+        limit = usize::try_from(*n).ok();
+        *n = n.saturating_add(1);
+    }
+    let want = if query.grouped { want } else { want.map(|w| w.saturating_add(1)) };
     // The groups come in the order of the hash table of the plan of the join.
     session.share_plan(&virt, Some(query));
     let out = super::run_on(&virt, params, session, cache, want, source);
     session.share_plan(&virt, None);
-    out
+    let Some(mut out) = out? else { return Ok(None) };
+    if !query.grouped {
+        if ties(query, &out, session)? {
+            return Ok(None);
+        }
+        out.truncate(limit.unwrap_or(usize::MAX).min(want.map_or(usize::MAX, |w| w - 1)));
+    }
+    Ok(Some(out))
+}
+
+/// True for a query with no groups that the join of the vectors can run: a query with `ORDER BY` whose keys are columns of the result, with no `DISTINCT`, no `OFFSET`, a `LIMIT` that is a constant or no `LIMIT`, no volatile function, and no expression that can fail, as [`no_sublinks`] tells. The join of the vectors does not give the tuples in the order of the plan of the join, so [`finish`] then checks with [`ties`] that the sort gives one order of the rows.
+fn sorted_rows(query: &Query) -> bool {
+    !query.sort.is_empty()
+        && query.distinct.is_empty()
+        && !query.distinct_on
+        && query.offset.is_none()
+        && query
+            .limit
+            .as_ref()
+            .is_none_or(|l| matches!(l.kind, ExprKind::Const(Value::Int8(n)) if n >= 0))
+        && query.sort.iter().all(|g| query.targets.get(g.target).is_some_and(|t| !t.junk))
+        && !query.targets.iter().map(|t| &t.expr).chain(&query.filter).any(crate::volatile)
+        && query
+            .targets
+            .iter()
+            .map(|t| &t.expr)
+            .chain(&query.filter)
+            .all(|e| reduce::harmless(&no_sublinks(e)))
+}
+
+/// A copy of `expr` with a null in the place of each subquery, for [`reduce::harmless`]. A plan with `LIMIT` can stop before it reads all the tuples of the join, and then it does not evaluate the expressions of the other tuples, so these expressions must not fail. A subquery that fails makes its link fail, and then the row engine runs the query.
+fn no_sublinks(expr: &Expr) -> Expr {
+    let mut copy = expr.clone();
+    copy.each_mut(0, &mut |e, depth| {
+        if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+            e.kind = ExprKind::Const(Value::Null);
+            return true;
+        }
+        false
+    });
+    copy
+}
+
+/// True when two rows next to each other in `rows`, the rows of a query of [`sorted_rows`] in the order of its sort, have equal keys of the sort. The order of such rows is the order in which the plan of the query gives them to the sort, which the row engine must then give.
+///
+/// # Errors
+///
+/// The error of a comparison.
+fn ties(query: &Query, rows: &[Vec<Value>], session: &dyn Session) -> Result<bool> {
+    let shown: Vec<usize> =
+        query.targets.iter().enumerate().filter(|(_, t)| !t.junk).map(|(i, _)| i).collect();
+    let types: Vec<u32> = shown.iter().map(|&i| query.targets[i].expr.ty).collect();
+    let mut list = Vec::with_capacity(query.sort.len());
+    for g in &query.sort {
+        let Some(at) = shown.iter().position(|&i| i == g.target) else { return Ok(true) };
+        list.push(SortGroup { target: at, ..g.clone() });
+    }
+    let keys = sort::Keys::new(&list, &types, session)?;
+    for pair in rows.windows(2) {
+        if keys.compare(&pair[0], &pair[1])? == Ordering::Equal {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The table that keeps all its rows, and the rows and the places of the rows of the tuples of a left join of two tables with groups, such as the join of TPC-H Q13, or `None` when the join does not have this form. `ON` must be a list of `=` of the integer columns of the two tables and of conditions of the null side, and `WHERE` a list of conditions of the kept side. One of the two sides must have a key that no two rows have.
@@ -436,7 +512,7 @@ fn retain<T>(items: &mut Vec<T>, keep: &[bool]) {
 /// True when the query has groups over a list of relations in `FROM`, with no set operation, no window and no write, and reads only the columns of its own relations. The only subqueries are the conditions `x IN (SELECT ...)` of `WHERE` that [`reduce::semi_join`] tests on the rows of one table, and the conditions of one table with an `EXISTS` that [`link`] tells.
 fn shape(query: &Query, session: &dyn Session) -> bool {
     if query.relations.len() < 2
-        || !query.grouped
+        || !(query.grouped || sorted_rows(query))
         || query.set_op.is_some()
         || !query.windows.is_empty()
         || !query.ctes.is_empty()

@@ -202,7 +202,7 @@ pub(crate) fn relations_of(expr: &Expr) -> Vec<usize> {
 }
 
 /// True when an expression cannot fail and is not volatile: columns of the query, constants, `AND`, `OR`, `NOT`, the tests of nulls and of truth values, and the built-in functions that are leakproof, the comparisons of `numeric` values and of a date and a timestamp, and `LIKE` with a constant pattern that does not end in an escape, with no collation of ICU.
-fn harmless(expr: &Expr) -> bool {
+pub(crate) fn harmless(expr: &Expr) -> bool {
     safe(expr, false, 0)
 }
 
