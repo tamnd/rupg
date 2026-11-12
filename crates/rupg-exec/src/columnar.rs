@@ -2288,6 +2288,7 @@ pub(crate) fn selected(
     keys: &[usize],
     session: &dyn Session,
     cache: &Cache,
+    small: bool,
 ) -> Result<Option<Selected>> {
     let types: Vec<u32> = relation.columns.iter().map(|c| c.ty).collect();
     let mut used = vec![false; types.len()];
@@ -2327,7 +2328,12 @@ pub(crate) fn selected(
         places[column] = wanted.len();
         wanted.push((column, kind));
     }
-    let Some((rows, stored)) = session.table_columns(relation.oid, &wanted)? else {
+    let read = if small {
+        session.table_small_columns(relation.oid, &wanted)?
+    } else {
+        session.table_columns(relation.oid, &wanted)?
+    };
+    let Some((rows, stored)) = read else {
         return Ok(None);
     };
     let mut dicts = Vec::new();
@@ -2444,7 +2450,7 @@ pub(crate) fn column_keys(
     {
         return Ok(None);
     }
-    let Some(found) = selected(relation, &conds, &columns, session, cache)? else {
+    let Some(found) = selected(relation, &conds, &columns, session, cache, false)? else {
         return Ok(None);
     };
     Ok(Some(found.keys))

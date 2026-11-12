@@ -2702,11 +2702,23 @@ impl Heap {
         view: &View,
         wanted: &[(usize, Kind)],
     ) -> Option<(usize, Vec<Arc<Stored>>)> {
+        self.columns_of(relation, view, wanted, COLUMN_ROWS)
+    }
+
+    /// The columns of [`Heap::columns`] for a table of `least` or more rows. A table of fewer than [`COLUMN_ROWS`] rows makes its columns from the values of its versions and does not freeze, so that a join through the vectors can read a small table, as a dimension table, with no change to the versions.
+    pub(crate) fn columns_of(
+        &self,
+        relation: u32,
+        view: &View,
+        wanted: &[(usize, Kind)],
+        least: usize,
+    ) -> Option<(usize, Vec<Arc<Stored>>)> {
         let mut state = self.state();
         let table = state.tables.0.get_mut(&(view.database, relation))?;
-        if table.len() < COLUMN_ROWS {
+        if table.len() < least.max(1) {
             return None;
         }
+        let large = table.len() >= COLUMN_ROWS;
         let columns = &mut table.columns;
         if let (None, Some(cold)) = (&columns.xmins, &table.cold) {
             columns.xmins = Some(cold.xmins.clone());
@@ -2740,7 +2752,10 @@ impl Heap {
             return None;
         }
         // A commit logs the values of the versions that it inserted, so the heap freezes only the versions of transactions that ended.
-        if xmins.iter().all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
+        if large
+            && xmins
+                .iter()
+                .all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
         {
             table.freeze(self.tasks.as_deref());
             table.chill();
