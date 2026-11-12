@@ -382,6 +382,7 @@ fn use_types(catalog: &Catalog) {
                     } else {
                         String::new()
                     },
+                    bin: if f.lang == C_LANGUAGE { f.bin.clone() } else { String::new() },
                     support: f.support,
                 })
             }),

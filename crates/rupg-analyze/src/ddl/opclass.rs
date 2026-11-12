@@ -24,7 +24,7 @@ use crate::typename::{names, type_name_text};
 /// The OID of the family `tsvector_ops` of `gist`.
 const GIST_TSVECTOR_OPS: u32 = 3655;
 
-/// `gtsvector_options`: `siglen`, the length of the signature in bytes, from 1 to `GISTMaxIndexKeySize`.
+/// `gtsvector_options` and `gtrgm_options` of `pg_trgm`: `siglen`, the length of the signature in bytes, from 1 to `GISTMaxIndexKeySize`.
 const GTSVECTOR_OPTIONS: &[reloptions::Opt] =
     &[reloptions::Opt { name: "siglen", kind: Kind::Int(1, 2024), toast: false }];
 
@@ -424,7 +424,7 @@ impl Definer<'_, '_> {
         ))
     }
 
-    /// The options that the options procedure of the family of the class accepts, as `index_opclass_options` gives them to it: `siglen` of `gtsvector_options` for the family `tsvector_ops` of `gist`, and the options of `brin_bloom_options` and `brin_minmax_multi_options` for the built-in families of `brin` that have them. The options of the other families are not supported yet.
+    /// The options that the options procedure of the family of the class accepts, as `index_opclass_options` gives them to it: `siglen` of `gtsvector_options` for the family `tsvector_ops` of `gist`, and the options of `brin_bloom_options` and `brin_minmax_multi_options` for the built-in families of `brin` that have them, and `siglen` of `gtrgm_options` for a family of `pg_trgm`. The options of the other families are not supported yet.
     pub(super) fn opclass_options(
         &self,
         class: u32,
@@ -446,6 +446,16 @@ impl Definer<'_, '_> {
                 "brin_bloom_options" => return Ok(BRIN_BLOOM_OPTIONS),
                 "brin_minmax_multi_options" => return Ok(BRIN_MINMAX_MULTI_OPTIONS),
                 _ => {}
+            }
+        }
+        // The options procedure of a family that an extension made: a function in C whose symbol is known.
+        let user = self.catalog.amprocs().filter(|a| a.family == family);
+        for function in user.filter_map(|a| self.catalog.function(a.function)) {
+            if function.bin.is_empty() {
+                continue;
+            }
+            if function.src.as_str() == "gtrgm_options" {
+                return Ok(GTSVECTOR_OPTIONS);
             }
         }
         Err(not_yet("operator class options", at))

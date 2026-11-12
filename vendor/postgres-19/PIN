@@ -1,4 +1,4 @@
-# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-wire, rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common, rupg-func and rupg-session. See spec/22-crate-layout.md section 22.8.
+# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-wire, rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common, rupg-func, rupg-session and rupg-contrib. See spec/22-crate-layout.md section 22.8.
 source https://github.com/postgres/postgres
 rev 7d3d2db7d5e533fa42a4202c7d308cbb0cbf9333
 url https://raw.githubusercontent.com/postgres/postgres/{rev}/{path}
@@ -170,3 +170,28 @@ f7e5b42208ccf1b1f282f9e0f8570e464272762bda5718b6b26750f510a688dc  src/backend/sn
 7450c1f7196c161d9a4e537de43f88bd55cdb64028c808e14587bd7a6ac7be3d  src/backend/snowball/stopwords/spanish.stop
 2a9d9d756bc4257d49329994f805c712cd5ab6746162e2082752238766c1c0c8  src/backend/snowball/stopwords/swedish.stop
 f2c7f0c2bd3dba42da700776266831853a3b5f1207fada5c15207334109abb57  src/backend/snowball/stopwords/turkish.stop
+17c2745da2a706e1443ee363ab7424ced871a9a652e86bf55d25d139f43ee27b  contrib/pg_trgm/pg_trgm.control
+2d90a742f644ca794f3819bbefac60bddb53fd9e253bfbc68d6ad3b6d1cf45c4  contrib/pg_trgm/pg_trgm--1.3.sql
+a85cff55497081250bef3bb3b7fc8d8beb3b9bab64675501f79f923d7bd0a06c  contrib/pg_trgm/pg_trgm--1.0--1.1.sql
+0ed40419dc9b01417ce058aba210c615bf1ff04daba44e4d23085983a4565f7f  contrib/pg_trgm/pg_trgm--1.1--1.2.sql
+29caec4ef2830920c74c2594c11e0255c3a17102c59d244d9aacb3b1add541ea  contrib/pg_trgm/pg_trgm--1.2--1.3.sql
+98763d59a6e221dd1bfc43e941024e4ed363fc05c9ce4514bc93554dfd8a8ed5  contrib/pg_trgm/pg_trgm--1.3--1.4.sql
+e5de4624f7dcc3954b4c8d84136f9cc6dfc9942545b091180ca18da41f234d18  contrib/pg_trgm/pg_trgm--1.4--1.5.sql
+76d02b6ac7c6a5c2eed44d8fa48c8a104b7af98da594969b19e5bdafbb706bb8  contrib/pg_trgm/pg_trgm--1.5--1.6.sql
+a53979c205ccb792477e06296cdbd8238c7afb568370e12a413f054141b327ea  contrib/btree_gin/btree_gin.control
+0c5440a89f33c953fd0217d273a3ad6816ae32eeea8bcadbc8951ea6688756e3  contrib/btree_gin/btree_gin--1.0.sql
+c81798c7433e3286af13d5b876c0640e0f6cbe7fae25275b86511500ba5d8879  contrib/btree_gin/btree_gin--1.0--1.1.sql
+6a3c43f4d8e91802f205b1c0ee330eadbb23372b1ff86e2954bb1ea3dd412f42  contrib/btree_gin/btree_gin--1.1--1.2.sql
+7a159af1a74eb2202be19c5a6383720a08e65ded58d4b2393cca56fe8c34cd35  contrib/btree_gin/btree_gin--1.2--1.3.sql
+ec5a45939d763684172199cb1dd41448fa5b00117ab928f7c6e55d32034f56a0  contrib/btree_gin/btree_gin--1.3--1.4.sql
+6b29ee8e3de230877a55f49bca21ca6a899d263f3bc54512da6c09341cc6d766  contrib/btree_gist/btree_gist.control
+7cab2d49ed9158a24d1723b66b2c9fbb908879148acc5e2ab58b279c0e033abe  contrib/btree_gist/btree_gist--1.9.sql
+bf5d5f760da60f41fbfcd31804550f06c4511b1a5c19ffa302c3c1761c4afe38  contrib/btree_gist/btree_gist--1.0--1.1.sql
+2d3caf344f62e7367e7b9227e42196fcabbf3a666b5a2216e44854675f643033  contrib/btree_gist/btree_gist--1.1--1.2.sql
+5dc7a402185ddbdff6d4488686ba28e3e89c59a850e54f833114f383cda19123  contrib/btree_gist/btree_gist--1.2--1.3.sql
+7a7f5ece012f23d7a11f460e7536b65435ee0aeead0717963a428b092135ab84  contrib/btree_gist/btree_gist--1.3--1.4.sql
+4e28241668ad1ccc0d645ac46726a160617af4d07a8d77f188776e91b085d3ce  contrib/btree_gist/btree_gist--1.4--1.5.sql
+593f167508dc9c6e8be7e5565c15d5fb8d259e38f6139170b72b3da115e2cff4  contrib/btree_gist/btree_gist--1.5--1.6.sql
+426340ca65ed9763e3934c39e5f427e743a4947f6e89eba6bb4c7d9bd3ad0bf5  contrib/btree_gist/btree_gist--1.6--1.7.sql
+df7eef35d2bafdb15ecfd8624c4fc6fa57e05f89be7cb7f98f7be2faedb7537c  contrib/btree_gist/btree_gist--1.7--1.8.sql
+b934bac1e9d7da849e36fecdf55ad0a013e115d7ab71db7f8b0cdf7cd4191d41  contrib/btree_gist/btree_gist--1.8--1.9.sql

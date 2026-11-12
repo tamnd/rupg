@@ -2,7 +2,7 @@
 
 use rupg_common::Result;
 
-use super::{Catalog, ObjRef, PG_NAMESPACE, PG_PROC, PG_TYPE, no_object};
+use super::{Catalog, DepKind, ObjRef, PG_NAMESPACE, PG_PROC, PG_TYPE, no_object};
 
 /// The OID of `pg_operator`.
 pub const PG_OPERATOR: u32 = 2617;
@@ -109,8 +109,9 @@ impl Catalog {
         }
         new.oid = oid;
         self.operators.insert(oid, new);
+        // `makeOperatorDependencies` with `isUpdate`: the membership in an extension stays.
         let me = ObjRef::new(PG_OPERATOR, oid);
-        self.depends.retain(|d| d.object != me);
+        self.depends.retain(|d| d.object != me || d.kind == DepKind::Extension);
         self.operator_depends(oid);
         Ok(())
     }

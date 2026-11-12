@@ -12,6 +12,7 @@ use rupg_sql::nodes::{
     VariableSetStmt,
 };
 use rupg_types::oid;
+use std::sync::OnceLock;
 
 use super::{Definer, not_yet};
 use crate::agg::Kind;
@@ -34,6 +35,8 @@ const C_LANGUAGE: u32 = 13;
 const DEFAULT_COST: f32 = 100.0;
 /// The suffix of the file of a library, `DLSUFFIX` on Linux.
 const DLSUFFIX: &str = ".so";
+/// The suffix of the file of a library on macOS, which the regression tests give as `PG_DLSUFFIX` there.
+const DYLIB_SUFFIX: &str = ".dylib";
 /// The name of the library of the regression tests of PostgreSQL, `regress.so`.
 const REGRESS_LIBRARY: &str = "regress";
 
@@ -77,22 +80,48 @@ pub const REGRESS_SYMBOLS: &[&str] = &[
     "test_pg_locale_apis",
 ];
 
-/// `expand_dynamic_library_name` and the `stat` of `internal_load_library`: the full name of the library `name`. The only library that rupg has is the library of the regression tests, by a path that ends in `regress` or `regress.so`. A name without a directory is in `$libdir`, which does not have that library.
+/// The libraries of the extensions that rupg ships, which a crate above this one gives with [`set_libraries`]: for the `probin` and the `prosrc` of a function in C, `None` when no extension has that library, else whether the library binds the symbol.
+pub type Libraries = fn(bin: &str, symbol: &str) -> Option<bool>;
+
+/// The function of [`set_libraries`].
+static LIBRARIES: OnceLock<Libraries> = OnceLock::new();
+
+/// Gives the libraries of the extensions to `CREATE FUNCTION` and `LOAD`, once for the process. A later call does nothing.
+pub fn set_libraries(libraries: Libraries) {
+    let _ = LIBRARIES.set(libraries);
+}
+
+/// The name of the library of the file `name`, without its directory and its suffix.
+fn library_stem(name: &str) -> &str {
+    let file = name.rsplit_once('/').map_or(name, |(_, file)| file);
+    file.strip_suffix(DLSUFFIX).or_else(|| file.strip_suffix(DYLIB_SUFFIX)).unwrap_or(file)
+}
+
+/// True when the library `name` is the library of an extension that rupg ships.
+fn extension_library(name: &str) -> bool {
+    LIBRARIES.get().is_some_and(|libraries| libraries(name, "").is_some())
+}
+
+/// `expand_dynamic_library_name` and the `stat` of `internal_load_library`: the full name of the library `name`. rupg has the library of the regression tests, by a path that ends in `regress`, `regress.so` or `regress.dylib`, and the libraries of the extensions that it ships, by any path.
 ///
 /// # Errors
 ///
 /// `58P01` for a library that rupg does not have.
 pub fn find_library(name: &str) -> Result<String> {
-    let file = name.rsplit_once('/').map(|(_, file)| file);
-    let stem = file.map(|file| file.strip_suffix(DLSUFFIX).unwrap_or(file));
-    if stem != Some(REGRESS_LIBRARY) {
+    let regress = name.contains('/') && library_stem(name) == REGRESS_LIBRARY;
+    if !regress && !extension_library(name) {
         return Err(Error::new(
             SqlState::UNDEFINED_FILE,
             format!("could not access file \"{name}\": No such file or directory"),
         ));
     }
-    Ok(if name.ends_with(DLSUFFIX) { name.to_string() } else { format!("{name}{DLSUFFIX}") })
+    Ok(if name.ends_with(DLSUFFIX) || name.ends_with(DYLIB_SUFFIX) {
+        name.to_string()
+    } else {
+        format!("{name}{DLSUFFIX}")
+    })
 }
+
 /// The default `prorows` of a function that returns a set.
 const DEFAULT_ROWS: u32 = 1000;
 
@@ -325,6 +354,20 @@ fn check_untrusted(function: &Function) -> Result<()> {
         return Ok(());
     }
     let file = find_library(&function.bin)?;
+    // spec/16 section 16.7.2: the function of an extension runs only when rupg binds its symbol.
+    if let Some(bound) =
+        LIBRARIES.get().and_then(|libraries| libraries(&function.bin, &function.src))
+    {
+        if bound {
+            return Ok(());
+        }
+        return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "C functions are not supported")
+            .with_detail(format!(
+                "The function \"{}\" of the library \"{}\" has no implementation in rupg.",
+                function.src,
+                library_stem(&function.bin)
+            )));
+    }
     if !REGRESS_SYMBOLS.contains(&function.src.as_str()) {
         return Err(Error::new(
             SqlState::UNDEFINED_FUNCTION,

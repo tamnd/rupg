@@ -3642,8 +3642,9 @@ impl Catalog {
         new.oid = oid;
         new.owner = old.owner;
         self.proc_toast_oids(&new);
+        // `deleteDependencyRecordsFor` with `skipExtensionDeps`: the membership in an extension stays.
         let me = ObjRef::new(PG_PROC, oid);
-        self.depends.retain(|d| d.object != me);
+        self.depends.retain(|d| d.object != me || d.kind == DepKind::Extension);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         for &referenced in refs {
             self.depend(me, referenced, DepKind::Normal);
@@ -3696,6 +3697,77 @@ impl Catalog {
     /// `recordDependencyOnCurrentExtension`: makes an object a member of an extension, as a statement of the script of the extension does.
     pub fn add_to_extension(&mut self, object: ObjRef, extension: u32) {
         self.depend(object, ObjRef::new(PG_EXTENSION, extension), DepKind::Extension);
+    }
+
+    /// The extension with the OID.
+    pub fn extension(&self, oid: u32) -> Option<&Extension> {
+        self.extensions.get(&oid)
+    }
+
+    /// Changes the extension with the OID, as `ApplyExtensionUpdates` and `ALTER EXTENSION` change its row.
+    pub fn alter_extension(&mut self, oid: u32, change: impl FnOnce(&mut Extension)) {
+        if let Some(extension) = self.extensions.get_mut(&oid) {
+            change(extension);
+        }
+    }
+
+    /// `deleteDependencyRecordsForClass` and `recordDependencyOn` of `InsertExtensionTuple` and `ApplyExtensionUpdates`: the extension depends on the extensions `required` and on no other.
+    pub fn set_required_extensions(&mut self, extension: u32, required: &[u32]) {
+        let me = ObjRef::new(PG_EXTENSION, extension);
+        self.depends.retain(|d| {
+            !(d.object == me && d.referenced.class == PG_EXTENSION && d.kind == DepKind::Normal)
+        });
+        for &other in required {
+            self.depend(me, ObjRef::new(PG_EXTENSION, other), DepKind::Normal);
+        }
+    }
+
+    /// `recordDependencyOnCurrentExtension` for each object with an OID from `since` that a statement of the script of the extension made, as the functions that make the objects call it. An index, a constraint, a rule, a trigger and the relation of a composite type do not become members: they go with their owner. Each type and each function does, as `GenerateTypeDependencies` and `ProcedureCreate` record it.
+    pub fn add_new_members(&mut self, extension: u32, since: u32) {
+        let new = |oid: &u32| *oid >= since;
+        let mut members: Vec<ObjRef> = Vec::new();
+        members
+            .extend(self.schemas.keys().filter(|o| new(o)).map(|&o| ObjRef::new(PG_NAMESPACE, o)));
+        for relation in self.relations.values().filter(|r| new(&r.oid)) {
+            if matches!(
+                relation.kind,
+                RelKind::Table
+                    | RelKind::Sequence
+                    | RelKind::View
+                    | RelKind::Partitioned
+                    | RelKind::MatView
+                    | RelKind::Foreign
+            ) {
+                members.push(ObjRef::new(PG_CLASS, relation.oid));
+            }
+        }
+        // `GenerateTypeDependencies` and `ProcedureCreate` record the membership of each type, the arrays and the row types too, and of each function.
+        members.extend(self.types.keys().filter(|o| new(o)).map(|&o| ObjRef::new(PG_TYPE, o)));
+        members.extend(self.functions.keys().filter(|o| new(o)).map(|&o| ObjRef::new(PG_PROC, o)));
+        let classes: [(u32, Vec<u32>); 15] = [
+            (PG_CAST, self.casts.keys().copied().collect()),
+            (PG_OPERATOR, self.operators.keys().copied().collect()),
+            (PG_OPFAMILY, self.opfamilies.keys().copied().collect()),
+            (PG_OPCLASS, self.opclasses.keys().copied().collect()),
+            (PG_LANGUAGE, self.languages.keys().copied().collect()),
+            (PG_COLLATION, self.collations.keys().copied().collect()),
+            (PG_TS_TEMPLATE, self.ts_templates.keys().copied().collect()),
+            (PG_TS_PARSER, self.ts_parsers.keys().copied().collect()),
+            (PG_TS_DICT, self.ts_dictionaries.keys().copied().collect()),
+            (PG_TS_CONFIG, self.ts_configs.keys().copied().collect()),
+            (PG_CONVERSION, self.conversions.keys().copied().collect()),
+            (PG_EVENT_TRIGGER, self.event_triggers.keys().copied().collect()),
+            (PG_AM, self.access_methods.keys().copied().collect()),
+            (PG_FOREIGN_DATA_WRAPPER, self.fdws.keys().copied().collect()),
+            (PG_FOREIGN_SERVER, self.servers.keys().copied().collect()),
+        ];
+        for (class, oids) in classes {
+            members.extend(oids.into_iter().filter(|o| new(o)).map(|o| ObjRef::new(class, o)));
+        }
+        members.sort_by_key(|m| m.oid);
+        for member in members {
+            self.add_to_extension(member, extension);
+        }
     }
 
     /// `create_proc_lang`: a new procedural language, which gets the next OID. It depends on its handlers.

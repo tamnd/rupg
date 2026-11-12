@@ -15,35 +15,53 @@ pub(crate) fn none(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(Vec::new())
 }
 
-/// The values of `plpgsql.control`, the one extension of rupg. `$system` is the location of an extension in the directory of the install tree.
-const PLPGSQL: (&str, &str, &str, &str) =
-    ("plpgsql", "1.0", "$system", "PL/pgSQL procedural language");
+/// The location of an extension in the directory of the install tree, as `get_extension_location` shows it with the macro `$system`.
+pub(crate) const SYSTEM_LOCATION: &str = "$system";
 
-/// `pg_available_extensions`: the row of `plpgsql`, the one extension that rupg has. A build of PostgreSQL with no contrib modules gives the same row.
-pub(crate) fn extensions(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let (name, version, location, comment) = PLPGSQL;
-    Ok(vec![vec![
-        Value::text(name),
-        Value::text(version),
-        Value::text(location),
-        Value::text(comment),
-    ]])
+/// The values of `plpgsql.control`, the extension of rupg when no crate gives [`crate::set_available_extensions`].
+const PLPGSQL: (&str, &str, &str) = ("plpgsql", "1.0", "PL/pgSQL procedural language");
+
+/// The rows of the extensions, with the location at the column `location`: `<insufficient privilege>` for a role that is not a superuser, as `get_extension_location` gives it.
+fn available(call: &Call<'_>, versions: bool, location: usize) -> Vec<Vec<Value>> {
+    let (name, version, comment) = PLPGSQL;
+    let mut rows = match crate::AVAILABLE_EXTENSIONS.get() {
+        Some(available) => available(versions),
+        None if versions => vec![vec![
+            Value::text(name),
+            Value::text(version),
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::Bool(false),
+            Value::text("pg_catalog"),
+            Value::Null,
+            Value::text(SYSTEM_LOCATION),
+            Value::text(comment),
+        ]],
+        None => vec![vec![
+            Value::text(name),
+            Value::text(version),
+            Value::text(SYSTEM_LOCATION),
+            Value::text(comment),
+        ]],
+    };
+    if !crate::acl::superuser(crate::acl::current_user(call.session)) {
+        for row in &mut rows {
+            if let Some(value) = row.get_mut(location) {
+                *value = Value::text("<insufficient privilege>");
+            }
+        }
+    }
+    rows
 }
 
-/// `pg_available_extension_versions`: the row of the one version of `plpgsql`. It needs a superuser, it is trusted, it is not relocatable, its schema is `pg_catalog` and it requires no other extension.
-pub(crate) fn extension_versions(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let (name, version, location, comment) = PLPGSQL;
-    Ok(vec![vec![
-        Value::text(name),
-        Value::text(version),
-        Value::Bool(true),
-        Value::Bool(true),
-        Value::Bool(false),
-        Value::text("pg_catalog"),
-        Value::Null,
-        Value::text(location),
-        Value::text(comment),
-    ]])
+/// `pg_available_extensions`: the name, the default version, the location and the comment of each extension.
+pub(crate) fn extensions(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(available(call, false, 2))
+}
+
+/// `pg_available_extension_versions`: each version that an install script makes, and each version that updates reach from it, with the values of its control files.
+pub(crate) fn extension_versions(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(available(call, true, 7))
 }
 
 /// The names of `pg_config`, in the order of `get_configdata`.

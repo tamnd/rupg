@@ -12,7 +12,17 @@ keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
 
+[features]
+default = ["btree_gin", "btree_gist", "pg_trgm"]
+btree_gin = []
+btree_gist = []
+pg_trgm = []
+
 [dependencies]
+rupg-common.workspace = true
+rupg-ext.workspace = true
+rupg-func.workspace = true
+rupg-types.workspace = true
 
 [lints]
 workspace = true

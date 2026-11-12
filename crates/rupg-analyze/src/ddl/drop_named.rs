@@ -44,6 +44,7 @@ impl Definer<'_, '_> {
                     | PG_COLLATION
                     | PG_CONVERSION
                     | PG_EVENT_TRIGGER
+                    | PG_EXTENSION
                     | PG_LANGUAGE
                     | PG_FOREIGN_DATA_WRAPPER
                     | PG_FOREIGN_SERVER
@@ -92,10 +93,11 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_ACCESS_METHOD => {
                 ("access method", self.access_method_oid(name).map(|oid| (PG_AM, oid)))
             }
-            ObjectType::OBJECT_EXTENSION => (
-                "extension",
-                self.catalog.extensions().find(|e| e.name == name).map(|e| (PG_EXTENSION, e.oid)),
-            ),
+            ObjectType::OBJECT_EXTENSION => {
+                let found = self.catalog.extensions().find(|e| e.name == name);
+                owner = found.map(|e| e.owner);
+                ("extension", found.map(|e| (PG_EXTENSION, e.oid)))
+            }
             ObjectType::OBJECT_LANGUAGE => {
                 let user = self.catalog.languages().find(|l| l.name == name);
                 owner = user.map(|l| l.owner);
