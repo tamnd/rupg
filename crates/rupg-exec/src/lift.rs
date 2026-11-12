@@ -11,7 +11,7 @@ use std::rc::Rc;
 use rupg_analyze::{BoolOp, Expr, ExprKind, Query, SortGroup, SubLinkKind, Target};
 use rupg_common::Result;
 use rupg_func::Session;
-use rupg_types::{Value, oid};
+use rupg_types::{Array, Value, oid};
 
 use crate::scan::{self, Key};
 use crate::{Cache, Rows, agg, columnar, correlated, free_work, run_query, volatile, window};
@@ -244,32 +244,66 @@ pub(crate) fn probe(
 pub(crate) struct Scalar {
     /// The columns of the keys in the query outside the subquery.
     pub(crate) outer: Vec<Expr>,
-    lifted: Rc<Lifted>,
+    /// The state of the subquery, which [`Scalar::run`] makes before the scan reads the link.
+    lifted: Option<Rc<Lifted>>,
 }
 
 impl Scalar {
-    /// The value of the subquery for a row whose keys are `keys`, as [`rows`] gives it: the value of the group of the keys, or the value of the subquery with no input row when a key is null or the keys have no group.
+    /// True when the subquery ran.
+    pub(crate) fn ready(&self) -> bool {
+        self.lifted.is_some()
+    }
+
+    /// Runs the subquery `query` once with a `GROUP BY` of its keys. With `domain`, the values of each key in the rows of the query outside the subquery that read the link, the subquery reads only the rows of these keys, as the domain of the unnesting of Neumann and Kemper. The cache then keeps the state with no address of a subquery, so that no other run reads it. With no `domain`, the state is the one that [`rows`] reads. False when the subquery must run for each row.
+    pub(crate) fn run(
+        &mut self,
+        query: &Query,
+        params: &[Value],
+        session: &dyn Session,
+        cache: &Cache,
+        domain: Option<&[KeySet]>,
+    ) -> bool {
+        let lifted = match domain {
+            None => state(query, &SubLinkKind::Expr, params, session, cache),
+            Some(domain) => {
+                let state = lift(query, &SubLinkKind::Expr, params, session, cache, Some(domain));
+                let lifted = match &state {
+                    State::Lifted(lifted) => Some(Rc::clone(lifted)),
+                    State::Never { .. } => None,
+                };
+                cache.lifted.borrow_mut().push((std::ptr::null(), state));
+                lifted
+            }
+        };
+        self.lifted = lifted.filter(|lifted| {
+            lifted.empty.len() == 1
+                && lifted.set.is_none()
+                && lifted.bound.is_none()
+                && lifted.test.is_none()
+        });
+        self.lifted.is_some()
+    }
+
+    /// The value of the subquery for a row whose keys are `keys`, as [`rows`] gives it: the value of the group of the keys, or the value of the subquery with no input row when a key is null or the keys have no group. Null before [`Scalar::run`].
     pub(crate) fn value(&self, keys: &[Option<i64>]) -> Value {
+        let Some(lifted) = &self.lifted else { return Value::Null };
         let key: Option<Vec<Key>> = keys.iter().map(|k| k.map(Key::Int)).collect();
-        let rows = key.and_then(|key| self.lifted.rows.get(&key)).unwrap_or(&self.lifted.empty);
+        let rows = key.and_then(|key| lifted.rows.get(&key)).unwrap_or(&lifted.empty);
         rows.first().and_then(|row| row.first()).cloned().unwrap_or(Value::Null)
     }
 }
 
-/// For the vector scan, a correlated subquery of one value with an aggregate and no `GROUP BY`, such as the `avg` of TPC-H Q17, which runs once with a `GROUP BY` of its integer keys. Each group and the subquery with no input row give one row. `None` for another subquery, or when the run fails, and then the subquery runs for each row.
-pub(crate) fn scalar(
-    query: &Query,
-    params: &[Value],
-    session: &dyn Session,
-    cache: &Cache,
-) -> Option<Scalar> {
-    let lifted = state(query, &SubLinkKind::Expr, params, session, cache)?;
-    let one = lifted.empty.len() == 1
-        && lifted.outer.iter().all(|e| matches!(e.ty, oid::INT2 | oid::INT4 | oid::INT8))
-        && lifted.set.is_none()
-        && lifted.bound.is_none()
-        && lifted.test.is_none();
-    one.then(|| Scalar { outer: lifted.outer.clone(), lifted: Rc::clone(&lifted) })
+/// For the vector scan, a correlated subquery of one value with an aggregate and no `GROUP BY`, such as the `avg` of TPC-H Q17, which runs once with a `GROUP BY` of its integer keys. Each group and the subquery with no input row give one row. The subquery does not run here: [`Scalar::run`] runs it before the scan. `None` for another subquery, and then the subquery runs for each row.
+pub(crate) fn scalar(query: &Query) -> Option<Scalar> {
+    if !correlated(query) {
+        return None;
+    }
+    let Split { empty, outer, test, .. } = split(query, &SubLinkKind::Expr)?;
+    let one = empty.is_some()
+        && test.is_none()
+        && !outer.is_empty()
+        && outer.iter().all(|e| matches!(e.ty, oid::INT2 | oid::INT4 | oid::INT8));
+    one.then_some(Scalar { outer, lifted: None })
 }
 
 /// The lifted state of a subquery, which the first call makes and the cache keeps. `None` when the subquery runs for each row.
@@ -289,7 +323,7 @@ fn state(
         };
     }
     let state = if correlated(query) {
-        lift(query, kind, params, session, cache)
+        lift(query, kind, params, session, cache, None)
     } else {
         State::Never { _kept: Vec::new() }
     };
@@ -301,16 +335,20 @@ fn state(
     lifted
 }
 
-/// The state of a subquery at its first evaluation: its rows for each key, or [`State::Never`] when it cannot run once or when the run fails.
+/// The state of a subquery at its first evaluation: its rows for each key, or [`State::Never`] when it cannot run once or when the run fails. With `domain`, the subquery reads only the rows of the keys of the domain, as [`narrow`] gives them.
 fn lift(
     query: &Query,
     kind: &SubLinkKind,
     params: &[Value],
     session: &dyn Session,
     cache: &Cache,
+    domain: Option<&[KeySet]>,
 ) -> State {
     let Some(split) = split(query, kind) else { return State::Never { _kept: Vec::new() } };
-    let Split { all, empty, outer, test } = split;
+    let Split { mut all, empty, outer, test } = split;
+    if let Some(domain) = domain {
+        narrow(&mut all, domain);
+    }
     let mut queries = vec![all];
     queries.extend(empty);
     let width = outer.len();
@@ -509,6 +547,56 @@ fn outer_column(expr: &Expr) -> Option<Expr> {
         ExprKind::Relabel(arg, _) => outer_column(arg),
         _ => None,
     }
+}
+
+/// Adds to the subquery `all` of a lift the condition that its key with the fewest values in `domain` is one of these values. `domain` has the values of each key in the rows of the query outside the subquery. So the subquery makes no group for other keys, and a row of these keys gets the same value as before. The condition `x = ANY (array)` is a test of the zones of the column.
+fn narrow(all: &mut Query, domain: &[KeySet]) {
+    let Some((n, keys)) = domain.iter().enumerate().min_by_key(|(_, keys)| keys.len()) else {
+        return;
+    };
+    let name = format!("?key{n}?");
+    let Some(target) = all.targets.iter().find(|t| t.name == name) else { return };
+    let inner = target.expr.clone();
+    let Some((_, _, equal)) = int_operators(inner.ty) else { return };
+    let mut ints: Vec<i64> = keys.iter().copied().collect();
+    ints.sort_unstable();
+    let (values, array): (Vec<Option<Value>>, u32) = match inner.ty {
+        oid::INT2 => (
+            ints.into_iter()
+                .filter_map(|k| i16::try_from(k).ok())
+                .map(|k| Some(Value::Int2(k)))
+                .collect(),
+            oid::INT2_ARRAY,
+        ),
+        oid::INT4 => (
+            ints.into_iter()
+                .filter_map(|k| i32::try_from(k).ok())
+                .map(|k| Some(Value::Int4(k)))
+                .collect(),
+            oid::INT4_ARRAY,
+        ),
+        _ => (ints.into_iter().map(|k| Some(Value::Int8(k))).collect(), oid::INT8_ARRAY),
+    };
+    let constant = Expr {
+        kind: ExprKind::Const(Value::Array(Box::new(Array::one(values)))),
+        ty: array,
+        typmod: -1,
+        location: None,
+        collation: 0,
+    };
+    let cond = Expr {
+        kind: ExprKind::ScalarArrayOp {
+            func: equal,
+            any: true,
+            args: vec![inner, constant],
+            collation: 0,
+        },
+        ty: oid::BOOL,
+        typmod: -1,
+        location: None,
+        collation: 0,
+    };
+    all.filter = and(all.filter.take().into_iter().chain([cond]).collect());
 }
 
 /// The `<` operator, the `<` function and the `=` function of an integer type.

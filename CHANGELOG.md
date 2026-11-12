@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector scan runs a correlated subquery of one value only for the keys of the rows that pass the conditions before it, as the domain of the unnesting of Neumann and Kemper. A short scan finds these keys, and the lifted `GROUP BY` reads only the rows whose key is one of them. So TPC-H q17 makes about 20 groups instead of 20k (#1523).
 - The vector scan runs `x IN (SELECT ...)` and `x NOT IN (SELECT ...)` in a condition when the subquery reads no column of the query, `x` is an integer and the subquery gives one integer column, such as the `IN` of `partsupp` in TPC-H q20. The subquery runs once into a set of integers, and the nulls give the same results as in Postgres (#1521).
 - `CREATE EXTENSION vector` installs pgvector 0.8.7 with the `vector` type, its type modifier, its text and binary I/O, its casts to and from arrays, its functions, its distance operators (`<->`, `<#>`, `<=>`, `<+>`), its arithmetic, `avg` and `sum`, and the operator classes of the `ivfflat` and `hnsw` access methods. A base type of an extension library now uses the library's C I/O functions. `COMMENT ON ACCESS METHOD` works (#1522)
 - The vector scan and the vector join through unique keys run a correlated subquery of one value with an aggregate and `=` keys of integer columns, such as the `avg` of TPC-H q17. The subquery runs once with a `GROUP BY` of its keys, and each row looks up the value of its keys (#1519).
