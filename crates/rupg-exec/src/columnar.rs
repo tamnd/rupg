@@ -768,9 +768,7 @@ fn links_of<'a>(
                 SubLinkKind::Exists => {
                     LinkKind::Exists(lift::probe(&sub.query, params, session, cache)?)
                 }
-                SubLinkKind::Expr => {
-                    LinkKind::Value(lift::scalar(&sub.query, params, session, cache)?)
-                }
+                SubLinkKind::Expr => LinkKind::Value(lift::scalar(&sub.query)?),
                 SubLinkKind::Any => LinkKind::In(in_set(at, params, session, cache)?),
                 _ => return None,
             };
@@ -778,6 +776,74 @@ fn links_of<'a>(
         }
     }
     Some(links)
+}
+
+/// Runs the subqueries of one value of the links in `conds`, before the scan of the `rows` rows reads them. The links go in the order of their conditions, so that the conditions before a link have no link that did not run. When few rows pass these conditions, the subquery reads only the rows of their keys, as [`domain`] gives them. False when a subquery must run for each row.
+fn ready(exec: &mut Exec<'_>, conds: &[&Expr], rows: usize) -> bool {
+    let mut waiting = Vec::new();
+    for (link, found) in exec.links.iter().enumerate() {
+        if matches!(&found.kind, LinkKind::Value(scalar) if !scalar.ready()) {
+            let at = found.at;
+            let place = conds.iter().enumerate().find_map(|(n, cond)| {
+                cond.find(0, &mut |e, depth| match &e.kind {
+                    ExprKind::SubLink(sub) if depth == 0 && std::ptr::eq(e, at) => Some(&sub.query),
+                    _ => None,
+                })
+                .map(|query| (n, query))
+            });
+            let Some((n, query)) = place else { return false };
+            waiting.push((n, link, query));
+        }
+    }
+    waiting.sort_by_key(|&(n, link, _)| (n, link));
+    for (n, link, query) in waiting {
+        let domain = domain(exec, &conds[..n], link, rows);
+        let (params, session, cache) = (exec.params, exec.session, exec.cache);
+        let LinkKind::Value(scalar) = &mut exec.links[link].kind else { continue };
+        if !scalar.run(query, params, session, cache, domain.as_deref()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The values of the keys of the link `link` in the rows of the `rows` rows that pass `conds`, which a scan of its own finds. `None` when the subquery reads all its rows: when no condition comes before the link on a long table, when many rows pass, as the keys of many rows read most of the subquery, or when a condition fails. The scan of the query then gives the error, as before, also when a `LIMIT` stops it before the row of the error.
+fn domain(
+    exec: &mut Exec<'_>,
+    conds: &[&Expr],
+    link: usize,
+    rows: usize,
+) -> Option<Vec<lift::KeySet>> {
+    // On TPC-H q20 at SF0.1, 760 of the 80k rows of `partsupp` pass the `IN`, and the subquery makes 54k groups from all its rows.
+    const SMALL: usize = 1 << 14;
+    if conds.is_empty() && rows > SMALL {
+        return None;
+    }
+    let most = SMALL.max(rows / 4);
+    let exprs = exec.links[link].outer();
+    let mut keys = vec![lift::KeySet::default(); exprs.len()];
+    let mut passed = 0;
+    let mut few = true;
+    let mut scan =
+        Scan { exec, conds, segments: rows.div_ceil(ROWS), rows, open: true, answered: Vec::new() };
+    let ran = scan.each(&mut |exec, batch, sel| {
+        passed += sel.len();
+        if passed > most {
+            few = false;
+            return Ok(false);
+        }
+        for (set, expr) in keys.iter_mut().zip(&exprs) {
+            let col = exec.eval(expr, batch, sel)?;
+            match col.ints() {
+                Some(ints) => set.extend((0..sel.len()).filter_map(|i| ints.get(i))),
+                None => {
+                    set.extend((0..sel.len()).filter_map(|i| int_of(&col.value(i, &exec.dicts))));
+                }
+            }
+        }
+        Ok(true)
+    });
+    (ran.is_ok() && few).then_some(keys)
 }
 
 /// The kind of a `numeric` column whose type has a scale up to 18, which keeps each value as an integer count of `10^-scale`.
@@ -1165,6 +1231,9 @@ impl<'q> Exec<'q> {
                 Ok(Col::bools(&out))
             }
             LinkKind::Value(scalar) => {
+                if !scalar.ready() {
+                    return Err(Error::internal("a subquery of one value did not run"));
+                }
                 // Rows with the same keys one after another look up the keys once.
                 let mut keys = vec![None; cols.len()];
                 let mut last: Option<(Vec<Option<i64>>, Value)> = None;
@@ -2467,6 +2536,9 @@ pub(crate) fn run_on(
         .into_iter()
         .filter(|c| c.first_var().is_some())
         .collect();
+    if open && !ready(&mut exec, &conds, rows) {
+        return Ok(None);
+    }
     // The columns that the targets and `HAVING` read, which the rows of the result keep.
     let mut kept = vec![false; exec.types.len()];
     for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
@@ -2655,6 +2727,9 @@ pub(crate) fn selected(
         empty: scan::Tables::default(),
         links,
     };
+    if !ready(&mut exec, conds, rows) {
+        return Ok(None);
+    }
     let segments = rows.div_ceil(ROWS);
     let mut scan =
         Scan { exec: &mut exec, conds, segments, rows, open: true, answered: Vec::new() };
