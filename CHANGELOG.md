@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A join of a table that `COPY` filled no longer loses rows. A load puts a row into an earlier page with free space, and the frozen columns keep the row of that version after the frozen rows, so the rows of the columns are not in the order of the versions. The fetch of the rows that a scan of the columns selected now finds the place of the version of each row of the columns (#1509).
 - A hash join of two integer columns reads the keys with no copy of the values and keeps the rows of the right side in one array in the order of their keys, with an array of the start of each key when the keys are dense (spec/14 section 14.8.1). It does not use a `BTreeMap` of `Value` keys (#1508).
 - The semi-join reduction keeps dense integer keys in a bitmap and does not run an edge again when the rows of its other side did not change. On TPC-H SF0.1, the run of q5 goes from 0.175 s to 0.107 s, and the reduction is no longer in the profile of q9 (#1507).
 - `CREATE INDEX ... USING brin` takes the options `n_distinct_per_range` and `false_positive_rate` of the bloom classes and `values_per_range` of the minmax-multi classes, with the bounds errors of PostgreSQL. The regression tests `brin_bloom` and `brin_multi` pass (#1506)
