@@ -366,7 +366,7 @@ impl<'a> Expand<'a> {
             levels_up: var.levels_up,
             removed: false,
         };
-        Some(Expr { kind: ExprKind::PlaceHolder(Box::new(p)), ty, typmod, location })
+        Some(Expr { collation: 0, kind: ExprKind::PlaceHolder(Box::new(p)), ty, typmod, location })
     }
 }
 

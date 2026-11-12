@@ -160,7 +160,7 @@ pub(crate) fn restrictions(conds: &[&Expr]) -> Vec<Expr> {
 
 /// A condition of `AND` or `OR` of `args`.
 fn boolean(op: BoolOp, args: Vec<Expr>) -> Expr {
-    Expr { kind: ExprKind::Bool(op, args), ty: 16, typmod: -1, location: None }
+    Expr { collation: 0, kind: ExprKind::Bool(op, args), ty: 16, typmod: -1, location: None }
 }
 
 /// The relation and the column of each side of an `=` of two columns of two relations, with integer or date values.

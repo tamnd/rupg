@@ -355,7 +355,7 @@ impl Analyzer<'_> {
             levels_up: level,
             collation,
         };
-        Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
+        Ok(Expr { collation: 0, kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
     }
 
     /// `transformGroupingFunc`: a call of `GROUPING`, which the checks of `parseCheckAggregates` complete.

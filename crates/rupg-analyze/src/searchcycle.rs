@@ -210,7 +210,7 @@ pub(crate) fn check(
 fn var(relation: usize, index: usize, ty: u32, typmod: i32) -> Expr {
     let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
     let var = Var { relation, attnum, levels_up: 0 };
-    Expr { kind: ExprKind::Var(var), ty, typmod, location: None }
+    Expr { collation: 0, kind: ExprKind::Var(var), ty, typmod, location: None }
 }
 
 /// A call of the function with this OID.

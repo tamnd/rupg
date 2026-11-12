@@ -211,6 +211,7 @@ fn finish(
         0 => None,
         1 => residual.into_iter().next(),
         _ => Some(Expr {
+            collation: 0,
             kind: ExprKind::Bool(BoolOp::And, residual),
             ty: oid::BOOL,
             typmod: -1,

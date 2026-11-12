@@ -958,6 +958,7 @@ impl Analyzer<'_> {
                 .at_opt(place));
             }
             args.push(Expr {
+                collation: 0,
                 kind: ExprKind::Array { element, multidims: false, elements: rest },
                 ty: array,
                 typmod: -1,
@@ -1032,6 +1033,7 @@ impl Analyzer<'_> {
         }
         let collation = self.call_collation(proc.oid, &args);
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::Func(Func {
                 oid: proc.oid,
                 args,
@@ -1142,7 +1144,7 @@ impl Analyzer<'_> {
                         let (ty, typmod) = (inner.ty, inner.typmod);
                         let kind =
                             ExprKind::NamedArg(Box::new(NamedArg { arg: inner, name, number }));
-                        Ok(Expr { kind, ty, typmod, location: arg.location })
+                        Ok(Expr { collation: 0, kind, ty, typmod, location: arg.location })
                     }
                     kind => self.coerce(Expr { kind, ..arg }, ty, -1, Context::Implicit, None),
                 }
@@ -1316,6 +1318,7 @@ impl Analyzer<'_> {
         self.funcs.push(op.code);
         let collation = self.call_collation(op.code, &args);
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::Func(Func {
                 oid: op.code,
                 args,

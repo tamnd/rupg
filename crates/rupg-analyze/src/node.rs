@@ -1369,7 +1369,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
         }
         _ => return Err(bad(&format!("the node {name}"))),
     };
-    Ok(Expr { kind, ty, typmod, location })
+    Ok(Expr { collation: 0, kind, ty, typmod, location })
 }
 
 /// The form of a relabel or of an I/O cast.
@@ -1636,6 +1636,7 @@ mod tests {
         let var =
             |attnum| Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), oid::INT4);
         let call = Expr {
+            collation: 0,
             kind: ExprKind::Func(Func {
                 oid: 177,
                 args: vec![var(1), constant(Value::Int4(1), oid::INT4)],
@@ -1722,6 +1723,7 @@ mod tests {
                 .at(Some(0)),
             Expr::new(ExprKind::CoerceViaIo(Box::new(var(1)), CastForm::Implicit), oid::TEXT),
             Expr {
+                collation: 0,
                 kind: ExprKind::Func(Func {
                     oid: 1,
                     args: vec![],

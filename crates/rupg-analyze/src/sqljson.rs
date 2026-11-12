@@ -69,7 +69,7 @@ fn call(func: u32, args: Vec<Expr>, ty: u32, at: Option<usize>) -> Expr {
         retset: false,
         collation: 0,
     });
-    Expr { kind, ty, typmod: -1, location: at }
+    Expr { collation: 0, kind, ty, typmod: -1, location: at }
 }
 
 /// The error of a cast that does not exist.
@@ -182,7 +182,7 @@ impl Analyzer<'_> {
         let (ty, typmod) = (coerced.ty, coerced.typmod);
         let location = raw.place();
         let value = JsonValue { raw, formatted: coerced, format: ve_format };
-        Ok(Expr { kind: ExprKind::JsonValue(Box::new(value)), ty, typmod, location })
+        Ok(Expr { collation: 0, kind: ExprKind::JsonValue(Box::new(value)), ty, typmod, location })
     }
 
     /// `transformJsonOutput` and `checkJsonOutputFormat`: the type of `RETURNING` and its format, or `None` when the call has no clause. The place is the place of the `FORMAT` clause.
@@ -320,7 +320,13 @@ impl Analyzer<'_> {
         let format = JsonFormat::default();
         let ctor =
             JsonCtor { kind, args, func, format, returning, unique, absent_on_null, coercion };
-        Ok(Expr { kind: ExprKind::JsonCtor(Box::new(ctor)), ty, typmod, location: place(location) })
+        Ok(Expr {
+            collation: 0,
+            kind: ExprKind::JsonCtor(Box::new(ctor)),
+            ty,
+            typmod,
+            location: place(location),
+        })
     }
 
     /// `transformJsonObjectConstructor`.
@@ -438,8 +444,13 @@ impl Analyzer<'_> {
         let empty = self
             .coerce_to_target(empty, ty, typmod, Context::Assignment, at)?
             .ok_or_else(|| cannot_cast(oid::UNKNOWN, ty, at))?;
-        let coalesce =
-            Expr { kind: ExprKind::Coalesce(vec![exec, empty]), ty, typmod, location: at };
+        let coalesce = Expr {
+            collation: 0,
+            kind: ExprKind::Coalesce(vec![exec, empty]),
+            ty,
+            typmod,
+            location: at,
+        };
         let returning = self.json_constructor_output(ctor.output.as_deref(), &[arg])?;
         let mut result = self.json_constructor(
             JsonCtorKind::ArrayQuery,
@@ -571,6 +582,7 @@ impl Analyzer<'_> {
             let text = call(CONVERT_FROM, vec![raw.clone(), encoding_const(format)], oid::TEXT, at);
             let value = JsonValue { raw, formatted: text, format };
             let expr = Expr {
+                collation: 0,
                 kind: ExprKind::JsonValue(Box::new(value)),
                 ty: oid::TEXT,
                 typmod: -1,

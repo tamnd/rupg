@@ -88,12 +88,14 @@ pub fn explicit_cast(expr: Expr, target: u32) -> Option<Expr> {
     match find_path(target, expr.ty, Context::Explicit) {
         Path::None | Path::ArrayCoerce => None,
         Path::Relabel => Some(Expr {
+            collation: 0,
             kind: ExprKind::Relabel(Box::new(expr), CastForm::Explicit),
             ty: target,
             typmod: -1,
             location,
         }),
         Path::ViaIo => Some(Expr {
+            collation: 0,
             kind: ExprKind::CoerceViaIo(Box::new(expr), CastForm::Explicit),
             ty: target,
             typmod: -1,
@@ -227,6 +229,7 @@ impl Analyzer<'_> {
             expr
         } else {
             Expr {
+                collation: 0,
                 kind: ExprKind::Relabel(Box::new(expr), CastForm::Implicit),
                 ty: base,
                 typmod: -1,
@@ -251,6 +254,7 @@ impl Analyzer<'_> {
             .collect::<Option<Vec<_>>>()
             .ok_or_else(error)?;
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::ConvertRow { arg: Box::new(arg), fields, form },
             ty: target,
             typmod: -1,
@@ -318,6 +322,7 @@ impl Analyzer<'_> {
                 && let Some(ty) = self.param_type(n, target, expr.location)?
             {
                 return Ok(Expr {
+                    collation: 0,
                     kind: ExprKind::Param(n),
                     ty,
                     typmod: -1,
@@ -357,6 +362,7 @@ impl Analyzer<'_> {
                 Ok(coerce_to_domain(expr, target, context, location, false))
             }
             Path::Relabel => Ok(Expr {
+                collation: 0,
                 kind: ExprKind::Relabel(Box::new(expr), cast),
                 ty: target,
                 typmod: -1,
@@ -364,6 +370,7 @@ impl Analyzer<'_> {
             }),
             Path::ViaIo => {
                 let expr = Expr {
+                    collation: 0,
                     kind: ExprKind::CoerceViaIo(Box::new(expr), cast),
                     ty: base,
                     typmod: -1,
@@ -386,6 +393,7 @@ impl Analyzer<'_> {
                     && types::base(target_element) == target_element
                 {
                     Expr {
+                        collation: 0,
                         kind: ExprKind::Relabel(Box::new(expr), cast),
                         ty: base,
                         typmod: -1,
@@ -393,6 +401,7 @@ impl Analyzer<'_> {
                     }
                 } else {
                     let test = Expr {
+                        collation: 0,
                         kind: ExprKind::CaseTest,
                         ty: input_element,
                         typmod: expr.typmod,
@@ -405,6 +414,7 @@ impl Analyzer<'_> {
                         })?;
                     let typmod = element.typmod;
                     Expr {
+                        collation: 0,
                         kind: ExprKind::ArrayCoerce {
                             arg: Box::new(expr),
                             element: Box::new(element),
@@ -469,7 +479,13 @@ impl Analyzer<'_> {
         }
         let form =
             if context == Context::Explicit { CastForm::Explicit } else { CastForm::Implicit };
-        let row = Expr { kind: ExprKind::Row(fields, form), ty: base, typmod: -1, location };
+        let row = Expr {
+            collation: 0,
+            kind: ExprKind::Row(fields, form),
+            ty: base,
+            typmod: -1,
+            location,
+        };
         Ok(if base == target {
             row
         } else {
@@ -513,9 +529,16 @@ fn typmod_cast(
         // An ArrayCoerceExpr applies the function to each element.
         Some((func, true)) => {
             let ty = types::element(target);
-            let test = Expr { kind: ExprKind::CaseTest, ty, typmod: expr.typmod, location: None };
+            let test = Expr {
+                collation: 0,
+                kind: ExprKind::CaseTest,
+                ty,
+                typmod: expr.typmod,
+                location: None,
+            };
             let element = build_cast(test, func, ty, typmod, context, form, location);
             Expr {
+                collation: 0,
                 kind: ExprKind::ArrayCoerce {
                     arg: Box::new(expr),
                     element: Box::new(element),
@@ -532,7 +555,13 @@ fn typmod_cast(
                 expr.typmod = typmod;
                 expr
             } else {
-                Expr { kind: ExprKind::Relabel(Box::new(expr), cast), ty: target, typmod, location }
+                Expr {
+                    collation: 0,
+                    kind: ExprKind::Relabel(Box::new(expr), cast),
+                    ty: target,
+                    typmod,
+                    location,
+                }
             }
         }
     }
@@ -635,7 +664,13 @@ fn coerce_to_domain(
     }
     let expr = typmod_cast(expr, base, typmod, context, false, location);
     let form = if context == Context::Explicit { CastForm::Explicit } else { CastForm::Implicit };
-    Expr { kind: ExprKind::CoerceToDomain(Box::new(expr), form), ty: target, typmod: -1, location }
+    Expr {
+        collation: 0,
+        kind: ExprKind::CoerceToDomain(Box::new(expr), form),
+        ty: target,
+        typmod: -1,
+        location,
+    }
 }
 
 /// `hide_coercion_node`: a cast that the analyzer made shows as implicit.
@@ -680,6 +715,7 @@ fn build_cast(
         -1
     };
     Expr {
+        collation: 0,
         kind: ExprKind::Func(Func {
             oid: func,
             args,

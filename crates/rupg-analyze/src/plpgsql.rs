@@ -147,7 +147,13 @@ impl Analyzer<'_> {
 /// `42846` when there is no cast, as for a type that is `internal`.
 pub fn plpgsql_cast(env: &dyn Env, source: (u32, i32), target: u32, typmod: i32) -> Result<Query> {
     let mut analyzer = Analyzer::new(env, &Params { types: vec![source.0], variable: false });
-    let param = Expr { kind: ExprKind::Param(1), ty: source.0, typmod: source.1, location: None };
+    let param = Expr {
+        collation: 0,
+        kind: ExprKind::Param(1),
+        ty: source.0,
+        typmod: source.1,
+        location: None,
+    };
     let Some(expr) = analyzer.coerce_to_target(param, target, typmod, Context::Plpgsql, None)?
     else {
         return Err(Error::new(
@@ -292,6 +298,7 @@ impl Analyzer<'_> {
         }
         self.params[variable.param - 1] = variable.ty;
         Expr {
+            collation: 0,
             kind: ExprKind::Param(variable.param),
             ty: variable.ty,
             typmod: variable.typmod,

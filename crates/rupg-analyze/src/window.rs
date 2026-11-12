@@ -332,7 +332,13 @@ impl Analyzer<'_> {
             nulls: parts.nulls,
             collation,
         };
-        Ok(Expr { kind: ExprKind::Window(Box::new(call)), ty, typmod: -1, location: at })
+        Ok(Expr {
+            collation: 0,
+            kind: ExprKind::Window(Box::new(call)),
+            ty,
+            typmod: -1,
+            location: at,
+        })
     }
 
     /// `transformWindowDefinitions`: the windows of the query, in the order of their numbers. A window can copy a window before it.

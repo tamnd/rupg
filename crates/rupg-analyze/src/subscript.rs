@@ -260,7 +260,7 @@ impl Analyzer<'_> {
             lower: slice.then_some(lower),
             assign: None,
         }));
-        Ok(Expr { kind, ty: result, typmod, location: None })
+        Ok(Expr { collation: 0, kind, ty: result, typmod, location: None })
     }
 
     /// `transformAssignmentIndirection`: the assignment of `rhs` to the part of `base` that the subscripts and the fields of `indirection` name, as an expression whose value is the whole value with the new part. `name` is the name of the target in the errors, and the type and the typmod are the type of `base`.
@@ -481,7 +481,7 @@ impl Analyzer<'_> {
             lower: None,
             assign: None,
         }));
-        Ok(Expr { kind, ty: oid::JSONB, typmod: -1, location: None })
+        Ok(Expr { collation: 0, kind, ty: oid::JSONB, typmod: -1, location: None })
     }
 
     /// A subscript, cast to `int4` as an assignment cast.

@@ -120,6 +120,7 @@ impl Analyzer<'_> {
                     .iter()
                     .enumerate()
                     .map(|(n, &(ty, typmod))| Expr {
+                        collation: 0,
                         kind: ExprKind::SubColumn(n),
                         ty,
                         typmod,
@@ -131,6 +132,6 @@ impl Analyzer<'_> {
             }
         };
         let sub = SubLink { kind, test, query, alternative: None, volatile: false, pulled: false };
-        Ok(Expr { kind: ExprKind::SubLink(Box::new(sub)), ty, typmod, location: at })
+        Ok(Expr { collation: 0, kind: ExprKind::SubLink(Box::new(sub)), ty, typmod, location: at })
     }
 }
