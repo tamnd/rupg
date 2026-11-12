@@ -1,0 +1,50 @@
+> CREATE TABLE xs (sk int PRIMARY KEY, sname text)
+CREATE TABLE
+> INSERT INTO xs SELECT i, 'supp' || i FROM generate_series(1, 40) i
+INSERT 0 40
+> CREATE TABLE xo (ok bigint PRIMARY KEY, ostatus text)
+CREATE TABLE
+> INSERT INTO xo SELECT i, CASE WHEN i % 3 = 0 THEN 'F' ELSE 'O' END FROM generate_series(1, 1000) i
+INSERT 0 1000
+> INSERT INTO xo VALUES (1001, NULL)
+INSERT 0 1
+> CREATE TABLE xl (lok bigint, lsk int, lnum int)
+CREATE TABLE
+> INSERT INTO xl SELECT 1 + i % 1001, 1 + (i * 7) % 40, i % 6 FROM generate_series(1, 5000) i
+INSERT 0 5000
+> INSERT INTO xl VALUES (NULL, 3, 1), (5, NULL, 2), (6, 9, NULL)
+INSERT 0 3
+> SELECT sname, count(*) FROM xs, xl l1, xo WHERE sk = l1.lsk AND ok = l1.lok AND EXISTS (SELECT * FROM xl l2 WHERE l2.lok = l1.lok AND l2.lsk <> l1.lsk) AND NOT EXISTS (SELECT * FROM xl l3 WHERE l3.lok = l1.lok AND l3.lsk <> l1.lsk AND l3.lnum = 5) GROUP BY sname ORDER BY 2 DESC, sname LIMIT 5
+fields sname@xs.2:25:-1:-1,count:20:8:-1
+row supp8,60
+row supp10,59
+row supp12,59
+row supp14,59
+row supp16,59
+SELECT 5
+> SELECT ostatus, count(*) FROM xo, xl WHERE ok = lok AND EXISTS (SELECT 1 FROM xl l2 WHERE l2.lok = xo.ok AND l2.lnum = 5) GROUP BY ostatus ORDER BY ostatus NULLS FIRST
+fields ostatus@xo.2:25:-1:-1,count:20:8:-1
+row F,1665
+row O,2498
+SELECT 2
+> SELECT ostatus, count(*) FROM xo, xl WHERE ok = lok AND NOT EXISTS (SELECT 1 FROM xl l2 WHERE l2.lok = xo.ok AND l2.lnum = 5) GROUP BY ostatus ORDER BY ostatus NULLS FIRST
+fields ostatus@xo.2:25:-1:-1,count:20:8:-1
+row NULL,4
+row O,835
+SELECT 2
+> SELECT lnum, count(*) FROM xl l1, xo WHERE ok = lok AND EXISTS (SELECT * FROM xl l2 WHERE l2.lok = l1.lok AND l2.lsk > l1.lsk) GROUP BY lnum ORDER BY lnum NULLS FIRST
+fields lnum@xl.3:23:4:-1,count:20:8:-1
+row NULL,1
+row 0,686
+row 1,650
+row 2,681
+row 3,649
+row 4,683
+row 5,650
+SELECT 7
+> SELECT count(*) FROM xl l1 WHERE NOT EXISTS (SELECT * FROM xl l2 WHERE l2.lok = l1.lok AND l2.lsk < l1.lsk)
+fields count:20:8:-1
+row 1003
+SELECT 1
+> DROP TABLE xs, xo, xl
+DROP TABLE

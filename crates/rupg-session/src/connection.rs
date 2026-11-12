@@ -4928,6 +4928,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector_left_join.test")));
     }
 
+    /// An `EXISTS` and a `NOT EXISTS` of one table in a join of the vectors give the rows of Postgres, with a set of keys, with the bounds of a comparison such as the `<>` of TPC-H Q21, and with nulls in the keys and in the compared columns.
+    #[test]
+    fn vector_exists() {
+        big_stack(|| script(include_str!("connection/vector_exists.test")));
+    }
+
     /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
     #[test]
     fn date_part_scan() {
