@@ -598,6 +598,8 @@ enum Memo {
 /// An expression that the scan runs with [`Eval`]: a copy whose columns are parameters after the parameters of the query.
 struct Generic {
     template: Expr,
+    /// The places in [`Exec::links`] of the subqueries of the expression, which come before its columns in the order of the parameters.
+    links: Vec<usize>,
     /// The columns of the expression, in the order of their parameters.
     vars: Vec<Var>,
     memo: Option<Memo>,
@@ -638,10 +640,42 @@ struct Exec<'q> {
 /// An `EXISTS` of `WHERE` that ran once: the link in the query and its probe of [`lift::probe`].
 struct Link {
     at: *const Expr,
-    probe: lift::Probe,
+    /// The type of the subquery.
+    ty: u32,
+    kind: LinkKind,
 }
 
-/// The links of the `EXISTS` of `exprs` that are not in a subquery, or `None` when an `EXISTS` has no probe of [`lift::probe`].
+/// The run once of the subquery of a [`Link`].
+enum LinkKind {
+    /// An `EXISTS`.
+    Exists(lift::Probe),
+    /// A subquery of one value with an aggregate.
+    Value(lift::Scalar),
+}
+
+impl Link {
+    /// The columns of the query outside the subquery that the link reads.
+    fn outer(&self) -> Vec<Expr> {
+        match &self.kind {
+            LinkKind::Exists(probe) => {
+                std::iter::once(probe.outer.clone()).chain(probe.other.clone()).collect()
+            }
+            LinkKind::Value(scalar) => scalar.outer.clone(),
+        }
+    }
+
+    /// The columns of the query outside the subquery that the link reads, to change.
+    fn outer_mut(&mut self) -> Vec<&mut Expr> {
+        match &mut self.kind {
+            LinkKind::Exists(probe) => {
+                std::iter::once(&mut probe.outer).chain(probe.other.as_mut()).collect()
+            }
+            LinkKind::Value(scalar) => scalar.outer.iter_mut().collect(),
+        }
+    }
+}
+
+/// The links of the subqueries of `exprs` that are not in a subquery, or `None` when a subquery is not an `EXISTS` with a probe of [`lift::probe`] or a subquery of one value of [`lift::scalar`].
 fn links_of<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     params: &[Value],
@@ -660,13 +694,21 @@ fn links_of<'a>(
             None::<()>
         });
         for (at, sub) in found {
-            links.push(Link { at, probe: lift::probe(&sub.query, params, session, cache)? });
+            let kind = match sub.kind {
+                SubLinkKind::Exists => {
+                    LinkKind::Exists(lift::probe(&sub.query, params, session, cache)?)
+                }
+                SubLinkKind::Expr => {
+                    LinkKind::Value(lift::scalar(&sub.query, params, session, cache)?)
+                }
+                _ => return None,
+            };
+            links.push(Link { ty: at.ty, at, kind });
         }
     }
     Some(links)
 }
 
-/// The number of characters of the bytes of a `String`: the bytes less the bytes that continue a character, with the form `10xxxxxx`. Eight bytes are tested at a time.
 /// The kind of a `numeric` column whose type has a scale up to 18, which keeps each value as an integer count of `10^-scale`.
 fn numeric_kind(ty: u32, typmod: i32) -> Option<Kind> {
     let scale = u8::try_from(typmod.checked_sub(4)? & 0xffff).ok()?;
@@ -1029,26 +1071,45 @@ impl<'q> Exec<'q> {
         self.generic(expr, batch, sel)
     }
 
-    /// The `EXISTS` of `self.links[link]` for each row, as [`lift::Probe::tests`] gives it for the key of the row and its other column.
+    /// The subquery of `self.links[link]` for each row: the `EXISTS` that [`lift::Probe::tests`] gives for the key of the row and its other column, or the value that [`lift::Scalar::value`] gives for the keys of the row.
     fn link(&mut self, link: usize, batch: &mut Batch, sel: &[u32]) -> Result<Col> {
-        let outer = self.links[link].probe.outer.clone();
-        let col = self.eval(&outer, batch, sel)?;
-        let other = match self.links[link].probe.other.clone() {
-            Some(expr) => Some(self.eval(&expr, batch, sel)?),
-            None => None,
-        };
+        let exprs = self.links[link].outer();
+        let cols = exprs.iter().map(|e| self.eval(e, batch, sel)).collect::<Result<Vec<Col>>>()?;
         let dicts = &self.dicts;
-        let int = |col: &Col, ints: Option<Ints<'_>>, i: usize| match ints {
+        let ints: Vec<Option<Ints<'_>>> = cols.iter().map(Col::ints).collect();
+        let int = |at: usize, i: usize| match &ints[at] {
             Some(ints) => ints.get(i),
-            None => int_of(&col.value(i, dicts)),
+            None => int_of(&cols[at].value(i, dicts)),
         };
-        let (keys, values) = (col.ints(), other.as_ref().and_then(Col::ints));
-        let out = self.links[link].probe.tests(
-            sel.len(),
-            |i| int(&col, keys, i),
-            |i| other.as_ref().and_then(|o| int(o, values, i)),
-        );
-        Ok(Col::bools(&out))
+        match &self.links[link].kind {
+            LinkKind::Exists(probe) => {
+                let other = probe.other.is_some();
+                let out =
+                    probe.tests(sel.len(), |i| int(0, i), |i| if other { int(1, i) } else { None });
+                Ok(Col::bools(&out))
+            }
+            LinkKind::Value(scalar) => {
+                // Rows with the same keys one after another look up the keys once.
+                let mut keys = vec![None; cols.len()];
+                let mut last: Option<(Vec<Option<i64>>, Value)> = None;
+                let mut values = Vec::with_capacity(sel.len());
+                for i in 0..sel.len() {
+                    for (at, key) in keys.iter_mut().enumerate() {
+                        *key = int(at, i);
+                    }
+                    let value = match &last {
+                        Some((l, value)) if *l == keys => value.clone(),
+                        _ => {
+                            let value = scalar.value(&keys);
+                            last = Some((keys.clone(), value.clone()));
+                            value
+                        }
+                    };
+                    values.push((value, 0));
+                }
+                Ok(self.collect(self.links[link].ty, None, values))
+            }
+        }
     }
 
     /// A `CASE` with no argument whose results are integers, or codes of one dictionary and constant texts that the dictionary has, so that equal texts have equal codes. Each condition runs on the rows that no condition before it took, and each result runs only on its rows, as the row engine evaluates the result of the first condition that is true. `None` for other results, for which the row engine evaluates the expression.
@@ -1584,9 +1645,28 @@ impl<'q> Exec<'q> {
 
     fn template(&mut self, expr: &Expr) -> Generic {
         let mut vars: Vec<Var> = Vec::new();
+        // The subqueries of the expression, which ran once, in the order that `each_mut` visits them.
+        let mut found = Vec::new();
+        expr.find(0, &mut |e, depth| {
+            if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+                found.push(std::ptr::from_ref(e));
+            }
+            None::<()>
+        });
+        let links: Vec<usize> = found
+            .iter()
+            .filter_map(|&at| self.links.iter().position(|l| std::ptr::eq(l.at, at)))
+            .collect();
         let mut template = expr.clone();
         let base = self.params.len();
-        template.each_mut(0, &mut |e, _| {
+        let width = links.len();
+        let mut link = 0;
+        template.each_mut(0, &mut |e, depth| {
+            if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+                link += 1;
+                e.kind = ExprKind::Param(base + link);
+                return true;
+            }
             if let ExprKind::Var(var) = e.kind {
                 let at = match vars.iter().position(|v| v.attnum == var.attnum) {
                     Some(at) => at,
@@ -1595,7 +1675,7 @@ impl<'q> Exec<'q> {
                         vars.len() - 1
                     }
                 };
-                e.kind = ExprKind::Param(base + at + 1);
+                e.kind = ExprKind::Param(base + width + at + 1);
                 return true;
             }
             false
@@ -1604,7 +1684,7 @@ impl<'q> Exec<'q> {
             self.dicts.push(Dict::Own(Box::default()));
             self.dicts.len() - 1
         });
-        Generic { template, vars, memo: None, null: None, dict }
+        Generic { template, links, vars, memo: None, null: None, dict }
     }
 
     /// The value of the template of `generic` with the slots of its columns.
@@ -1632,8 +1712,11 @@ impl<'q> Exec<'q> {
     ) -> Result<Col> {
         let base = self.params.len();
         self.slots.truncate(base);
-        self.slots.resize(base + generic.vars.len(), Value::Null);
-        let mut inputs = Vec::with_capacity(generic.vars.len());
+        self.slots.resize(base + generic.links.len() + generic.vars.len(), Value::Null);
+        let mut inputs = Vec::with_capacity(generic.links.len() + generic.vars.len());
+        for &link in &generic.links {
+            inputs.push(self.link(link, batch, sel)?);
+        }
         for var in &generic.vars {
             let column = usize::try_from(var.attnum - 1).unwrap_or(0);
             inputs.push(self.var(batch, column, self.types[column], sel)?);
@@ -1775,23 +1858,19 @@ fn data_len(data: &DecodedData) -> usize {
 
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
 ///
-/// With `links`, an `EXISTS` of `WHERE` alone or in `AND`, `OR` and `NOT` is supported, and the scan tests it with the probe of [`lift::probe`]. In other places a link can go to [`Exec::generic`], which does not evaluate a subquery.
+/// With `links`, an `EXISTS` and a subquery of one value are supported, and the scan gets their values from the run once of [`links_of`]. The columns of the query in a subquery are then columns of the query outside it.
 fn unsupported(expr: &Expr, links: bool) -> bool {
-    if links {
-        match &expr.kind {
-            ExprKind::Bool(_, args) => return args.iter().any(|arg| unsupported(arg, true)),
-            ExprKind::SubLink(sub) => {
-                return sub.kind != SubLinkKind::Exists || crate::volatile(expr);
-            }
-            _ => {}
-        }
-    }
     crate::volatile(expr)
         || expr
-            .find(0, &mut |e, _| {
+            .find(0, &mut |e, depth| {
+                if depth > 0 {
+                    return None;
+                }
                 let bad = match &e.kind {
-                    ExprKind::SubLink(_)
-                    | ExprKind::SubColumn(_)
+                    ExprKind::SubLink(sub) => {
+                        !links || !matches!(sub.kind, SubLinkKind::Exists | SubLinkKind::Expr)
+                    }
+                    ExprKind::SubColumn(_)
                     | ExprKind::Window(_)
                     | ExprKind::Grouping(_)
                     | ExprKind::PlaceHolder(_)

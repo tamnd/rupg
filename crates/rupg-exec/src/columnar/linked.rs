@@ -15,8 +15,8 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxMap, FxSet, Selected, Source, decode, kind_of, numeric_kind, plain,
-    unsupported,
+    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, kind_of,
+    numeric_kind, plain, unsupported,
 };
 use crate::{Cache, reduce, scan};
 
@@ -42,13 +42,14 @@ pub(crate) fn run(
         let Some((kept, selected, pos)) = left_join(query, join, params, session, cache)? else {
             return Ok(None);
         };
-        return finish(query, params, session, cache, want, kept, &selected, &pos, Vec::new());
+        let (selected, pos) = (&selected, &pos);
+        return finish(query, params, session, cache, want, kept, selected, pos, vec![], vec![]);
     }
     let mut conds = Vec::new();
     if let Some(filter) = &query.filter {
         scan::conjuncts(filter, &mut conds);
     }
-    // An `EXISTS` of one table, such as the two of TPC-H Q21, is a condition of the table, which the scan of the table tests with a probe.
+    // A subquery that runs once, such as an `EXISTS` of TPC-H Q21 or the `avg` of Q17. A condition with a subquery that reads one table, as the two `EXISTS` of Q21, is a condition of the table, which the scan of the table tests. Another condition with a subquery, as the one of Q17, is tested on the rows of the join.
     let (links, conds): (Vec<&Expr>, Vec<&Expr>) = conds.into_iter().partition(|c| link(c));
     // The `OR` of two or more tables also gives a condition of each table.
     let derived = reduce::restrictions(&conds);
@@ -94,7 +95,7 @@ pub(crate) fn run(
     let Some(tree) = Tree::of(&plan.edges, &selected) else { return Ok(None) };
     let pos = tree.join(&selected);
     // The conditions of `WHERE` that the vectors test on the rows of the join: the conditions of two or more tables, except the `=` of the tree, and the conditions of no table.
-    let residual: Vec<Expr> = conds
+    let residual: Vec<&Expr> = conds
         .iter()
         .filter(|cond| {
             let relations = reduce::relations_of(cond);
@@ -103,12 +104,19 @@ pub(crate) fn run(
             }
             !reduce::equal_columns(cond).is_some_and(|[(a, _), (b, _)]| tree.joins(a, b))
         })
-        .map(|cond| (*cond).clone())
+        .chain(links.iter().filter(|c| reduce::relations_of(c).len() > 1))
+        .copied()
         .collect();
-    finish(query, params, session, cache, want, tree.root, &selected, &pos, residual)
+    // The links are made with the subqueries of the query, as the lifted state of a subquery is kept by its address.
+    let Some(links) = super::links_of(residual.iter().copied(), params, session, cache) else {
+        return Ok(None);
+    };
+    let residual = residual.into_iter().cloned().collect();
+    let (root, selected, pos) = (tree.root, &selected, &pos);
+    finish(query, params, session, cache, want, root, selected, pos, residual, links)
 }
 
-/// The rows of the query from the places `pos` in [`Selected::places`] of the row of each table in each tuple of the join, with the root table `base`. The vectors test the conditions `residual` on the tuples. A place [`NONE`] is the row of nulls of the table on the null side of an outer join.
+/// The rows of the query from the places `pos` in [`Selected::places`] of the row of each table in each tuple of the join, with the root table `base`. The vectors test the conditions `residual` on the tuples, with the subqueries of `links` in their order in `residual`. A place [`NONE`] is the row of nulls of the table on the null side of an outer join.
 ///
 /// # Errors
 ///
@@ -124,9 +132,12 @@ fn finish(
     selected: &[Selected],
     pos: &[Vec<u32>],
     residual: Vec<Expr>,
+    mut links: Vec<Ran>,
 ) -> Result<Option<Vec<Vec<Value>>>> {
-    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having).chain(&residual);
-    if exprs.chain(&query.offset).chain(&query.limit).any(|e| unsupported(e, false)) {
+    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having);
+    if exprs.chain(&query.offset).chain(&query.limit).any(|e| unsupported(e, false))
+        || residual.iter().any(|e| unsupported(e, true))
+    {
         return Ok(None);
     }
     // The columns of each table that the query reads after the join.
@@ -134,8 +145,10 @@ fn finish(
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
     let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having).chain(&residual);
     for expr in exprs {
-        expr.find(0, &mut |e, _| {
+        // A column of a table in a subquery is a column of the query just outside the subquery.
+        expr.find(0, &mut |e, depth| {
             if let ExprKind::Var(var) = e.kind
+                && var.levels_up == depth
                 && let Some(slot) = usize::try_from(var.attnum - 1)
                     .ok()
                     .and_then(|i| used.get_mut(var.relation)?.get_mut(i))
@@ -217,6 +230,45 @@ fn finish(
             false
         });
     });
+    // The links of the copy of `residual` in `virt`, which read the columns of the join.
+    let mut found = Vec::new();
+    if let Some(filter) = &virt.filter {
+        filter.find(0, &mut |e, depth| {
+            if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+                found.push(std::ptr::from_ref(e));
+            }
+            None::<()>
+        });
+    }
+    if found.len() != links.len() {
+        return Ok(None);
+    }
+    for (link, at) in links.iter_mut().zip(found) {
+        link.at = at;
+        for expr in link.outer_mut() {
+            let mut fail = false;
+            expr.each_mut(0, &mut |e, depth| {
+                if let ExprKind::Var(var) = &mut e.kind
+                    && var.levels_up == depth
+                {
+                    match usize::try_from(var.attnum - 1)
+                        .ok()
+                        .and_then(|i| map.get(var.relation)?.get(i))
+                    {
+                        Some(&to) if to > 0 => {
+                            var.attnum = to;
+                            var.relation = 0;
+                        }
+                        _ => fail = true,
+                    }
+                }
+                false
+            });
+            if fail {
+                return Ok(None);
+            }
+        }
+    }
     let places = (0..stored.len()).collect();
     let tables = query
         .relations
@@ -224,7 +276,8 @@ fn finish(
         .zip(selected)
         .map(|(relation, selected)| (relation.oid, selected.places.len()))
         .collect();
-    let source = Source::new(rows, stored, places, types, tables);
+    let mut source = Source::new(rows, stored, places, types, tables);
+    source.links = links;
     // The groups come in the order of the hash table of the plan of the join.
     session.share_plan(&virt, Some(query));
     let out = super::run_on(&virt, params, session, cache, want, source);
@@ -440,7 +493,7 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
     true
 }
 
-/// True when `cond` is a condition of `WHERE` that reads one table and has an `EXISTS`, which the scan of the table can test with the probe of [`crate::lift::probe`], as the two of TPC-H Q21. The subquery reads only its own columns and the columns of the query.
+/// True when `cond` is a condition of `WHERE` that reads the tables of the query and has an `EXISTS` or a subquery of one value, which can run once as [`super::links_of`] tells, as the two `EXISTS` of TPC-H Q21 and the `avg` of Q17. The subquery reads only its own columns and the columns of the query.
 fn link(cond: &Expr) -> bool {
     let mut exists = false;
     let other = cond.find(0, &mut |e, depth| match &e.kind {
@@ -455,7 +508,7 @@ fn link(cond: &Expr) -> bool {
         }
         _ => None,
     });
-    exists && other.is_none() && reduce::relations_of(cond).len() == 1 && !unsupported(cond, true)
+    exists && other.is_none() && !reduce::relations_of(cond).is_empty() && !unsupported(cond, true)
 }
 
 /// The rows of a table by the value of a key that no two rows have.

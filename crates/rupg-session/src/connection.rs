@@ -4934,6 +4934,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector_exists.test")));
     }
 
+    /// A correlated subquery of one value with an aggregate, as the `avg` of TPC-H Q17, gives the rows of Postgres in a scan and in a join of the vectors, with one key and with two keys from two tables, with nulls in the keys and with keys that have no row.
+    #[test]
+    fn vector_scalar() {
+        big_stack(|| script(include_str!("connection/vector_scalar.test")));
+    }
+
     /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
     #[test]
     fn date_part_scan() {
