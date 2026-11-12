@@ -5068,6 +5068,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector_types.test")));
     }
 
+    /// `CREATE INDEX` with `hnsw` and `ivfflat` of pgvector: the options of each method with their bounds, the checks of the build on the type, the dimensions and the options of the column, and the parameters `hnsw.` and `ivfflat.`, as pgvector 0.8.7 gives them.
+    #[test]
+    fn vector_index() {
+        big_stack(|| script(include_str!("connection/vector_index.test")));
+    }
+
     #[test]
     fn create_extension() {
         big_stack(|| script(include_str!("connection/create_extension.test")));

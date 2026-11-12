@@ -9,6 +9,7 @@ mod alter_domain;
 mod alter_function;
 mod alter_inherit;
 mod alter_type;
+mod ann;
 mod attmap;
 mod basetype;
 mod cast;

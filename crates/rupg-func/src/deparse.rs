@@ -2129,11 +2129,15 @@ fn index_def(
             GIN => "gin",
             SPGIST => "spgist",
             BRIN => "brin",
-            other => {
-                return Err(Error::internal(format!(
-                    "cache lookup failed for access method {other}"
-                )));
-            }
+            // An access method of an extension, as its row of `pg_am` names it.
+            other => match catalog.access_method(other) {
+                Some(am) => am.name.as_str(),
+                None => {
+                    return Err(Error::internal(format!(
+                        "cache lookup failed for access method {other}"
+                    )));
+                }
+            },
         };
         if exclude.is_some() {
             out.push_str(&format!("EXCLUDE USING {method} ("));

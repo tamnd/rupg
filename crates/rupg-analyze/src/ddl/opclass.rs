@@ -417,7 +417,7 @@ impl Definer<'_, '_> {
                 .map(|c| (c.family, c.intype))?,
         };
         let (namespace, name, method, _) = self.opcf_row(false, class)?;
-        let method = METHODS.iter().find(|m| m.oid == method)?;
+        let method = self.method_by_oid(method)?;
         let number = i16::try_from(method.options).ok().filter(|n| *n != 0);
         let has = number.is_some_and(|number| {
             let is =
@@ -487,10 +487,10 @@ impl Definer<'_, '_> {
 
     /// `OpclassnameGetOpcid` and `get_opclass_oid` of `ResolveOpClass`: the class of the access method that the name gives, of the catalog or built in, and the type that it indexes.
     pub(super) fn opclass_by_name(&self, method: u32, list: &[&str]) -> Result<(u32, u32)> {
-        let Some(method) = METHODS.iter().find(|m| m.oid == method) else {
+        let Some(method) = self.method_by_oid(method) else {
             return Err(Error::internal(format!("cache lookup failed for access method {method}")));
         };
-        let class = self.opcf_lookup(false, method, list, false)?.unwrap_or_default();
+        let class = self.opcf_lookup(false, &method, list, false)?.unwrap_or_default();
         let intype = match self.catalog.opclass(class) {
             Some(c) => c.intype,
             None => builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.intype),
@@ -939,8 +939,19 @@ impl Definer<'_, '_> {
         Ok(Method { oid: am.oid, ..*method })
     }
 
+    /// `GetIndexAmRoutineByAmId`: the index access method of the OID, built in or of the library of an extension.
+    pub(super) fn method_by_oid(&self, oid: u32) -> Option<Method> {
+        if let Some(method) = method_of(oid) {
+            return Some(*method);
+        }
+        let am = self.catalog.access_method(oid)?;
+        let symbol = self.catalog.function(am.handler)?.src.as_str();
+        let (_, method) = LIBRARY_METHODS.iter().find(|(s, _)| *s == symbol)?;
+        Some(Method { oid, ..*method })
+    }
+
     /// `get_am_name`: the name of an access method, built in or made by a statement.
-    fn method_name(&self, oid: u32) -> String {
+    pub(super) fn method_name(&self, oid: u32) -> String {
         match self.catalog.access_method(oid) {
             Some(am) => am.name.clone(),
             None => method_name(oid).to_string(),

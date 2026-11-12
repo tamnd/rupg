@@ -1,0 +1,151 @@
+> create extension vector
+CREATE EXTENSION
+> create table t (val vector(3), h halfvec(3), b bit(3), vb varbit(3), s sparsevec(3), n vector)
+CREATE TABLE
+> create index on t using hnsw (val vector_l2_ops) with (m = 1)
+ERROR 22023 value 1 out of bounds for option "m"
+> create index on t using hnsw (val vector_l2_ops) with (m = 101)
+ERROR 22023 value 101 out of bounds for option "m"
+> create index on t using hnsw (val vector_l2_ops) with (ef_construction = 3)
+ERROR 22023 value 3 out of bounds for option "ef_construction"
+> create index on t using hnsw (val vector_l2_ops) with (ef_construction = 1001)
+ERROR 22023 value 1001 out of bounds for option "ef_construction"
+> create index on t using hnsw (val vector_l2_ops) with (m = 16, ef_construction = 31)
+ERROR 22023 ef_construction must be greater than or equal to 2 * m
+> create index on t using hnsw (val vector_l2_ops) with (lists = 1)
+ERROR 22023 unrecognized parameter "lists"
+> create index hv on t using hnsw (val vector_l2_ops) with (m = 16, ef_construction = 32)
+CREATE INDEX
+> select reloptions from pg_class where relname = 'hv'
+fields reloptions@pg_class.33:1009:-1:-1
+row {m=16,ef_construction=32}
+SELECT 1
+> select indexdef from pg_indexes where indexname = 'hv'
+fields indexdef@pg_indexes.5:25:-1:-1
+row CREATE INDEX hv ON public.t USING hnsw (val vector_l2_ops) WITH (m='16', ef_construction='32')
+SELECT 1
+> create index on t using hnsw (val)
+ERROR 42704 data type vector has no default operator class for access method "hnsw"
+> create index on t using hnsw (val vector_l2_ops desc)
+ERROR 0A000 access method "hnsw" does not support ASC/DESC options at 31
+> alter index hv set (m = 200)
+ERROR 22023 value 200 out of bounds for option "m"
+> alter index hv set (m = 8)
+ALTER INDEX
+> create index on t using hnsw (val vector_l2_ops, h halfvec_l2_ops)
+ERROR 0A000 access method "hnsw" does not support multicolumn indexes
+> create unique index on t using hnsw (val vector_l2_ops)
+ERROR 0A000 access method "hnsw" does not support unique indexes
+> create index on t using hnsw (n vector_l2_ops)
+ERROR 22023 column does not have dimensions
+> create index on t using hnsw (vb bit_hamming_ops)
+ERROR 0A000 type not supported for hnsw index
+> create index on t using hnsw ((vb::bit(3)) bit_hamming_ops)
+CREATE INDEX
+> create index on t using hnsw ((vb::bit(64001)) bit_hamming_ops)
+ERROR 54000 column cannot have more than 64000 dimensions for hnsw index
+> create index on t using hnsw ((val::vector(2001)) vector_l2_ops)
+ERROR 54000 column cannot have more than 2000 dimensions for hnsw index
+> create index on t using hnsw ((h::halfvec(4001)) halfvec_l2_ops)
+ERROR 54000 column cannot have more than 4000 dimensions for hnsw index
+> create index on t using hnsw ((h::halfvec(4000)) halfvec_l2_ops)
+CREATE INDEX
+> create index on t using hnsw (s sparsevec_l2_ops)
+CREATE INDEX
+> create index on t using hnsw (h halfvec_cosine_ops)
+CREATE INDEX
+> create index on t using ivfflat (val vector_l2_ops) with (lists = 0)
+ERROR 22023 value 0 out of bounds for option "lists"
+> create index on t using ivfflat (val vector_l2_ops) with (lists = 32769)
+ERROR 22023 value 32769 out of bounds for option "lists"
+> create index on t using ivfflat (val vector_l2_ops) with (m = 4)
+ERROR 22023 unrecognized parameter "m"
+> create index on t using ivfflat ((val::vector(2001)) vector_l2_ops)
+ERROR 54000 column cannot have more than 2000 dimensions for ivfflat index
+> create index on t using ivfflat ((h::halfvec(4001)) halfvec_l2_ops)
+ERROR 54000 column cannot have more than 4000 dimensions for ivfflat index
+> create index on t using ivfflat ((val::vector(1)) vector_cosine_ops)
+ERROR 22023 dimensions must be greater than one for this opclass
+> create index on t using ivfflat (vb bit_hamming_ops)
+ERROR 0A000 type not supported for ivfflat index
+> create index on t using nope (val)
+ERROR 42704 access method "nope" does not exist
+> insert into t (val, h, b, s) values ('[1,2,3]', '[1,2,3]', '101', '{1:1}/3'), (null, null, null, null)
+INSERT 0 2
+> select count(*) from t
+fields count:20:8:-1
+row 2
+SELECT 1
+> select amname, amtype from pg_am where amname in ('hnsw', 'ivfflat') order by 1
+fields amname@pg_am.2:19:64:-1,amtype@pg_am.4:18:1:-1
+row hnsw,i
+row ivfflat,i
+SELECT 2
+> show hnsw.ef_search
+fields hnsw.ef_search:25:-1:-1
+row 40
+SHOW
+> set hnsw.ef_search = 0
+ERROR 22023 0 is outside the valid range for parameter "hnsw.ef_search" (1 .. 1000)
+> set hnsw.ef_search = 1001
+ERROR 22023 1001 is outside the valid range for parameter "hnsw.ef_search" (1 .. 1000)
+> set hnsw.ef_search = 10
+SET
+> show hnsw.ef_search
+fields hnsw.ef_search:25:-1:-1
+row 10
+SHOW
+> reset hnsw.ef_search
+RESET
+> show hnsw.iterative_scan
+fields hnsw.iterative_scan:25:-1:-1
+row off
+SHOW
+> set hnsw.iterative_scan = on
+ERROR 22023 invalid value for parameter "hnsw.iterative_scan": "on"
+> set hnsw.iterative_scan = strict_order
+SET
+> show hnsw.iterative_scan
+fields hnsw.iterative_scan:25:-1:-1
+row strict_order
+SHOW
+> show hnsw.max_scan_tuples
+fields hnsw.max_scan_tuples:25:-1:-1
+row 20000
+SHOW
+> set hnsw.max_scan_tuples = 0
+ERROR 22023 0 is outside the valid range for parameter "hnsw.max_scan_tuples" (1 .. 2147483647)
+> show hnsw.scan_mem_multiplier
+fields hnsw.scan_mem_multiplier:25:-1:-1
+row 1
+SHOW
+> set hnsw.scan_mem_multiplier = 0
+ERROR 22023 0 is outside the valid range for parameter "hnsw.scan_mem_multiplier" (1 .. 1000)
+> set hnsw.scan_mem_multiplier = 1001
+ERROR 22023 1001 is outside the valid range for parameter "hnsw.scan_mem_multiplier" (1 .. 1000)
+> show ivfflat.probes
+fields ivfflat.probes:25:-1:-1
+row 1
+SHOW
+> set ivfflat.probes = 0
+ERROR 22023 0 is outside the valid range for parameter "ivfflat.probes" (1 .. 32768)
+> set ivfflat.probes = 32769
+ERROR 22023 32769 is outside the valid range for parameter "ivfflat.probes" (1 .. 32768)
+> show ivfflat.iterative_scan
+fields ivfflat.iterative_scan:25:-1:-1
+row off
+SHOW
+> set ivfflat.iterative_scan = on
+ERROR 22023 invalid value for parameter "ivfflat.iterative_scan": "on"
+> set ivfflat.iterative_scan = strict_order
+ERROR 22023 invalid value for parameter "ivfflat.iterative_scan": "strict_order"
+> show ivfflat.max_probes
+fields ivfflat.max_probes:25:-1:-1
+row 32768
+SHOW
+> set ivfflat.max_probes = 0
+ERROR 22023 0 is outside the valid range for parameter "ivfflat.max_probes" (1 .. 32768)
+> set ivfflat.max_probes = 32769
+ERROR 22023 32769 is outside the valid range for parameter "ivfflat.max_probes" (1 .. 32768)
+> drop table t
+DROP TABLE
