@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector join through unique keys runs a left join or a right join of two tables with groups, such as the join of TPC-H q13, with the key unique on either side (#1515).
 - The vector join through unique keys runs a condition `x IN (SELECT ...)` of one table, such as the one of TPC-H q18: the subquery runs one time, and its integers select the rows of the table before the join (#1514).
 - The vector engine groups the rows by a `numeric` key, such as `c_acctbal` of TPC-H q10, as a word of the key, so that a join with such a key does not go to the row engine (#1513).
 - The `+`, `-`, `*` and the comparisons of `numeric` vectors with no null use `i64` math with one check of overflow for all the rows, with no `i128` math and no null flag for each row (#1512).

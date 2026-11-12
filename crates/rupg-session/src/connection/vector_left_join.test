@@ -1,0 +1,71 @@
+> CREATE TABLE wc (ck int PRIMARY KEY, cname text, cbal numeric(12,2), cn int)
+CREATE TABLE
+> INSERT INTO wc SELECT i, 'cust' || (i % 50), (i * 37 % 1000) / 10.0, i % 7 FROM generate_series(1, 400) i
+INSERT 0 400
+> INSERT INTO wc VALUES (401, NULL, NULL, NULL)
+INSERT 0 1
+> CREATE TABLE wo (ok bigint PRIMARY KEY, ock int, oprice numeric(12,2), ocomment text)
+CREATE TABLE
+> INSERT INTO wo SELECT i, CASE WHEN i % 3 = 0 THEN NULL ELSE i % 300 END, (i * 13 % 5000) / 100.0, CASE WHEN i % 5 = 0 THEN 'a special request' ELSE 'plain note ' || i END FROM generate_series(1, 3000) i
+INSERT 0 3000
+> CREATE TABLE wn (nk int, nname text)
+CREATE TABLE
+> INSERT INTO wn SELECT i, 'nation' || i FROM generate_series(0, 4) i
+INSERT 0 5
+> INSERT INTO wn VALUES (NULL, 'nobody')
+INSERT 0 1
+> SELECT c_count, count(*) AS custdist FROM (SELECT ck, count(ok) FROM wc LEFT OUTER JOIN wo ON ck = ock AND ocomment NOT LIKE '%special%request%' GROUP BY ck) AS c_orders (ck, c_count) GROUP BY c_count ORDER BY custdist DESC, c_count DESC
+fields c_count:20:8:-1,custdist:20:8:-1
+row 0,241
+row 10,160
+SELECT 2
+> SELECT ck, count(ok), sum(oprice), count(*) FROM wc LEFT JOIN wo ON ck = ock GROUP BY ck ORDER BY ck LIMIT 6
+fields ck@wc.1:23:4:-1,count:20:8:-1,sum:1700:-1:-1,count:20:8:-1
+row 1,10,206.30,10
+row 2,10,207.60,10
+row 3,0,NULL,1
+row 4,10,210.20,10
+row 5,10,211.50,10
+row 6,0,NULL,1
+SELECT 6
+> SELECT ck, count(ok) FROM wo RIGHT JOIN wc ON ck = ock AND oprice > 25 GROUP BY ck ORDER BY ck DESC LIMIT 4
+fields ck@wc.1:23:4:-1,count:20:8:-1
+row 401,0
+row 400,0
+row 399,0
+row 398,0
+SELECT 4
+> SELECT nname, count(*), sum(cbal) FROM wc LEFT JOIN wn ON cn = nk GROUP BY nname ORDER BY nname NULLS FIRST
+fields nname@wn.2:25:-1:-1,count:20:8:-1,sum:1700:-1:-1
+row NULL,115,5792.70
+row nation0,57,2912.70
+row nation1,58,2927.30
+row nation2,57,2858.20
+row nation3,57,2869.10
+row nation4,57,2880.00
+SELECT 6
+> SELECT cn, nname, count(*) FROM wc LEFT JOIN wn ON cn = nk AND nname <> 'nation2' GROUP BY cn, nname ORDER BY cn NULLS LAST, nname
+fields cn@wc.4:23:4:-1,nname@wn.2:25:-1:-1,count:20:8:-1
+row 0,nation0,57
+row 1,nation1,58
+row 2,NULL,57
+row 3,nation3,57
+row 4,nation4,57
+row 5,NULL,57
+row 6,NULL,57
+row NULL,NULL,1
+SELECT 8
+> SELECT ck, count(ok), sum(oprice) FROM wc LEFT JOIN wo ON ock = ck WHERE cbal > 50 GROUP BY ck ORDER BY 3 DESC NULLS FIRST, ck LIMIT 4
+fields ck@wc.1:23:4:-1,count:20:8:-1,sum:1700:-1:-1
+row 15,0,NULL
+row 18,0,NULL
+row 21,0,NULL
+row 24,0,NULL
+SELECT 4
+> SELECT count(*), count(ck), count(ok) FROM wo LEFT JOIN wc ON ock = ck GROUP BY ock IS NULL ORDER BY 1
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1000,0,1000
+row 2000,2000,2000
+SELECT 2
+> DROP TABLE wc, wo, wn
+DROP TABLE
