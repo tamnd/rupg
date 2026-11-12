@@ -15,7 +15,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind};
 use crate::node;
-use crate::typcache::default_opclass;
+use crate::typcache::default_opclass_in;
 use crate::typename::{names, place};
 use crate::types;
 
@@ -300,7 +300,7 @@ impl Definer<'_, '_> {
             partkey.collations.push(collation);
             let class = if elem.opclass.is_empty() {
                 let method_name = if method == HASH { "hash" } else { "btree" };
-                default_opclass(ty, method).map(|c| c.oid).ok_or_else(|| {
+                default_opclass_in(Some(&*self.catalog), ty, method).ok_or_else(|| {
                     Error::new(
                         SqlState::UNDEFINED_OBJECT,
                         format!(

@@ -13,10 +13,6 @@ use crate::types;
 
 /// `BTEqualStrategyNumber`, the strategy number of the equality operator of a btree operator family.
 const EQUAL_STRATEGY: i16 = 3;
-/// `RTEqualStrategyNumber`, the strategy number of the equality operator of a gist operator family.
-const GIST_EQUAL_STRATEGY: i16 = 18;
-/// `RTOverlapStrategyNumber`, the strategy number of `&&` of a gist operator family.
-const GIST_OVERLAP_STRATEGY: i16 = 3;
 /// `GIST_AM_OID`.
 const GIST_AM: u32 = 783;
 /// `COMPARE_EQ` and `COMPARE_OVERLAP` of `CompareType`, for the detail of the error of `IndexAmTranslateCompareType`.
@@ -299,8 +295,7 @@ impl Definer<'_, '_> {
             // `IndexAmTranslateCompareType`: the overlaps operator for the period, and the equality operator for the other columns.
             let overlaps = keys.period && i == keys.fk.len() - 1;
             let strategy = match (method == GIST_AM, overlaps) {
-                (true, true) => Some(GIST_OVERLAP_STRATEGY),
-                (true, false) => Some(GIST_EQUAL_STRATEGY),
+                (true, _) => self.gist_strategy(family, overlaps),
                 (false, false) => Some(EQUAL_STRATEGY),
                 (false, true) => None,
             };

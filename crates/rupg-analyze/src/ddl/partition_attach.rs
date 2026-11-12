@@ -463,7 +463,10 @@ impl Definer<'_, '_> {
             let constraint = self
                 .catalog
                 .constraints_of(parent.oid)
-                .find(|c| c.index == index && matches!(c.kind, ConKind::Primary | ConKind::Unique))
+                .find(|c| {
+                    c.index == index
+                        && matches!(c.kind, ConKind::Primary | ConKind::Unique | ConKind::Exclusion)
+                })
                 .map(|c| c.oid);
             match self.matching_index(rel.oid, index, constraint, true) {
                 Some((found, found_constraint, _)) => {
@@ -564,7 +567,11 @@ impl Definer<'_, '_> {
                 self.catalog
                     .constraints_of(table)
                     .find(|c| {
-                        c.index == index && matches!(c.kind, ConKind::Primary | ConKind::Unique)
+                        c.index == index
+                            && matches!(
+                                c.kind,
+                                ConKind::Primary | ConKind::Unique | ConKind::Exclusion
+                            )
                     })
                     .map(|c| c.oid)
             };
@@ -762,7 +769,10 @@ impl Definer<'_, '_> {
         let index_constraint = |table: u32, index: u32| {
             self.catalog
                 .constraints_of(table)
-                .find(|c| c.index == index && matches!(c.kind, ConKind::Primary | ConKind::Unique))
+                .find(|c| {
+                    c.index == index
+                        && matches!(c.kind, ConKind::Primary | ConKind::Unique | ConKind::Exclusion)
+                })
                 .map(|c| c.oid)
         };
         let constraint = index_constraint(parent_table, target.oid);

@@ -12,7 +12,7 @@ use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::colname::figure_index_colname;
 use crate::expr::{Expr, ExprKind};
-use crate::typcache::{default_opclass, is_binary_coercible};
+use crate::typcache::{default_opclass_in, is_binary_coercible};
 use crate::typename::{names, place};
 use crate::types;
 
@@ -449,9 +449,23 @@ impl Definer<'_, '_> {
         Ok(op.oid)
     }
 
-    /// `GetOperatorFromCompareType` for a key column of a constraint `WITHOUT OVERLAPS`: the operator of `COMPARE_OVERLAP` for the last key column, else the operator of `COMPARE_EQ`. `gist` gives them as the strategies `RTOverlapStrategyNumber` and `RTEqualStrategyNumber`.
+    /// `GistTranslateCompareType`: the strategy of `COMPARE_OVERLAP` or of `COMPARE_EQ` in the `gist` family, which the function `translate_cmptype` of the family gives. The built-in families give `RTOverlapStrategyNumber` and `RTEqualStrategyNumber`, as `gist_translate_cmptype_common`. A family of the catalog whose function is `gist_translate_cmptype_btree`, as each family of `btree_gist`, gives `BTEqualStrategyNumber` for `COMPARE_EQ` and no strategy for `COMPARE_OVERLAP`.
+    pub(super) fn gist_strategy(&self, family: u32, overlap: bool) -> Option<i16> {
+        // `GIST_TRANSLATE_CMPTYPE_PROC`.
+        let procs = self.catalog.amprocs().filter(|p| p.family == family && p.number == 12);
+        let mut functions = procs.filter_map(|p| self.catalog.function(p.function));
+        let btree = functions.any(|f| !f.bin.is_empty() && f.src == "gist_translate_cmptype_btree");
+        match (btree, overlap) {
+            (false, true) => Some(RT_OVERLAP_STRATEGY),
+            (false, false) => Some(RT_EQUAL_STRATEGY),
+            (true, false) => Some(BT_EQUAL_STRATEGY),
+            (true, true) => None,
+        }
+    }
+
+    /// `GetOperatorFromCompareType` for a key column of a constraint `WITHOUT OVERLAPS`: the operator of `COMPARE_OVERLAP` for the last key column, else the operator of `COMPARE_EQ`, by the strategies of [`Self::gist_strategy`].
     fn without_overlaps_operator(&self, column: &NewIndexColumn, overlap: bool) -> Result<u32> {
-        let (strategy, what) = if overlap { (3, "an overlaps") } else { (18, "an equality") };
+        let what = if overlap { "an overlaps" } else { "an equality" };
         let (family, intype) = match self.catalog.opclass(column.class) {
             Some(class) => (class.family, class.intype),
             None => rupg_pgcatalog::builtin::opclasses()
@@ -459,8 +473,11 @@ impl Definer<'_, '_> {
                 .find(|c| c.oid == column.class)
                 .map_or((0, 0), |c| (c.family, c.intype)),
         };
-        let found = rupg_pgcatalog::builtin::opfamily_member(family, intype, intype, strategy)
+        let strategy = self.gist_strategy(family, overlap);
+        let found = strategy
+            .and_then(|s| rupg_pgcatalog::builtin::opfamily_member(family, intype, intype, s))
             .or_else(|| {
+                let strategy = strategy?;
                 self.catalog
                     .amops()
                     .find(|a| {
@@ -715,8 +732,7 @@ impl Definer<'_, '_> {
         let parts = names(opclass);
         let legacy = parts.len() == 1 && LEGACY_OPCLASSES.contains(&parts[0]);
         if parts.is_empty() || legacy {
-            return default_opclass(ty, method)
-                .map(|c| c.oid)
+            return default_opclass_in(Some(self.catalog), ty, method)
                 .ok_or_else(|| no_default_opclass(ty, method));
         }
         let shown = parts.join(".");
@@ -730,6 +746,13 @@ impl Definer<'_, '_> {
         Ok(class)
     }
 }
+
+/// `RTOverlapStrategyNumber`, the strategy of `&&` of a `gist` family.
+const RT_OVERLAP_STRATEGY: i16 = 3;
+/// `RTEqualStrategyNumber`, the strategy of `=` of a `gist` family.
+const RT_EQUAL_STRATEGY: i16 = 18;
+/// `BTEqualStrategyNumber`, the strategy of `=` of a `btree` family.
+const BT_EQUAL_STRATEGY: i16 = 3;
 
 /// The error of `ResolveOpClass` for a type with no default operator class for the access method.
 pub(super) fn no_default_opclass(ty: u32, method: u32) -> Error {

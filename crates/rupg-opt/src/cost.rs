@@ -761,10 +761,25 @@ const TSMATCHSEL: u32 = 3686;
 const ARRAYCONTSEL: u32 = 3817;
 /// The OID of `matchingsel`.
 const MATCHINGSEL: u32 = 5040;
+/// The OID of `eqsel`.
+const EQSEL: u32 = 101;
+/// The OID of `neqsel`.
+const NEQSEL: u32 = 102;
 
 /// The selectivity of the estimator of an operator, `oprrest`, with no statistics.
 fn operator_selectivity(op: u32) -> f64 {
-    let Some(row) = builtin::operator_by_oid(op) else { return INEQ_SEL };
+    let Some(row) = builtin::operator_by_oid(op) else {
+        // An operator of the catalog, such as one of an extension, with the default of its estimator.
+        return match crate::catalog_restrict(op) {
+            Some(EQSEL) => EQ_SEL,
+            Some(NEQSEL) => 1.0 - EQ_SEL,
+            Some(AREASEL | TSMATCHSEL) => 0.005,
+            Some(POSITIONSEL) => 0.1,
+            Some(CONTSEL) => 0.001,
+            Some(MATCHINGSEL) => 0.01,
+            _ => INEQ_SEL,
+        };
+    };
     match row.rest {
         // `areasel`, `positionsel` and `contsel` of `geo_selfuncs.c`.
         AREASEL => return 0.005,

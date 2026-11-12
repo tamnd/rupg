@@ -50,7 +50,9 @@ fn can_return(index: &Index, column: usize) -> bool {
     match index.method {
         BTREE_AM => true,
         // `point_ops`, `box_ops`, `network_ops` and `range_ops`.
-        GIST_AM => !key || matches!(family, 1029 | 2593 | 3550 | 3919),
+        GIST_AM => {
+            !key || matches!(family, 1029 | 2593 | 3550 | 3919) || crate::gist_returns(family)
+        }
         // Each class but `poly_ops`, whose leaf is the box of the polygon.
         SPGIST_AM => !key || (family != 0 && family != 5008),
         _ => false,
@@ -1066,7 +1068,7 @@ fn match_one<'q>(
                 let (op, column_expr, value) = if is_column(left) && other_ok(right) {
                     (op, left, right)
                 } else if is_column(right) && other_ok(left) {
-                    (builtin::operator_by_oid(op)?.commutator, right, left)
+                    (crate::commutator(op)?, right, left)
                 } else {
                     return None;
                 };
@@ -1145,7 +1147,7 @@ fn match_one<'q>(
                 if let Some(derived) = network_clauses(expr, false, family) {
                     return Some(derived.into_iter().map(lossy).collect());
                 }
-                let commutator = builtin::operator_by_oid(op)?.commutator;
+                let commutator = crate::commutator(op)?;
                 let s = strategy(commutator, family)?;
                 let commuted = exprs::commute(expr)?;
                 return Some(clause(Cow::Owned(commuted), ClauseKind::Op(s)));
@@ -1162,13 +1164,24 @@ const BOOL_HASH_FAMILY: u32 = 2222;
 /// `BooleanEqualOperator`, `=` of `boolean`.
 const BOOLEAN_EQUAL: u32 = 91;
 
+/// `IsBooleanOpfamily`: a built-in family is a boolean family when it is the `btree` or the `hash` family of `boolean`, and a family of the catalog, such as `bool_ops` of `btree_gin`, when it has `BooleanEqualOperator`.
+fn is_boolean_family(family: u32) -> bool {
+    if family < FIRST_NORMAL_OID {
+        return matches!(family, BOOL_BTREE_FAMILY | BOOL_HASH_FAMILY);
+    }
+    crate::find_amop(BOOLEAN_EQUAL, |a| a.family == family).is_some()
+}
+
+/// `FirstNormalObjectId`.
+const FIRST_NORMAL_OID: u32 = 16384;
+
 /// `match_boolean_index_clause`: for a key column of a boolean family, the column and its value when the condition is the column, `NOT` of the column, or `IS TRUE` or `IS FALSE` of the column.
 fn boolean_key<'e>(
     family: u32,
     expr: &'e Expr,
     is_column: &impl Fn(&Expr) -> bool,
 ) -> Option<(&'e Expr, bool)> {
-    if !matches!(family, BOOL_BTREE_FAMILY | BOOL_HASH_FAMILY) {
+    if !is_boolean_family(family) {
         return None;
     }
     match &expr.kind {
@@ -1487,9 +1500,7 @@ fn network_clauses(expr: &Expr, left: bool, family: u32) -> Option<Vec<(Expr, i1
 
 /// `get_op_opfamily_strategy`: the strategy of a search operator in the operator family, or `None` when the family has not the operator.
 fn strategy(op: u32, family: u32) -> Option<i16> {
-    builtin::amops_of_operator(op)
-        .find(|a| a.family == family && a.purpose == b's')
-        .map(|a| a.strategy)
+    crate::find_amop(op, |a| a.family == family && a.purpose == b's').map(|a| a.strategy)
 }
 
 /// `build_index_pathkeys`: the order of the rows of a scan of the index, forward or backward. A key that adds nothing after the keys before it, such as a column that a condition makes a constant, does not count, as `pathkey_is_redundant`. A column that is an expression gives the expression. The order stops at a column whose operator class is not the default class of its type. An index of another access method has no order.
@@ -1569,14 +1580,14 @@ fn ordering_op(r: usize, index: &Index, column: usize, expr: &Expr) -> Option<Ex
     let (op, commuted) = if is_column(left) && other_ok(right) {
         (op, false)
     } else if is_column(right) && other_ok(left) {
-        (builtin::operator_by_oid(op)?.commutator, true)
+        (crate::commutator(op)?, true)
     } else {
         return None;
     };
     let sort_family = rupg_analyze::default_opclass(expr.ty, BTREE_AM)?.family;
-    builtin::amops_of_operator(op)
-        .any(|a| a.family == family && a.purpose == b'o' && a.sort_family == sort_family)
-        .then_some(())?;
+    crate::find_amop(op, |a| {
+        a.family == family && a.purpose == b'o' && a.sort_family == sort_family
+    })?;
     if commuted { exprs::commute(expr) } else { Some(expr.clone()) }
 }
 

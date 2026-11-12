@@ -67,16 +67,35 @@ fn is_complex(ty: u32) -> bool {
 
 /// `GetDefaultOpClass`: the default operator class of the type for the access method. An exact match comes first. Else the one class that the type has a binary cast to, or the one for a preferred type of its category when there are more.
 pub fn default_opclass(ty: u32, method: u32) -> Option<&'static OpclassRow> {
+    let classes = builtin::opclasses().iter().filter(|c| c.method == method && c.default);
+    choose_default(ty, classes.map(|c| (c, c.intype)))
+}
+
+/// [`default_opclass`] with the operator classes of the catalog, such as those of an extension, as `GetDefaultOpClass` reads all of `pg_opclass`: the OID of the class.
+pub fn default_opclass_in(
+    catalog: Option<&rupg_catalog::Catalog>,
+    ty: u32,
+    method: u32,
+) -> Option<u32> {
+    let builtin = builtin::opclasses().iter().filter(|c| c.method == method && c.default);
+    let builtin = builtin.map(|c| (c.oid, c.intype));
+    let user = catalog.into_iter().flat_map(|c| c.opclasses());
+    let user = user.filter(|c| c.method == method && c.default).map(|c| (c.oid, c.intype));
+    choose_default(ty, builtin.chain(user))
+}
+
+/// The choice of `GetDefaultOpClass` among the default classes, each with its `opcintype`.
+fn choose_default<T>(ty: u32, classes: impl Iterator<Item = (T, u32)>) -> Option<T> {
     let ty = types::base(ty);
     let category = types::category(ty);
     let (mut exact, mut compatible, mut preferred) = (0, 0, 0);
     let mut result = None;
-    for class in builtin::opclasses().iter().filter(|c| c.method == method && c.default) {
-        if class.intype == ty {
+    for (class, intype) in classes {
+        if intype == ty {
             exact += 1;
             result = Some(class);
-        } else if exact == 0 && is_binary_coercible(ty, class.intype) {
-            if types::is_preferred(category, class.intype) {
+        } else if exact == 0 && is_binary_coercible(ty, intype) {
+            if types::is_preferred(category, intype) {
                 preferred += 1;
                 result = Some(class);
             } else if preferred == 0 {

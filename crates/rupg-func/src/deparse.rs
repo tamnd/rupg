@@ -21,9 +21,7 @@ use rupg_analyze::{
     SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowClause, WindowFunc, XmlExpr,
     XmlOp,
 };
-use rupg_analyze::{
-    MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, default_opclass, node, sort_operators,
-};
+use rupg_analyze::{MERGE_ACTION, RETURNING_NEW, RETURNING_OLD, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -2088,7 +2086,7 @@ fn collation_name(collation: u32, session: &dyn Session) -> Result<String> {
 fn opclass_name(class: u32, ty: u32, session: &dyn Session) -> Result<String> {
     let (name, namespace, method) = reg::method_row(Named::Opclass, class, session)
         .ok_or_else(|| Error::internal(format!("cache lookup failed for opclass {class}")))?;
-    if default_opclass(ty, method).is_some_and(|d| d.oid == class) {
+    if rupg_analyze::default_opclass_in(session.catalog(), ty, method) == Some(class) {
         return Ok(String::new());
     }
     if reg::method_visible(Named::Opclass, class, session) {
