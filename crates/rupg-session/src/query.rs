@@ -2375,6 +2375,10 @@ impl Env for Reader<'_> {
         self.database.to_owned()
     }
 
+    fn typmod_in(&self, func: u32, modifiers: &[String]) -> Result<i32> {
+        rupg_func::typmod_in(func, modifiers, self)
+    }
+
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
         let value = rupg_func::input(ty, text, typmod, self)?;
         rupg_exec::check_input(ty, &value, self)?;
@@ -2770,7 +2774,7 @@ pub(crate) fn encode<'v>(
         }
         let mut bytes = Vec::new();
         if formats.get(i) == Some(&1) {
-            rupg_func::send(ty, value, &mut bytes)?;
+            rupg_func::send(ty, value, reader, &mut bytes)?;
         } else {
             rupg_func::output(ty, value, reader, &mut bytes)?;
         }

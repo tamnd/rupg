@@ -1,12 +1,13 @@
 //! `CREATE ACCESS METHOD`, as `CreateAccessMethod` of `amcmds.c` runs it, and the table access method of a relation, as `get_table_am_oid` finds it.
 
-use rupg_catalog::{AccessMethod, HEAP_AM, ObjRef, PG_AM};
+use rupg_catalog::{AccessMethod, FIRST_NORMAL_OID, HEAP_AM, ObjRef, PG_AM};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::CreateAmStmt;
+use rupg_sql::nodes::{CreateAmStmt, Node};
 use rupg_types::oid;
 
 use super::Definer;
+use super::language::object_name;
 use crate::typename::names;
 
 impl Definer<'_, '_> {
@@ -78,6 +79,24 @@ impl Definer<'_, '_> {
     /// The table access method of `default_table_access_method`.
     pub(super) fn default_table_am(&self) -> Result<u32> {
         self.table_am(&self.an.env.default_table_access_method())
+    }
+
+    /// An access method of `COMMENT ON ACCESS METHOD`, by `get_object_address_unqualified`. Only a superuser can change an access method, as `check_object_ownership` checks it. A built-in access method gives `0A000`, as each built-in object does.
+    pub(super) fn comment_access_method(&self, object: Option<&Node>) -> Result<ObjRef> {
+        let name = object_name(object);
+        let Some(oid) = self.access_method_oid(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("access method \"{name}\" does not exist"),
+            ));
+        };
+        if !self.is_superuser() {
+            return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
+        }
+        if oid < FIRST_NORMAL_OID {
+            return Err(super::not_yet("COMMENT on a built-in object", None));
+        }
+        Ok(ObjRef::new(PG_AM, oid))
     }
 
     /// The text of `getObjectDescription` for an access method.

@@ -16,7 +16,7 @@ fn taken(name: &str) -> Error {
 }
 
 /// The name of a language in the object of a statement.
-fn object_name(object: Option<&Node>) -> &str {
+pub(super) fn object_name(object: Option<&Node>) -> &str {
     match object {
         Some(Node::String(name)) => name,
         _ => "",

@@ -55,6 +55,51 @@ fn io_type(ty: u32) -> u32 {
     builtin::base_representation(ty).unwrap_or(ty)
 }
 
+/// A base type whose input function is a function in C of the library of an extension, such as `vector_in` of pgvector: the row of the type. A value of such a type is the data of its varlena, as [`Value::Bytea`], and the kernels that the library binds to the functions of the type read and write it.
+pub(crate) fn library_type(ty: u32) -> Option<&'static builtin::TypeRow> {
+    if ty < rupg_catalog::FIRST_NORMAL_OID {
+        return None;
+    }
+    let row = builtin::type_by_oid(ty)?;
+    if row.kind != b'b' || row.input == 0 {
+        return None;
+    }
+    let input = builtin::proc_by_oid(row.input)?;
+    (input.lang == crate::C_LANGUAGE).then_some(row)
+}
+
+/// The call of the function `func` of the type `ty`, a function in C of the library of an extension, with the types of the arguments `types` and the type of the result `ret`.
+fn library_call(
+    func: u32,
+    ty: u32,
+    session: &dyn Session,
+    types: &[u32],
+    ret: u32,
+    args: &[Value],
+) -> Result<Value> {
+    let Some(kernel) = crate::kernel(func) else {
+        let name = builtin::proc_by_oid(func).map_or("?", |p| p.name);
+        return Err(not_yet(format!("the function {name} of type {}", type_name(ty))));
+    };
+    let call = Call { session, args: types, ret, variadic: false, want: None, collation: 0 };
+    kernel(&call, args)
+}
+
+/// `typenameTypeMod` with the `typmodin` function `func`, a function in C of the library of an extension: the typmod of the modifiers, which the function reads from its `cstring[]`.
+///
+/// # Errors
+///
+/// The error of the function for modifiers that the type does not take.
+pub fn typmod_in(func: u32, modifiers: &[String], session: &dyn Session) -> Result<i32> {
+    let items = modifiers.iter().map(|m| Some(Value::text(m.as_str()))).collect();
+    let array = Value::Array(Box::new(Array::one(items)));
+    let ret = library_call(func, 0, session, &[oid::CSTRING_ARRAY], oid::INT4, &[array])?;
+    match ret {
+        Value::Int4(typmod) => Ok(typmod),
+        _ => Err(bad_value()),
+    }
+}
+
 /// The element type and the delimiter of an array type, or `None` for a type that is not an array. `int2vector` and `oidvector` are not arrays here, because they have their own functions.
 pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
     if ty == oid::INT2VECTOR || ty == oid::OIDVECTOR {
@@ -72,6 +117,9 @@ pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
 /// True when the engine has the output and the send function of the type.
 pub fn output_supported(ty: u32) -> bool {
     let ty = io_type(ty);
+    if library_type(ty).is_some() {
+        return true;
+    }
     if let Some((elem, _)) = array_of(ty) {
         return output_supported(elem);
     }
@@ -265,6 +313,18 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         return Ok(());
     }
     let ty = io_type(ty);
+    if let Some(row) = library_type(ty) {
+        let text = library_call(
+            row.output,
+            ty,
+            session,
+            &[ty],
+            oid::CSTRING,
+            std::slice::from_ref(value),
+        )?;
+        out.extend_from_slice(text.as_str().ok_or_else(bad_value)?.as_bytes());
+        return Ok(());
+    }
     if is_enum(ty)
         && let Value::Oid(label) = value
     {
@@ -418,14 +478,19 @@ fn range_out(
 }
 
 /// `range_send`: the send function of the subtype for each bound that the range has, in the binary form of the range.
-fn range_send(ty: u32, range: &types::Range, out: &mut Vec<u8>) -> Result<()> {
+fn range_send(
+    ty: u32,
+    range: &types::Range,
+    session: &dyn Session,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     let sub = crate::range::subtype(ty);
     let (mut lower, mut upper) = (Vec::new(), Vec::new());
     if range.has_lower() {
-        send(sub, &range.lower, &mut lower)?;
+        send(sub, &range.lower, session, &mut lower)?;
     }
     if range.has_upper() {
-        send(sub, &range.upper, &mut upper)?;
+        send(sub, &range.upper, session, &mut upper)?;
     }
     types::range_send(
         range.flags,
@@ -455,12 +520,17 @@ fn multirange_out(
 }
 
 /// `multirange_send`: the send function of the range type for each range, in the binary form of the multirange.
-fn multirange_send(ty: u32, ranges: &[types::Range], out: &mut Vec<u8>) -> Result<()> {
+fn multirange_send(
+    ty: u32,
+    ranges: &[types::Range],
+    session: &dyn Session,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     let range_ty = crate::multirange::range_of(ty);
     let mut bytes = Vec::with_capacity(ranges.len());
     for range in ranges {
         let mut one = Vec::new();
-        range_send(range_ty, range, &mut one)?;
+        range_send(range_ty, range, session, &mut one)?;
         bytes.push(one);
     }
     types::multirange_send(&bytes.iter().map(Vec::as_slice).collect::<Vec<_>>(), out);
@@ -650,7 +720,7 @@ fn is_space(b: u8) -> bool {
 }
 
 /// `record_send`: the number of fields, then for each field the OID of its type and the length and the bytes of its value, with the length -1 for a null.
-fn record_send(record: &Record, out: &mut Vec<u8>) -> Result<()> {
+fn record_send(record: &Record, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
     let count = i32::try_from(record.values.len()).map_err(|_| bad_value())?;
     out.extend_from_slice(&count.to_be_bytes());
     let mut field = Vec::new();
@@ -661,7 +731,7 @@ fn record_send(record: &Record, out: &mut Vec<u8>) -> Result<()> {
             continue;
         }
         field.clear();
-        send(*ty, value, &mut field)?;
+        send(*ty, value, session, &mut field)?;
         let len = i32::try_from(field.len()).map_err(|_| bad_value())?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(&field);
@@ -884,6 +954,11 @@ fn input_value(
         _ => typmod,
     };
     let ty = io_type(ty);
+    if let Some(row) = library_type(ty) {
+        let types = [oid::CSTRING, oid::OID, oid::INT4];
+        let args = [Value::text(text), Value::Oid(ty), Value::Int4(typmod)];
+        return Ok(library_call(row.input, ty, session, &types, ty, &args)?);
+    }
     if let Some((elem, delim)) = array_of(ty) {
         // A hard error of an element stops the input of the array as a hard error.
         let mut hard = None;
@@ -1171,6 +1246,14 @@ fn receive_from(
     session: &dyn Session,
 ) -> std::result::Result<Value, Received> {
     let ty = io_type(ty);
+    if let Some(row) = library_type(ty) {
+        if row.receive == 0 {
+            return Err(Received::Engine(no_binary(ty, "input")));
+        }
+        let types = [oid::INTERNAL, oid::OID, oid::INT4];
+        let args = [Value::Bytea(recv.rest().to_vec()), Value::Oid(ty), Value::Int4(typmod)];
+        return library_call(row.receive, ty, session, &types, ty, &args).map_err(Received::Engine);
+    }
     if let Some((elem, _)) = array_of(ty) {
         let mut failed = None;
         let array =
@@ -1331,7 +1414,7 @@ pub(crate) fn output_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 pub(crate) fn send_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let ([ty], [value]) = (call.args, args) else { return Err(bad_value()) };
     let mut out = Vec::new();
-    send(*ty, value, &mut out)?;
+    send(*ty, value, call.session, &mut out)?;
     Ok(Value::Bytea(out))
 }
 
@@ -1340,17 +1423,27 @@ pub(crate) fn send_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// # Errors
 ///
 /// `0A000` for a type that has no send function here.
-pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
+pub fn send(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
     if ty == oid::PG_DDL_COMMAND {
         return Err(ddl_command_out());
     }
     let ty = io_type(ty);
+    if let Some(row) = library_type(ty) {
+        if row.send == 0 {
+            return Err(no_binary(ty, "output"));
+        }
+        match library_call(row.send, ty, session, &[ty], oid::BYTEA, std::slice::from_ref(value))? {
+            Value::Bytea(bytes) => out.extend_from_slice(&bytes),
+            _ => return Err(bad_value()),
+        }
+        return Ok(());
+    }
     if let Some((elem, _)) = array_of(ty) {
         let Value::Array(array) = value else { return Err(bad_value()) };
         let mut failed = None;
         types::array_send(array, elem, out, |item, out| {
             if failed.is_none()
-                && let Err(error) = send(elem, item, out)
+                && let Err(error) = send(elem, item, session, out)
             {
                 failed = Some(error);
             }
@@ -1411,9 +1504,9 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
             let values = vector(array, Value::as_oid)?;
             types::oidvector_send(&values, out);
         }
-        (_, Value::Record(record)) => record_send(record, out)?,
-        (_, Value::Range(range)) => range_send(ty, range, out)?,
-        (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, out)?,
+        (_, Value::Record(record)) => record_send(record, session, out)?,
+        (_, Value::Range(range)) => range_send(ty, range, session, out)?,
+        (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, session, out)?,
         (_, Value::TsVector(lexemes)) => types::tsvector_send(lexemes, out),
         (_, Value::TsQuery(items)) => types::tsquery_send(items, out),
         (_, Value::JsonPath(path)) => types::jsonpath_send(path, out),

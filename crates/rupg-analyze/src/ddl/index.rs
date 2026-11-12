@@ -199,7 +199,7 @@ impl Definer<'_, '_> {
         }
         let am = match method_name {
             "btree" | "hash" | "gist" | "gin" | "spgist" | "brin" => {
-                super::opclass::index_method(method_name)?
+                self.index_method(method_name)?
             }
             "heap" => {
                 return Err(Error::internal(

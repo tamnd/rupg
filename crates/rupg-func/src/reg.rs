@@ -51,6 +51,10 @@ impl Env for SessionEnv<'_> {
         crate::io::input(ty, text, typmod, self.0)
     }
 
+    fn typmod_in(&self, func: u32, modifiers: &[String]) -> Result<i32> {
+        crate::io::typmod_in(func, modifiers, self.0)
+    }
+
     fn catalog(&self) -> Option<&Catalog> {
         self.0.catalog()
     }

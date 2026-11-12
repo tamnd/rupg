@@ -1,0 +1,38 @@
+# pgvector 0.8.7, the release that rupg-contrib ports as the extension vector. Used by rupg-contrib. See spec/13-graph-indexes.md section 13.4 and spec/16-procedures-and-extensions.md section 16.8.
+# The script sql/vector.sql is the script vector--0.8.7.sql that the Makefile of pgvector installs. The tests in test/ are the suite of the extension.
+source https://github.com/pgvector/pgvector
+rev v0.8.7
+url https://raw.githubusercontent.com/pgvector/pgvector/{rev}/{path}
+license PostgreSQL LICENSE
+
+6bba9ebeb73e27477463b05e5ef1bf303bccbddb3db9bbc95905d351604d6a87  LICENSE
+9f7d0fcada5e68aa41adf9d5b3ab3fd43c83f2edd462c391a0f715d72a9941ec  vector.control
+a4ceca5931cb614b40bec09ce6994a57058513d9af612c15b1458a338134609d  sql/vector.sql
+cbbc6ca4fc4f59fc42a72a8a2a463fb0c1e7f5e40918884623bbd0729c235145  test/sql/bit.sql
+06bd81483ca9763749e81c97969583b241cb6dab6c194d4ffce2c0cbedc56b15  test/sql/btree.sql
+0a83fb717a12743340bda42de603d738c370c6ad85d34e1311ad5b06fa11e440  test/sql/cast.sql
+69370763cd194c7988ab0ff5cf2380405baa4b0de46aec76a1aab727bc5acb8d  test/sql/copy.sql
+08d236799cc48ff41d62e00469942a288e23b5c21cb5117f65a08c505c4a7b57  test/sql/halfvec.sql
+7087c536bbf65264fff64c9f167a4e610d3a1e96e98697f9f488ed722ed6f40d  test/sql/hnsw_bit.sql
+200f8374b336497d3c28cc092f1efccb0617e7bb9bc3737c19277b341dfb0949  test/sql/hnsw_halfvec.sql
+e104baebb9afbefd4a9d4f583b2515aafc7d6468daa0cd9ce5dc13f01f3caa86  test/sql/hnsw_sparsevec.sql
+4bcb15f14b3b4ef52dd1df6488932367001660e84836e6e42b4edfe318bc0981  test/sql/hnsw_vector.sql
+5f3bf41a32acc731f0ebdbc19568b76cb8a8714606a1e346865649e06984854d  test/sql/ivfflat_bit.sql
+35f41ed28cef3e653c229cc80f36146c299d77ab30e35bdfe849faea5cff7fd5  test/sql/ivfflat_halfvec.sql
+37c69a4fc9fbb2c90c0d12c463d42ac8ca729dcfbe7e69296ea232288a28f9af  test/sql/ivfflat_vector.sql
+6c28e9fbbaeacceb9683fc53391869d0189167464b341135a3e2a67f4e36d08a  test/sql/sparsevec.sql
+592f055f8d1940c0ac603883ad2f65700ef5629909af049d6a02bca041927f45  test/sql/vector_type.sql
+99fa76f2e7d19bc2066b114074d107a4260e47f04506ee87f57e258c25da7a59  test/expected/bit.out
+93b4830327056a85cff92413e5beb3eb7ad50d7a5d4632628d8fbe7c99772af1  test/expected/btree.out
+ea3bdbbe58784cdb01cd0576f423aac15b7fc3bcc289a48f1e53e837d9b59af6  test/expected/cast.out
+83f14df37459b75e52af168dfb6f3e1c071a37f8d4a4e85d943c21e03355e2e6  test/expected/copy.out
+ab856cc0d5d7095a5732ba5a75a99fb55e102cd473fb55dde347a691781b44e4  test/expected/halfvec.out
+4658a8e5819b76dcdb6638dc3ba3c1e743aa6cdf6c85f681e313fec9342dd227  test/expected/hnsw_bit.out
+c9d4d405a48f3de02f4fde3c575a7a208aa17f68a7d1c5eb250e7e8ccdbb860d  test/expected/hnsw_halfvec.out
+1f8eaf309cd2c0efc9d7bed12a6924027e13eb0af4028fe395e28d7f823ff8f2  test/expected/hnsw_sparsevec.out
+c69c4a36b1089f4a43d891c9d98b0b95207666718ee39ec2fac9cf1c9786e311  test/expected/hnsw_vector.out
+a11c53a93996307bb1053352e043e6ba7bd01f51777b21f28c6831c8ded12ccb  test/expected/ivfflat_bit.out
+e343803b21d037107e2124eab7995aed1aba876b9d18e0af6da5314ffaa06eea  test/expected/ivfflat_halfvec.out
+0f68d34c33d0a61fcfab41b25d438c2ba6266b71f811368ce550e993c7f3e609  test/expected/ivfflat_vector.out
+f5661760feb0dc817f51116f698de156297bfc981142bebada39a0b73d3bd18e  test/expected/sparsevec.out
+0434592d5d32797d42ff6cfcfdf9e27353ae7f651d9ec2078fcc44c490ba51d6  test/expected/vector_type.out

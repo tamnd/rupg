@@ -689,6 +689,10 @@ impl Env for SchemaEnv<'_> {
         }
     }
 
+    fn typmod_in(&self, func: u32, modifiers: &[String]) -> Result<i32> {
+        self.env.typmod_in(func, modifiers)
+    }
+
     fn catalog(&self) -> Option<&Catalog> {
         self.env.catalog()
     }

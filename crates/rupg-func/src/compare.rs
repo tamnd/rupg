@@ -260,10 +260,16 @@ enum Image {
 }
 
 /// The image of a value that is not null, made from the bytes of its binary output.
-fn image(ty: u32, value: &Value) -> Result<Image> {
+fn image(ty: u32, value: &Value, session: &dyn crate::Session) -> Result<Image> {
     let ty = base_type(ty);
+    // The value of a type of the library of an extension is the data of its varlena.
+    if crate::io::library_type(ty).is_some()
+        && let Value::Bytea(data) = value
+    {
+        return Ok(Image::Var(data.clone()));
+    }
     let mut sent = Vec::new();
-    crate::io::send(ty, value, &mut sent)?;
+    crate::io::send(ty, value, session, &mut sent)?;
     let Some(row) = builtin::type_by_oid(ty) else { return Ok(Image::Var(sent)) };
     if row.by_val {
         let datum = sent.iter().fold(0u64, |d, b| d << 8 | u64::from(*b));
@@ -345,7 +351,7 @@ fn numeric_image(sent: &[u8]) -> Vec<u8> {
 }
 
 /// `record_image_cmp`: the order of two records by the images of their columns. Two nulls are equal, and a null is above a value.
-fn image_order(args: &[Value]) -> Result<Ordering> {
+fn image_order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
     let [Value::Record(a), Value::Record(b)] = args else { return Err(bad_value()) };
     let columns = a.types.iter().zip(&a.values).zip(b.types.iter().zip(&b.values));
     for (n, ((&left, x), (&right, y))) in columns.enumerate() {
@@ -364,7 +370,7 @@ fn image_order(args: &[Value]) -> Result<Ordering> {
             (true, true) => Ordering::Equal,
             (true, false) => Ordering::Greater,
             (false, true) => Ordering::Less,
-            (false, false) => image(left, x)?.cmp(&image(right, y)?),
+            (false, false) => image(left, x, call.session)?.cmp(&image(right, y, call.session)?),
         };
         if order.is_ne() {
             return Ok(order);
@@ -758,25 +764,25 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
         "record_eq" => return Some(|_, args| record_equal(args).map(Value::Bool)),
         "record_ne" => return Some(|_, args| record_equal(args).map(|eq| Value::Bool(!eq))),
         "record_image_eq" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_eq())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_eq())));
         }
         "record_image_ne" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_ne())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_ne())));
         }
         "record_image_lt" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_lt())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_lt())));
         }
         "record_image_le" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_le())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_le())));
         }
         "record_image_gt" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_gt())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_gt())));
         }
         "record_image_ge" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Bool(o.is_ge())));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Bool(o.is_ge())));
         }
         "btrecordimagecmp" => {
-            return Some(|_, args| image_order(args).map(|o| Value::Int4(o as i32)));
+            return Some(|call, args| image_order(call, args).map(|o| Value::Int4(o as i32)));
         }
         _ => {}
     }
