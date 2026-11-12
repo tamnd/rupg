@@ -39,6 +39,7 @@ use foreign::Batch;
 
 mod activity;
 mod analyze;
+mod ann;
 mod catalog_update;
 mod copy;
 mod copy_from;
@@ -1072,6 +1073,7 @@ impl Connection {
                 }
             },
             (WriteKind::Insert, None) => {
+                self.ann_inserts(info.table, rows.iter())?;
                 let count = rows.len() as u64;
                 if info.keeps_written() {
                     written.clone_from(&rows);
@@ -1118,6 +1120,7 @@ impl Connection {
             (kind, _) => {
                 let update = kind == WriteKind::Update;
                 let (mut changes, mut given) = row_changes(rows, info)?;
+                self.ann_inserts(info.table, changes.iter().filter_map(|c| c.1.as_ref()))?;
                 let mut kept = Vec::new();
                 let mut applied = Vec::new();
                 let periods = self.period_keys(info.table);
@@ -1994,6 +1997,7 @@ impl Connection {
             .and_then(|()| self.check_partitions(&defined.checks, &work))
             .and_then(|()| self.check_domain_rows(&defined.domain_checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
+            .and_then(|()| self.ann_builds(&self.catalog(), &work, notices))
             .and_then(|()| self.view_texts(&defined.views, &mut work))
             .and_then(|()| self.wait_index_writers(defined.concurrent, &work));
         if result.is_ok() {
@@ -5072,6 +5076,12 @@ mod tests {
     #[test]
     fn vector_index() {
         big_stack(|| script(include_str!("connection/vector_index.test")));
+    }
+
+    /// Scans by `hnsw` and `ivfflat` of pgvector: the rows that the search reaches with `hnsw.ef_search`, `ivfflat.probes` and the iterative scans, with no row whose key is null or has a norm of zero for a class with a norm, the notice of an `ivfflat` index with fewer rows than lists, and the limit of the elements of a `sparsevec` of `hnsw`, as pgvector 0.8.7 gives them.
+    #[test]
+    fn vector_scan() {
+        big_stack(|| script(include_str!("connection/vector_scan.test")));
     }
 
     #[test]

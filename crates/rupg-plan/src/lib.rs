@@ -427,6 +427,33 @@ pub struct HashTables {
     pub set_ops: Vec<(Vec<bool>, HashTable)>,
     /// The passes of the `Agg` of the grouping sets of the query, in the order that the node gives their groups.
     pub passes: Vec<Pass>,
+    /// The scans of the relations of the query by an index of pgvector, which give only the rows that the index has and not more than its search finds.
+    pub ann: Vec<AnnScan>,
+}
+
+/// An index access method of pgvector, with the options of the index that its scan reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnnMethod {
+    /// `hnsw`, with its option `m`.
+    Hnsw { m: i32 },
+    /// `ivfflat`, with its option `lists`.
+    Ivfflat { lists: i32 },
+}
+
+/// An index scan of a relation of the query by an index of `hnsw` or `ivfflat`, for the executor. The index has no row whose key is null, and no row whose key has the norm 0 when its operator class normalizes the keys. `hnswgettuple` gives the rows that the search of the graph finds, `hnsw.ef_search` of them with no iterative scan, and `ivfflatgettuple` gives the rows of the lists nearest to the value, `ivfflat.probes` of them with no iterative scan.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnnScan {
+    /// The relation of the query.
+    pub relation: usize,
+    /// The OID of the table of the relation.
+    pub table: u32,
+    pub method: AnnMethod,
+    /// The key of the index, with the columns of the table as columns of the relation.
+    pub key: Expr,
+    /// The ordering operator of the scan: the distance of the key to the value.
+    pub distance: Expr,
+    /// The function of the norm of the key, `HNSW_NORM_PROC` and `IVFFLAT_NORM_PROC` of the operator class, or 0 for a class that does not normalize.
+    pub norm: u32,
 }
 
 /// A pass of an `Agg` with grouping sets for the executor: a hash table for one set, or one pass over rows in the order of the keys of the first set, where each set is the first keys of the set before it.

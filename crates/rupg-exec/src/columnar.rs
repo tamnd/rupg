@@ -2384,6 +2384,13 @@ pub(crate) fn run(
     if scan::unique_key(query, params, session) {
         return Ok(None);
     }
+    // The row engine keeps the rows of a scan by an index of pgvector.
+    if !query.sort.is_empty()
+        && crate::ann::indexed(session, relation.oid)
+        && session.hash_tables(query).is_some_and(|t| !t.ann.is_empty())
+    {
+        return Ok(None);
+    }
     // An index scan gives its rows in the order of the index, which the columns do not keep. The order does not change one row of aggregates that do not read the order, or the set of rows that a test of `ANY` reads.
     if !(unordered && set_free(query))
         && !order_free(query)

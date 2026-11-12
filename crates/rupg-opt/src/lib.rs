@@ -191,6 +191,10 @@ pub struct Enable {
     pub parallel_append: bool,
     pub parallel_hash: bool,
     pub gathermerge: bool,
+    /// `hnsw.ef_search` of pgvector, which `hnswcostestimate` reads.
+    pub hnsw_ef_search: i32,
+    /// `ivfflat.probes` of pgvector, which `ivfflatcostestimate` reads.
+    pub ivfflat_probes: i32,
 }
 
 impl Default for Enable {
@@ -225,6 +229,8 @@ impl Default for Enable {
             parallel_append: true,
             parallel_hash: true,
             gathermerge: true,
+            hnsw_ef_search: 40,
+            ivfflat_probes: 1,
         }
     }
 }
@@ -424,6 +430,16 @@ pub struct Index {
     pub width: i32,
     /// `pagesPerRange` of a `brin` index, from its option `pages_per_range`, and 0 for another index.
     pub pages_per_range: u32,
+    /// The facts of an index of `hnsw` or `ivfflat` of pgvector, or `None` for an index of another access method.
+    pub ann: Option<Ann>,
+}
+
+/// An index of an access method of pgvector, which has `amcanorderbyop` and no `amgetbitmap`: its scan needs an ordering operator, and gives no bitmap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ann {
+    pub method: rupg_plan::AnnMethod,
+    /// The function of the norm of the operator class of the key column, its support function 2, or 0.
+    pub norm: u32,
 }
 
 /// A table of an inheritance tree that a scan reads.
@@ -567,6 +583,33 @@ fn index_keys(
         });
     }
     Some(out)
+}
+
+/// The scans of the plan `plan` of `query` by an index of `hnsw` or `ivfflat`, each with the key of its index and the ordering operator of the scan, as `hnswgettuple` and `ivfflatgettuple` read them. A scan of a member of an inheritance tree, or of a query of a subquery or of a subplan, is not in the list.
+pub fn ann_scans(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Vec<rupg_plan::AnnScan> {
+    let mut out = Vec::new();
+    let mut nodes = vec![&plan.root];
+    while let Some(node) = nodes.pop() {
+        nodes.extend(&node.children);
+        let Kind::IndexScan { relation, index, order_by, .. } = &node.kind else { continue };
+        if node.scope != 0 || node.member.is_some() {
+            continue;
+        }
+        let Some(table) = query.relations.get(*relation).map(|r| r.oid) else { continue };
+        let Some(distance) = order_by.first().map(|item| item.expr.as_ref()) else { continue };
+        let Some((_, key, _)) = exprs::binary(distance) else { continue };
+        let found = members.indexes(table).into_iter().find(|i| i.oid == *index);
+        let Some(ann) = found.and_then(|i| i.ann) else { continue };
+        out.push(rupg_plan::AnnScan {
+            relation: *relation,
+            table,
+            method: ann.method,
+            key: key.clone(),
+            distance: distance.clone(),
+            norm: ann.norm,
+        });
+    }
+    out
 }
 
 /// The hash tables of the plan `plan` of `query` for `GROUP BY`, `DISTINCT` and the set operations of `query`, whose groups come in the order of the table. A table of a subquery or of a subplan is not in the list.
