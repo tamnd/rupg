@@ -651,6 +651,74 @@ enum LinkKind {
     Exists(lift::Probe),
     /// A subquery of one value with an aggregate.
     Value(lift::Scalar),
+    /// An `x IN (SELECT ...)` whose subquery reads no column of the query.
+    In(InSet),
+}
+
+/// The integers of an `x IN (SELECT ...)` whose subquery reads no column of the query, as [`in_set`] gives them.
+struct InSet {
+    /// The integer `x`.
+    outer: Expr,
+    set: FxSet<i64>,
+    /// True when the subquery gives a null.
+    null: bool,
+}
+
+impl InSet {
+    /// The `IN` for an `x` of `value`: true when the subquery gives `x`, else null when `x` is null or the subquery gives a null, and false when the subquery gives no row.
+    fn test(&self, value: Option<i64>) -> Option<bool> {
+        if self.set.is_empty() && !self.null {
+            return Some(false);
+        }
+        match value {
+            Some(x) if self.set.contains(&x) => Some(true),
+            Some(_) if !self.null => Some(false),
+            _ => None,
+        }
+    }
+}
+
+/// The set of an `x IN (SELECT ...)` that runs once, or `None` for another subquery. The test must be an `=` of two integers, `x` must read only the query, and the subquery must read no column of the query and give one integer column. `None` also when the subquery fails, and then the row engine runs it.
+fn in_set(expr: &Expr, params: &[Value], session: &dyn Session, cache: &Cache) -> Option<InSet> {
+    const INTEGERS: [u32; 3] = [oid::INT2, oid::INT4, oid::INT8];
+    let ExprKind::SubLink(sub) = &expr.kind else { return None };
+    if sub.kind != SubLinkKind::Any || sub.volatile || crate::correlated(&sub.query) {
+        return None;
+    }
+    let ExprKind::Func(f) = &sub.test.as_ref()?.kind else { return None };
+    if !crate::reduce::EQUALS.contains(&f.oid) || f.collation != 0 {
+        return None;
+    }
+    let [a, b] = f.args.as_slice() else { return None };
+    let column = |e: &Expr| matches!(e.kind, ExprKind::SubColumn(_));
+    let outer = match (column(a), column(b)) {
+        (false, true) => a,
+        (true, false) => b,
+        _ => return None,
+    };
+    let other = outer.find(0, &mut |e, _| {
+        matches!(e.kind, ExprKind::SubColumn(_) | ExprKind::SubLink(_)).then_some(())
+    });
+    let mut targets = sub.query.targets.iter().filter(|t| !t.junk);
+    let one = matches!(
+        (targets.next(), targets.next()),
+        (Some(target), None) if INTEGERS.contains(&target.expr.ty)
+    );
+    if !one || !INTEGERS.contains(&outer.ty) || other.is_some() {
+        return None;
+    }
+    let rows = crate::run_sub(&sub.query, params, session, cache, &[], false).ok()?;
+    let mut set = FxSet::default();
+    let mut null = false;
+    for row in &rows {
+        match row.first()? {
+            Value::Null => null = true,
+            value => {
+                set.insert(int_of(value)?);
+            }
+        }
+    }
+    Some(InSet { outer: outer.clone(), set, null })
 }
 
 impl Link {
@@ -661,6 +729,7 @@ impl Link {
                 std::iter::once(probe.outer.clone()).chain(probe.other.clone()).collect()
             }
             LinkKind::Value(scalar) => scalar.outer.clone(),
+            LinkKind::In(found) => vec![found.outer.clone()],
         }
     }
 
@@ -671,11 +740,12 @@ impl Link {
                 std::iter::once(&mut probe.outer).chain(probe.other.as_mut()).collect()
             }
             LinkKind::Value(scalar) => scalar.outer.iter_mut().collect(),
+            LinkKind::In(found) => vec![&mut found.outer],
         }
     }
 }
 
-/// The links of the subqueries of `exprs` that are not in a subquery, or `None` when a subquery is not an `EXISTS` with a probe of [`lift::probe`] or a subquery of one value of [`lift::scalar`].
+/// The links of the subqueries of `exprs` that are not in a subquery, or `None` when a subquery is not an `EXISTS` with a probe of [`lift::probe`], a subquery of one value of [`lift::scalar`] or an `IN` of [`in_set`].
 fn links_of<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     params: &[Value],
@@ -701,6 +771,7 @@ fn links_of<'a>(
                 SubLinkKind::Expr => {
                     LinkKind::Value(lift::scalar(&sub.query, params, session, cache)?)
                 }
+                SubLinkKind::Any => LinkKind::In(in_set(at, params, session, cache)?),
                 _ => return None,
             };
             links.push(Link { ty: at.ty, at, kind });
@@ -1086,6 +1157,11 @@ impl<'q> Exec<'q> {
                 let other = probe.other.is_some();
                 let out =
                     probe.tests(sel.len(), |i| int(0, i), |i| if other { int(1, i) } else { None });
+                Ok(Col::bools(&out))
+            }
+            LinkKind::In(found) => {
+                let out: Vec<Option<bool>> =
+                    (0..sel.len()).map(|i| found.test(int(0, i))).collect();
                 Ok(Col::bools(&out))
             }
             LinkKind::Value(scalar) => {
@@ -1858,8 +1934,10 @@ fn data_len(data: &DecodedData) -> usize {
 
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
 ///
-/// With `links`, an `EXISTS` and a subquery of one value are supported, and the scan gets their values from the run once of [`links_of`]. The columns of the query in a subquery are then columns of the query outside it.
+/// With `links`, an `EXISTS`, a subquery of one value and an `IN` are supported, and the scan gets their values from the run once of [`links_of`]. The columns of the query in a subquery are then columns of the query outside it.
 fn unsupported(expr: &Expr, links: bool) -> bool {
+    // The columns of the subquery in the test of an `IN`, which [`in_set`] reads.
+    let mut tested: Vec<*const Expr> = Vec::new();
     crate::volatile(expr)
         || expr
             .find(0, &mut |e, depth| {
@@ -1867,11 +1945,23 @@ fn unsupported(expr: &Expr, links: bool) -> bool {
                     return None;
                 }
                 let bad = match &e.kind {
-                    ExprKind::SubLink(sub) => {
-                        !links || !matches!(sub.kind, SubLinkKind::Exists | SubLinkKind::Expr)
-                    }
-                    ExprKind::SubColumn(_)
-                    | ExprKind::Window(_)
+                    ExprKind::SubLink(sub) => match sub.kind {
+                        SubLinkKind::Exists | SubLinkKind::Expr => !links,
+                        SubLinkKind::Any if links => {
+                            if let Some(test) = &sub.test {
+                                test.find(0, &mut |t, _| {
+                                    if matches!(t.kind, ExprKind::SubColumn(_)) {
+                                        tested.push(std::ptr::from_ref(t));
+                                    }
+                                    None::<()>
+                                });
+                            }
+                            false
+                        }
+                        _ => true,
+                    },
+                    ExprKind::SubColumn(_) => !tested.contains(&std::ptr::from_ref(e)),
+                    ExprKind::Window(_)
                     | ExprKind::Grouping(_)
                     | ExprKind::PlaceHolder(_)
                     | ExprKind::CurrentOf(_)

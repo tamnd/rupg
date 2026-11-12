@@ -4940,6 +4940,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector_scalar.test")));
     }
 
+    /// An `IN` and a `NOT IN` of a subquery that runs once give the rows of Postgres in a scan of the vectors, as the subqueries of TPC-H Q20, with nulls in the column and in the subquery, in an `OR`, and with a subquery that gives no row.
+    #[test]
+    fn vector_in() {
+        big_stack(|| script(include_str!("connection/vector_in.test")));
+    }
+
     /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
     #[test]
     fn date_part_scan() {
