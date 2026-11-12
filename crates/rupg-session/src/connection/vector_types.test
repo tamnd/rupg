@@ -1,0 +1,125 @@
+> create extension vector
+CREATE EXTENSION
+> select '[1,2,3]'::halfvec, ' [ 1.5 , -2e-3 ] '::halfvec, '[65504,-65504]'::halfvec, '[1e-8,1.0001]'::halfvec
+fields halfvec:16498:-1:-1,halfvec:16498:-1:-1,halfvec:16498:-1:-1,halfvec:16498:-1:-1
+row [1,2,3],[1.5,-0.0020008087],[65504,-65504],[0,1]
+SELECT 1
+> select '[65520,1]'::halfvec
+ERROR 22003 "65520" is out of range for type halfvec at 8
+> select '[1e39,1]'::halfvec
+ERROR 22003 "1e39" is out of range for type halfvec at 8
+> select '[NaN,1]'::halfvec
+ERROR 22000 NaN not allowed in halfvec at 8
+> select '[]'::halfvec
+ERROR 22000 halfvec must have at least 1 dimension at 8
+> select '[1,2] 3'::halfvec
+ERROR 22P02 invalid input syntax for type halfvec: "[1,2] 3" at 8
+> select '[1,2,3]'::halfvec(2)
+ERROR 22000 expected 2 dimensions, not 3
+> select '[1,2]'::halfvec(16001)
+ERROR 22023 dimensions for type halfvec cannot exceed 16000 at 17
+> select '[1,2,3]'::halfvec <-> '[3,2,1]', '[1,2,3]'::halfvec <#> '[3,2,1]', '[1,2,3]'::halfvec <=> '[3,2,1]', '[1,2,3]'::halfvec <+> '[3,2,1]'
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 2.8284271247461903,-10,0.2857142857142857,4
+SELECT 1
+> select '[1,2]'::halfvec <-> '[1,2,3]'
+ERROR 22000 different halfvec dimensions 2 and 3
+> select '[1,2,3]'::halfvec + '[1,2,3]', '[1,2,3]'::halfvec - '[1,2,3]', '[1,2,3]'::halfvec * '[1,2,3]', '[1,2]'::halfvec || '[3]'
+fields ?column?:16498:-1:-1,?column?:16498:-1:-1,?column?:16498:-1:-1,?column?:16498:-1:-1
+row [2,4,6],[0,0,0],[1,4,9],[1,2,3]
+SELECT 1
+> select '[65504]'::halfvec + '[65504]'
+ERROR 22003 value out of range: overflow
+> select '[1e-4]'::halfvec * '[1e-4]'
+ERROR 22003 value out of range: underflow
+> select l2_norm('[3,4]'::halfvec), l2_normalize('[3,4]'::halfvec), vector_dims('[1,2,3]'::halfvec), subvector('[1,2,3,4]'::halfvec, 2, 2), binary_quantize('[1,-1,0,2]'::halfvec)
+fields l2_norm:701:8:-1,l2_normalize:16498:-1:-1,vector_dims:23:4:-1,subvector:16498:-1:-1,binary_quantize:1560:-1:-1
+row 5,[0.60009766,0.7998047],3,[2,3],1001
+SELECT 1
+> select avg(v), sum(v) from (values ('[1,2]'::halfvec), ('[3,5]')) t(v)
+fields avg:16498:-1:-1,sum:16498:-1:-1
+row [2,3.5],[4,7]
+SELECT 1
+> select '[1,2,3]'::halfvec < '[1,2,4]', '[1,2,3]'::halfvec = '[1,2,3]', '[1,2]'::halfvec < '[1,2,3]'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> select '[1.5,2]'::vector::halfvec, '[1.5,2]'::halfvec::vector, '{1,2}'::int[]::halfvec, '{1.5,2}'::real[]::halfvec(2), '[1,2]'::halfvec::real[]
+fields halfvec:16498:-1:-1,vector:16385:-1:-1,halfvec:16498:-1:-1,halfvec:16498:-1:2,float4:1021:-1:-1
+row [1.5,2],[1.5,2],[1,2],[1.5,2],{1,2}
+SELECT 1
+> select '[70000]'::vector::halfvec
+ERROR 22003 "70000" is out of range for type halfvec
+> select '{70000}'::real[]::halfvec
+ERROR 22003 "70000" is out of range for type halfvec
+> select format_type('halfvec'::regtype, 3), format_type('sparsevec'::regtype, 5)
+fields format_type:25:-1:-1,format_type:25:-1:-1
+row halfvec(3),sparsevec(5)
+SELECT 1
+> select '{1:1.5,3:2}/5'::sparsevec, '{}/3'::sparsevec, ' { 3 : 2 , 1 : 1.5 } / 5 '::sparsevec, '{1:0,2:1}/2'::sparsevec
+fields sparsevec:16633:-1:-1,sparsevec:16633:-1:-1,sparsevec:16633:-1:-1,sparsevec:16633:-1:-1
+row {1:1.5,3:2}/5,{}/3,{1:1.5,3:2}/5,{2:1}/2
+SELECT 1
+> select '{1:1,1:2}/2'::sparsevec
+ERROR 22000 sparsevec indices must not contain duplicates at 8
+> select '{3:1}/2'::sparsevec
+ERROR 22000 sparsevec index out of bounds at 8
+> select '{0:1}/2'::sparsevec
+ERROR 22000 sparsevec index out of bounds at 8
+> select '{1:1}'::sparsevec
+ERROR 22P02 invalid input syntax for type sparsevec: "{1:1}" at 8
+> select '[1:1]/2'::sparsevec
+ERROR 22P02 invalid input syntax for type sparsevec: "[1:1]/2" at 8
+> select '{1:1}/2 x'::sparsevec
+ERROR 22P02 invalid input syntax for type sparsevec: "{1:1}/2 x" at 8
+> select '{1:1e-46}/2'::sparsevec
+ERROR 22003 "1e-46" is out of range for type sparsevec at 8
+> select '{1:NaN}/2'::sparsevec
+ERROR 22000 NaN not allowed in sparsevec at 8
+> select '{}/0'::sparsevec
+ERROR 22000 sparsevec must have at least 1 dimension at 8
+> select '{1:1}/3'::sparsevec(2)
+ERROR 22000 expected 2 dimensions, not 3
+> select '{1:1,2:2}/3'::sparsevec <-> '{2:1,3:3}/3', '{1:1,2:2}/3'::sparsevec <#> '{2:1,3:3}/3', '{1:1,2:2}/3'::sparsevec <=> '{2:1,3:3}/3', '{1:1,2:2}/3'::sparsevec <+> '{2:1,3:3}/3'
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 3.3166247903554,-2,0.717157287525381,5
+SELECT 1
+> select '{1:1}/2'::sparsevec <-> '{1:1}/3'
+ERROR 22000 different sparsevec dimensions 2 and 3
+> select l2_norm('{1:3,2:4}/2'::sparsevec), l2_normalize('{1:3,2:4}/2'::sparsevec), l2_norm('{}/2'::sparsevec)
+fields l2_norm:701:8:-1,l2_normalize:16633:-1:-1,l2_norm:701:8:-1
+row 5,{1:0.6,2:0.8}/2,0
+SELECT 1
+> select '{1:1}/2'::sparsevec < '{2:1}/2', '{1:1}/2'::sparsevec = '{1:1}/2', '{1:-1}/2'::sparsevec < '{}/2'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t
+SELECT 1
+> select '[0,1.5,0,2]'::vector::sparsevec, '[0,1.5]'::halfvec::sparsevec, '{0,1,0,2}'::int[]::sparsevec, '{2:1.5}/3'::sparsevec::vector, '{2:1.5}/3'::sparsevec::halfvec
+fields sparsevec:16633:-1:-1,sparsevec:16633:-1:-1,sparsevec:16633:-1:-1,vector:16385:-1:-1,halfvec:16498:-1:-1
+row {2:1.5,4:2}/4,{2:1.5}/2,{2:1,4:2}/4,[0,1.5,0],[0,1.5,0]
+SELECT 1
+> select '{1:70000}/2'::sparsevec::halfvec
+ERROR 22003 "70000" is out of range for type halfvec
+> select hamming_distance('1011', '0001'), jaccard_distance('1011', '0001'), jaccard_distance('0000', '0000')
+fields hamming_distance:701:8:-1,jaccard_distance:701:8:-1,jaccard_distance:701:8:-1
+row 2,0.6666666666666667,1
+SELECT 1
+> select hamming_distance('101', '10')
+ERROR 22000 different bit lengths 3 and 2
+> select binary_quantize('[1,-1,2]'::vector) <~> '101', binary_quantize('[1,-1,2]'::vector) <%> '111'
+fields ?column?:701:8:-1,?column?:701:8:-1
+row 0,0.33333333333333337
+SELECT 1
+> create table t (h halfvec(2), s sparsevec(4))
+CREATE TABLE
+> insert into t values ('[1,2]', '{1:1,4:2}/4')
+INSERT 0 1
+> copy t to stdout (format binary)
+copy out 1 1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x08\x00\x02\x00\x00<\x00@\x00\x00\x00\x00\x1c\x00\x00\x00\x04\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03?\x80\x00\x00@\x00\x00\x00
+data \xff\xff
+copy done
+COPY 1
+> drop extension vector cascade
+NOTICE 00000 drop cascades to 2 other objects
+DROP EXTENSION

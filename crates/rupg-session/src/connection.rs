@@ -5062,6 +5062,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector.test")));
     }
 
+    /// The types `halfvec` and `sparsevec` of pgvector and the distances of `bit`: the input and the output with their errors, the operators, the functions, the aggregates of `halfvec`, the casts between the types and the binary form of `COPY`, as pgvector 0.8.7 gives them.
+    #[test]
+    fn vector_types() {
+        big_stack(|| script(include_str!("connection/vector_types.test")));
+    }
+
     #[test]
     fn create_extension() {
         big_stack(|| script(include_str!("connection/create_extension.test")));
