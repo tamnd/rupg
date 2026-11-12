@@ -11,7 +11,6 @@ use rupg_sql::nodes::{Node, ObjectType, TypeName};
 
 use super::comment::range_var;
 use super::index::system_column;
-use super::opclass::index_method;
 use super::{Definer, Found, SchemaEnv};
 use crate::typename::{names, type_name_text};
 use crate::{Analyzer, Env, Params};
@@ -499,8 +498,8 @@ impl Definer<'_, '_> {
         let Some((&method, name)) = list.split_first() else {
             return Err(Error::internal("the name of an access method"));
         };
-        let method = index_method(method)?;
-        let oid = self.opcf_lookup(family, method, name, false)?.unwrap_or_default();
+        let method = self.index_method(method)?;
+        let oid = self.opcf_lookup(family, &method, name, false)?.unwrap_or_default();
         let class = if family { rupg_catalog::PG_OPFAMILY } else { rupg_catalog::PG_OPCLASS };
         Ok(ObjRef::new(class, oid))
     }

@@ -5056,6 +5056,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/extension_opclass.test")));
     }
 
+    /// The extension `vector` of pgvector: `CREATE EXTENSION`, the input and the output of `vector` with its type modifier, the casts, the operators, the functions, the aggregates `avg` and `sum` and the errors, as pgvector 0.8.7 gives them in its tests of `vector_type` and `cast`.
+    #[test]
+    fn vector() {
+        big_stack(|| script(include_str!("connection/vector.test")));
+    }
+
     #[test]
     fn create_extension() {
         big_stack(|| script(include_str!("connection/create_extension.test")));

@@ -1,6 +1,6 @@
 //! The contrib extensions that document 16 lists, in Rust.
 //!
-//! Each extension is a [`Builtin`] of `rupg-ext`: the control file and the scripts of the pin, unchanged, in [`generated`], and the table that binds each C symbol of the scripts to a Rust kernel. Each extension is behind a cargo feature of its name, on by default. See `spec/16-procedures-and-extensions.md` sections 16.7 and 16.8.
+//! Each extension is a [`Builtin`] of `rupg-ext`: the control file and the scripts of the pin, unchanged, in [`generated`], and the table that binds each C symbol of the scripts to a Rust kernel. Each extension is behind a cargo feature of its name, on by default. The extension `vector` of pgvector, which `spec/13-graph-indexes.md` section 13.4 lists, is one too, with its files from `vendor/pgvector`. See `spec/16-procedures-and-extensions.md` sections 16.7 and 16.8.
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +13,8 @@ mod btree_gin;
 mod btree_gist;
 #[cfg(feature = "pg_trgm")]
 mod pg_trgm;
+#[cfg(feature = "vector")]
+mod vector;
 
 use rupg_ext::Builtin;
 use rupg_func::Kernel;
@@ -39,6 +41,13 @@ static BUILTINS: &[Builtin] = &[
         files: generated::files::PG_TRGM,
         module: "pg_trgm",
         symbols: pg_trgm::SYMBOLS,
+    },
+    #[cfg(feature = "vector")]
+    Builtin {
+        name: "vector",
+        files: generated::files::VECTOR,
+        module: "vector",
+        symbols: vector::SYMBOLS,
     },
 ];
 

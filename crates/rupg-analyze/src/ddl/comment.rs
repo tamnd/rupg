@@ -1,4 +1,4 @@
-//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the triggers, the types, the functions, the operators and the objects of text search of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
+//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the triggers, the types, the functions, the operators, the objects of text search and the access methods of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_CONSTRAINT, PG_LARGEOBJECT, PG_NAMESPACE, PG_PROC,
@@ -90,6 +90,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_CONVERSION => self.comment_conversion(object)?,
             ObjectType::OBJECT_EVENT_TRIGGER => self.comment_event_trigger(object)?,
             ObjectType::OBJECT_LANGUAGE => self.comment_language(object)?,
+            ObjectType::OBJECT_ACCESS_METHOD => self.comment_access_method(object)?,
             ObjectType::OBJECT_FDW => self.comment_foreign(true, object)?,
             ObjectType::OBJECT_FOREIGN_SERVER => self.comment_foreign(false, object)?,
             ObjectType::OBJECT_PUBLICATION => self.comment_publication(object)?,

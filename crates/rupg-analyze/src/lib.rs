@@ -140,6 +140,14 @@ pub trait Env {
     fn database(&self) -> String;
     /// The input function of the type: the value of a string literal. The settings of the session, such as `DateStyle`, apply.
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value>;
+    /// The `typmodin` function `func` of a type, a function in C of the library of an extension: the typmod of the type modifiers `modifiers`, as the function reads them from its `cstring[]`.
+    fn typmod_in(&self, func: u32, modifiers: &[String]) -> Result<i32> {
+        let _ = modifiers;
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("the type modifier input function {func} is not supported here"),
+        ))
+    }
     /// [`Env::input`] for a literal at this place in the query text, so that a warning of the input function points at the literal.
     fn input_at(&self, ty: u32, text: &str, typmod: i32, at: Option<usize>) -> Result<Value> {
         let _ = at;

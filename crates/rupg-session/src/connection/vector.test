@@ -1,0 +1,113 @@
+> create extension vector
+CREATE EXTENSION
+> select '[1,2,3]'::vector, ' [ 1.5 , -2e-3 ] '::vector, '[1.5e38,-1.5e38]'::vector, '[1e-46,1]'::vector
+fields vector:16385:-1:-1,vector:16385:-1:-1,vector:16385:-1:-1,vector:16385:-1:-1
+row [1,2,3],[1.5,-0.002],[1.5e+38,-1.5e+38],[0,1]
+SELECT 1
+> select '[4e38,1]'::vector
+ERROR 22003 "4e38" is out of range for type vector at 8
+> select '[NaN,1]'::vector
+ERROR 22000 NaN not allowed in vector at 8
+> select '[Infinity,1]'::vector
+ERROR 22000 infinite value not allowed in vector at 8
+> select '[]'::vector
+ERROR 22000 vector must have at least 1 dimension at 8
+> select '1,2'::vector
+ERROR 22P02 invalid input syntax for type vector: "1,2" at 8
+> select '[1,2] 3'::vector
+ERROR 22P02 invalid input syntax for type vector: "[1,2] 3" at 8
+> select '[1,]'::vector
+ERROR 22P02 invalid input syntax for type vector: "[1,]" at 8
+> select '[1,2,3]'::vector(2)
+ERROR 22000 expected 2 dimensions, not 3
+> select '[1,2]'::vector(0)
+ERROR 22023 dimensions for type vector must be at least 1 at 17
+> select '[1,2]'::vector(16001)
+ERROR 22023 dimensions for type vector cannot exceed 16000 at 17
+> select '[1,2]'::vector(1,2)
+ERROR 22023 invalid type modifier at 17
+> create table t (id int, v vector(3))
+CREATE TABLE
+> insert into t values (1, '[1,2,3]'), (2, '[4,5,6]'), (3, '[-1,0.5,2]')
+INSERT 0 3
+> insert into t values (4, '[1,2]')
+ERROR 22000 expected 3 dimensions, not 2
+> select id, v, v <-> '[1,1,1]' as l2, v <#> '[1,1,1]' as ip, v <=> '[1,1,1]' as cos, v <+> '[1,1,1]' as l1 from t
+fields id@t.1:23:4:-1,v@t.2:16385:-1:3,l2:701:8:-1,ip:701:8:-1,cos:701:8:-1,l1:701:8:-1
+row 1,[1,2,3],2.23606797749979,-6,0.07417990022744858,3
+row 2,[4,5,6],7.0710678118654755,-15,0.013072457560346584,12
+row 3,[-1,0.5,2],2.29128784747792,-1.5,0.6220355269907728,3.5
+SELECT 3
+> select avg(v), sum(v) from t
+fields avg:16385:-1:-1,sum:16385:-1:-1
+row [1.3333334,2.5,3.6666667],[4,7.5,11]
+SELECT 1
+> select avg(v) from t where false
+fields avg:16385:-1:-1
+row NULL
+SELECT 1
+> select '[1,2]'::vector + '[3,4]', '[1,2]'::vector - '[3,4]', '[1,2]'::vector * '[3,4]', '[1,2]'::vector || '[3]'
+fields ?column?:16385:-1:-1,?column?:16385:-1:-1,?column?:16385:-1:-1,?column?:16385:-1:-1
+row [4,6],[-2,-2],[3,8],[1,2,3]
+SELECT 1
+> select '[3e38]'::vector + '[3e38]'
+ERROR 22003 value out of range: overflow
+> select '[1e-37]'::vector * '[1e-37]'
+ERROR 22003 value out of range: underflow
+> select '[1,2]'::vector <-> '[1,2,3]'
+ERROR 22000 different vector dimensions 2 and 3
+> select vector_dims('[1,2,3]'::vector), vector_norm('[3,4]'), l2_normalize('[3,4]'::vector), binary_quantize('[1,-2,0,3]'::vector)
+fields vector_dims:23:4:-1,vector_norm:701:8:-1,l2_normalize:16385:-1:-1,binary_quantize:1560:-1:-1
+row 3,5,[0.6,0.8],1001
+SELECT 1
+> select subvector('[1,2,3,4,5]'::vector, 2, 3), subvector('[1,2,3,4,5]'::vector, -1, 3), subvector('[1,2,3,4,5]'::vector, 4, 9)
+fields subvector:16385:-1:-1,subvector:16385:-1:-1,subvector:16385:-1:-1
+row [2,3,4],[1],[4,5]
+SELECT 1
+> select subvector('[1,2,3]'::vector, 4, 1)
+ERROR 22000 vector must have at least 1 dimension
+> select '[1,2]'::vector < '[1,3]', '[1,2]'::vector = '[1,2]', '[1,2]'::vector >= '[1,2,0]', vector_cmp('[2]', '[1,5]')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,vector_cmp:23:4:-1
+row t,t,f,1
+SELECT 1
+> select inner_product('[1,2]'::vector, '[3,4]'), cosine_distance('[1,0]'::vector, '[0,1]'), l1_distance('[1,2]'::vector, '[3,5]'), vector_negative_inner_product('[1,2]', '[3,4]')
+fields inner_product:701:8:-1,cosine_distance:701:8:-1,l1_distance:701:8:-1,vector_negative_inner_product:701:8:-1
+row 11,1,5,-11
+SELECT 1
+> select '{1,2,3}'::int[]::vector, '{1.5,2.5}'::real[]::vector, '{1.25}'::float8[]::vector, '{1.1}'::numeric[]::vector, '[1,2.5]'::vector::real[]
+fields vector:16385:-1:-1,vector:16385:-1:-1,vector:16385:-1:-1,vector:16385:-1:-1,float4:1021:-1:-1
+row [1,2,3],[1.5,2.5],[1.25],[1.1],{1,2.5}
+SELECT 1
+> select '{1,2,3}'::real[]::vector(2)
+ERROR 22000 expected 2 dimensions, not 3
+> select '{{1}}'::real[]::vector
+ERROR 22000 array must be 1-D
+> select '{NULL}'::real[]::vector
+ERROR 22004 array must not contain nulls
+> select '{}'::real[]::vector
+ERROR 22000 vector must have at least 1 dimension
+> select '[1,2,3]'::vector::vector(3), '[1,2,3]'::vector::vector(2)
+ERROR 22000 expected 2 dimensions, not 3
+> select format_type(atttypid, atttypmod) from pg_attribute where attrelid = 't'::regclass and attname = 'v'
+fields format_type:25:-1:-1
+row vector(3)
+SELECT 1
+> select amname, amtype from pg_am where amname in ('ivfflat', 'hnsw') order by 1
+fields amname@pg_am.2:19:64:-1,amtype@pg_am.4:18:1:-1
+row hnsw,i
+row ivfflat,i
+SELECT 2
+> select opcname, amname from pg_opclass c join pg_am a on a.oid = c.opcmethod where opcname like 'vector%' order by 1, 2
+fields opcname@pg_opclass.3:19:64:-1,amname@pg_am.2:19:64:-1
+row vector_cosine_ops,hnsw
+row vector_cosine_ops,ivfflat
+row vector_ip_ops,hnsw
+row vector_ip_ops,ivfflat
+row vector_l1_ops,hnsw
+row vector_l2_ops,hnsw
+row vector_l2_ops,ivfflat
+row vector_ops,btree
+SELECT 8
+> drop extension vector cascade
+NOTICE 00000 drop cascades to column v of table t
+DROP EXTENSION

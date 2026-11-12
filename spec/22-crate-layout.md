@@ -237,6 +237,7 @@ The vendored files are in `vendor/`. Each directory has a `PIN` file with the so
 | the same files at 14.24, 15.19, 16.15, 17.11 and 18.6 | PostgreSQL tags | `rupg-shim`: the differences |
 | `tzdata` | IANA, the release that the PostgreSQL pin uses | `rupg-types` |
 | the Unicode character database | Unicode, the version that the PostgreSQL pin uses | `rupg-types`, `rupg-func` |
+| `vector.control`, `sql/vector.sql`, the tests of `test/` | pgvector 0.8.7 | `rupg-contrib`: the extension `vector` |
 
 The generated code is checked in, so a build needs no generator and no network. CI runs each generator and fails if the output differs from the checked-in file.
 

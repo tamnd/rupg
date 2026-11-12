@@ -13,10 +13,11 @@ categories.workspace = true
 readme.workspace = true
 
 [features]
-default = ["btree_gin", "btree_gist", "pg_trgm"]
+default = ["btree_gin", "btree_gist", "pg_trgm", "vector"]
 btree_gin = []
 btree_gist = []
 pg_trgm = []
+vector = []
 
 [dependencies]
 rupg-common.workspace = true

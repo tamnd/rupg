@@ -121,7 +121,7 @@ pub use hash::{
 pub use identify::{ddl_command, dropped_object};
 pub use io::{
     anyarray_array, base_type, check_row_type, check_row_type_since, input, input_soft,
-    input_supported, is_row_type, output, output_supported, receive, send, to_text,
+    input_supported, is_row_type, output, output_supported, receive, send, to_text, typmod_in,
 };
 pub use json::jsonb_subscript_fetch;
 pub use jsonbuild::{
@@ -197,7 +197,7 @@ pub fn with_domain_constraint(
 /// The OID of `internal`, the language of the functions in C.
 const INTERNAL_LANGUAGE: u32 = 12;
 /// The OID of the language `c`, the language of the functions of a library.
-const C_LANGUAGE: u32 = 13;
+pub(crate) const C_LANGUAGE: u32 = 13;
 
 /// The key of an advisory lock, the fields 2 to 4 of its tag: the two halves of a `bigint` key with `kind` 1, or two `integer` keys with `kind` 2. The database of the session is the field 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

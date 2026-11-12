@@ -59,7 +59,7 @@ const SPGIST_AM: u32 = 4000;
 const BRIN_AM: u32 = 3580;
 
 /// The facts of the `IndexAmRoutine` of an index access method that the commands read.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Method {
     pub(super) oid: u32,
     pub(super) name: &'static str,
@@ -178,19 +178,43 @@ pub(super) fn method_of(oid: u32) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.oid == oid)
 }
 
-/// `get_index_am_oid` and `GetIndexAmRoutineByAmId`: the index access method of the name. The table access method `heap` is not an index access method.
-pub(super) fn index_method(name: &str) -> Result<&'static Method> {
-    if let Some(method) = METHODS.iter().find(|m| m.name == name) {
-        return Ok(method);
-    }
-    if name == "heap" {
-        return Err(Error::new(
-            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-            format!("access method \"{name}\" is not of type INDEX"),
-        ));
-    }
-    Err(Error::new(SqlState::UNDEFINED_OBJECT, format!("access method \"{name}\" does not exist")))
-}
+/// The index access methods of the libraries of the extensions that rupg ships, by the symbol of the handler: `ivfflathandler` and `hnswhandler` of pgvector. A statement of the script of the extension makes the row of `pg_am`, so the OID is the one of that row.
+static LIBRARY_METHODS: [(&str, Method); 2] = [
+    (
+        "ivfflathandler",
+        Method {
+            oid: 0,
+            name: "ivfflat",
+            strategies: 0,
+            support: 5,
+            options: 0,
+            can_order: false,
+            can_order_by_op: true,
+            can_hash: false,
+            storage: false,
+            can_unique: false,
+            can_multi_col: false,
+            can_include: false,
+        },
+    ),
+    (
+        "hnswhandler",
+        Method {
+            oid: 0,
+            name: "hnsw",
+            strategies: 0,
+            support: 3,
+            options: 0,
+            can_order: false,
+            can_order_by_op: true,
+            can_hash: false,
+            storage: false,
+            can_unique: false,
+            can_multi_col: false,
+            can_include: false,
+        },
+    ),
+];
 
 /// The name of an access method for `get_am_name`.
 fn method_name(oid: u32) -> &'static str {
@@ -885,13 +909,51 @@ impl Definer<'_, '_> {
         Ok(family)
     }
 
+    /// `get_index_am_oid` and `GetIndexAmRoutineByAmId`: the index access method of the name, built in or made by `CREATE ACCESS METHOD` with the handler of a library that rupg has. The table access method `heap` is not an index access method.
+    pub(super) fn index_method(&self, name: &str) -> Result<Method> {
+        if let Some(method) = METHODS.iter().find(|m| m.name == name) {
+            return Ok(*method);
+        }
+        let not_index = || {
+            Error::new(
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("access method \"{name}\" is not of type INDEX"),
+            )
+        };
+        if name == "heap" {
+            return Err(not_index());
+        }
+        let Some(am) = self.catalog.access_method_by_name(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("access method \"{name}\" does not exist"),
+            ));
+        };
+        if am.kind != b'i' {
+            return Err(not_index());
+        }
+        let symbol = self.catalog.function(am.handler).map(|f| f.src.as_str());
+        let Some((_, method)) = LIBRARY_METHODS.iter().find(|(s, _)| Some(*s) == symbol) else {
+            return Err(not_yet("an index access method of this handler", None));
+        };
+        Ok(Method { oid: am.oid, ..*method })
+    }
+
+    /// `get_am_name`: the name of an access method, built in or made by a statement.
+    fn method_name(&self, oid: u32) -> String {
+        match self.catalog.access_method(oid) {
+            Some(am) => am.name.clone(),
+            None => method_name(oid).to_string(),
+        }
+    }
+
     /// `DefineOpFamily`.
     pub(super) fn create_opfamily(&mut self, stmt: &CreateOpFamilyStmt) -> Result<()> {
         let list = names(&stmt.opfamilyname);
         let (namespace, name) = self.ts_creation(&list)?;
         self.check_create_in(namespace, None)?;
         let amname = stmt.amname.as_deref().unwrap_or_default();
-        let method = index_method(amname)?;
+        let method = &self.index_method(amname)?;
         if !self.is_superuser() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
@@ -908,7 +970,7 @@ impl Definer<'_, '_> {
         let (namespace, name) = self.ts_creation(&list)?;
         self.check_create_in(namespace, None)?;
         let amname = stmt.amname.as_deref().unwrap_or_default();
-        let method = index_method(amname)?;
+        let method = &self.index_method(amname)?;
         if !self.is_superuser() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
@@ -1038,7 +1100,7 @@ impl Definer<'_, '_> {
     /// `AlterOpFamily`: `ALTER OPERATOR FAMILY ... ADD` and `... DROP`.
     pub(super) fn alter_opfamily(&mut self, stmt: &AlterOpFamilyStmt) -> Result<()> {
         let amname = stmt.amname.as_deref().unwrap_or_default();
-        let method = index_method(amname)?;
+        let method = &self.index_method(amname)?;
         let family = self.opfamily_oid(method, &stmt.opfamilyname)?;
         if !self.is_superuser() {
             return Err(Error::new(
@@ -1194,7 +1256,7 @@ impl Definer<'_, '_> {
             let Some((amname, name)) = list.split_first() else {
                 return Err(Error::internal("an access method and a name"));
             };
-            let method = index_method(amname)?;
+            let method = &self.index_method(amname)?;
             let Some(found) = self.opcf_lookup(family, method, name, stmt.missing_ok)? else {
                 let schema = match name {
                     [schema, _] | [_, schema, _] => Some(*schema),
@@ -1231,13 +1293,13 @@ impl Definer<'_, '_> {
         &self,
         family: bool,
         object: Option<&Node>,
-    ) -> Result<(u32, String, u32, &'static Method, u32)> {
+    ) -> Result<(u32, String, u32, Method, u32)> {
         let list = name_list(object);
         let Some((amname, name)) = list.split_first() else {
             return Err(Error::internal("an access method and a name"));
         };
-        let method = index_method(amname)?;
-        let oid = self.opcf_lookup(family, method, name, false)?.unwrap_or_default();
+        let method = self.index_method(amname)?;
+        let oid = self.opcf_lookup(family, &method, name, false)?.unwrap_or_default();
         let (namespace, name, _, owner) = self.opcf_row(family, oid).unwrap_or_default();
         Ok((oid, name, namespace, method, owner))
     }
@@ -1281,7 +1343,7 @@ impl Definer<'_, '_> {
             }
             self.check_create_in(namespace, None)?;
         }
-        self.check_opcf_free(family, newname, method, namespace)?;
+        self.check_opcf_free(family, newname, &method, namespace)?;
         if oid < FIRST_NORMAL_OID {
             return Err(not_yet("ALTER of a built-in operator class or operator family", None));
         }
@@ -1352,7 +1414,7 @@ impl Definer<'_, '_> {
         if !self.is_superuser() && !self.owns(owner) {
             return Err(not_owner(opcf_word(family), &name));
         }
-        self.check_opcf_free(family, &name, method, namespace)?;
+        self.check_opcf_free(family, &name, &method, namespace)?;
         if oid < FIRST_NORMAL_OID {
             return Err(not_yet("ALTER of a built-in operator class or operator family", None));
         }
@@ -1420,6 +1482,6 @@ impl Definer<'_, '_> {
                 quote_identifier(&name)
             )
         };
-        format!("{shown} for access method {}", method_name(method))
+        format!("{shown} for access method {}", self.method_name(method))
     }
 }

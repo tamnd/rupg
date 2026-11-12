@@ -30,6 +30,9 @@ const fn mask(bits: &[u8]) -> i32 {
     mask
 }
 
+/// The OID of the language `c`.
+const C_LANGUAGE: u32 = 13;
+
 /// The range masks that `intervaltypmodin` takes.
 const INTERVAL_RANGES: [i32; 14] = [
     mask(&[2]),
@@ -328,7 +331,8 @@ impl Analyzer<'_> {
         if name.typmods.is_empty() {
             return Ok(-1);
         }
-        let modin = builtin::proc_by_oid(row.modin).map(|p| p.src);
+        let proc = builtin::proc_by_oid(row.modin);
+        let modin = proc.map(|p| p.src);
         let Some(modin) = modin else {
             return Err(Error::new(
                 SqlState::SYNTAX_ERROR,
@@ -356,6 +360,10 @@ impl Analyzer<'_> {
                 ));
             };
             texts.push(text);
+        }
+        // The `typmodin` function in C of the library of an extension, such as `vector_typmod_in` of pgvector, reads the modifiers as its `cstring[]`.
+        if proc.is_some_and(|p| p.lang == C_LANGUAGE && p.oid >= FIRST_NORMAL_OID) {
+            return self.env.typmod_in(row.modin, &texts);
         }
         let mut values = Vec::with_capacity(texts.len());
         for text in &texts {
