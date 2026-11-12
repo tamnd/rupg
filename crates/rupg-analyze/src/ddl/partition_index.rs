@@ -202,7 +202,11 @@ impl Definer<'_, '_> {
             let found_constraint = match constraint {
                 Some(_) => {
                     let found = self.catalog.constraints_of(child).find(|c| {
-                        c.index == rel.oid && matches!(c.kind, ConKind::Primary | ConKind::Unique)
+                        c.index == rel.oid
+                            && matches!(
+                                c.kind,
+                                ConKind::Primary | ConKind::Unique | ConKind::Exclusion
+                            )
                     });
                     match found {
                         Some(con) if !attach || Some(con.kind) == wanted_kind => Some(con.oid),
@@ -364,7 +368,10 @@ impl Definer<'_, '_> {
             let constraint = self
                 .catalog
                 .constraints_of(parent)
-                .find(|c| c.index == index && matches!(c.kind, ConKind::Primary | ConKind::Unique))
+                .find(|c| {
+                    c.index == index
+                        && matches!(c.kind, ConKind::Primary | ConKind::Unique | ConKind::Exclusion)
+                })
                 .map(|c| c.oid);
             self.define_partition_index(child, index, constraint, false)?;
         }

@@ -100,6 +100,35 @@ pub trait Members: std::fmt::Debug {
     fn enable(&self) -> Enable {
         Enable::default()
     }
+
+    /// The operators and the operator families of the catalog that are not built in, such as those of an extension.
+    fn classes(&self) -> Classes {
+        Classes::default()
+    }
+}
+
+/// The operators and the rows of `pg_amop` of the catalog that are not built in, which the planner reads with the built-in ones, as it reads the caches of `pg_operator` and `pg_amop`.
+#[derive(Clone, Debug, Default)]
+pub struct Classes {
+    /// The rows of `pg_amop` of the operator families of the catalog.
+    pub amops: Vec<rupg_pgcatalog::builtin::AmopRow>,
+    /// The operators of the catalog, by OID.
+    pub operators: BTreeMap<u32, ClassOperator>,
+    /// The `gist` families of the catalog whose key a scan gives, because the family has a `fetch` function or no `compress` function, as `gistcanreturn` finds.
+    pub gist_returns: BTreeSet<u32>,
+    /// The `gist` families of the catalog with a `sortsupport` function, whose index the sorted build of `gistbuild` makes, so that a scan of a small index gives the rows in the order of the key.
+    pub gist_sorted: BTreeSet<u32>,
+}
+
+/// An operator of the catalog that is not built in, a row of `pg_operator`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClassOperator {
+    /// `oprcode`: the function of the operator.
+    pub code: u32,
+    /// `oprcom`: the commutator, or 0 when the operator has none.
+    pub commutator: u32,
+    /// `oprrest`: the estimator of the selectivity of a condition, or 0.
+    pub restrict: u32,
 }
 
 /// The size of the heap of a table, as `table_block_relation_estimate_size` reads it.
@@ -216,6 +245,48 @@ pub type Compare = fn(u32, &Value, u32, &Value) -> Option<Ordering>;
 /// The comparison when the planner has none: no two values compare.
 fn no_compare(_: u32, _: &Value, _: u32, _: &Value) -> Option<Ordering> {
     None
+}
+
+thread_local! {
+    /// The operators and the operator families of the catalog for the plan that the planner makes now.
+    static CLASSES: RefCell<Classes> = RefCell::default();
+}
+
+/// The first row of `pg_amop` of the operator `op` that `test` accepts, of a built-in family or of a family of the catalog.
+pub(crate) fn find_amop(
+    op: u32,
+    test: impl Fn(&rupg_pgcatalog::builtin::AmopRow) -> bool,
+) -> Option<rupg_pgcatalog::builtin::AmopRow> {
+    if let Some(row) = rupg_pgcatalog::builtin::amops_of_operator(op).find(|a| test(a)) {
+        return Some(*row);
+    }
+    CLASSES.with(|c| c.borrow().amops.iter().find(|a| a.operator == op && test(a)).copied())
+}
+
+/// `get_commutator`: `oprcom` of the operator, 0 when it has none, or `None` for an operator that the planner does not know.
+pub(crate) fn commutator(op: u32) -> Option<u32> {
+    match rupg_pgcatalog::builtin::operator_by_oid(op) {
+        Some(row) => Some(row.commutator),
+        None => CLASSES.with(|c| c.borrow().operators.get(&op).map(|o| o.commutator)),
+    }
+}
+
+/// `get_opcode`: `oprcode` of the operator, or `None` for an operator that the planner does not know.
+pub(crate) fn operator_code(op: u32) -> Option<u32> {
+    match rupg_pgcatalog::builtin::operator_by_oid(op) {
+        Some(row) => Some(row.code),
+        None => CLASSES.with(|c| c.borrow().operators.get(&op).map(|o| o.code)),
+    }
+}
+
+/// True for a `gist` family of the catalog whose key a scan gives, [`Classes::gist_returns`].
+pub(crate) fn gist_returns(family: u32) -> bool {
+    CLASSES.with(|c| c.borrow().gist_returns.contains(&family))
+}
+
+/// `oprrest` of an operator of the catalog that is not built in, or `None` for another operator.
+pub(crate) fn catalog_restrict(op: u32) -> Option<u32> {
+    CLASSES.with(|c| c.borrow().operators.get(&op).map(|o| o.restrict))
 }
 
 thread_local! {
@@ -393,6 +464,7 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved_statistics = STATISTICS.with(|s| s.replace(statistics));
     let saved_compare = COMPARE.with(|c| c.replace(members.compare()));
     let saved_match = PATTERN_MATCH.with(|c| c.replace(members.pattern_match()));
+    let saved_classes = CLASSES.with(|c| c.replace(members.classes()));
     let saved_widths = WIDTHS.with(|w| w.take());
     let saved_places = MEMBER_PLACES.with(|m| m.take());
     let saved_subplans = parallel::swap_subplans(BTreeSet::new());
@@ -400,6 +472,7 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     parallel::swap_subplans(saved_subplans);
     MEMBER_PLACES.with(|m| m.replace(saved_places));
     WIDTHS.with(|w| w.replace(saved_widths));
+    CLASSES.with(|c| c.replace(saved_classes));
     PATTERN_MATCH.with(|c| c.set(saved_match));
     COMPARE.with(|c| c.set(saved_compare));
     ENABLE.with(|e| e.set(saved));
@@ -462,8 +535,12 @@ fn index_keys(
         return None;
     }
     let index = members.indexes(relation.oid).into_iter().find(|i| i.oid == index)?;
-    // `amcanorder` of `gist` and `spgist` is false: the scan gives the rows in no order. The OIDs are `BTREE_AM_OID` and `HASH_AM_OID`.
-    if !matches!(index.method, 403 | 405) {
+    // `amcanorder` of `gist` and `spgist` is false: the scan gives the rows in no order. The OIDs are `BTREE_AM_OID` and `HASH_AM_OID`. A `gist` index of families of the catalog with a `sortsupport` function, as the ones of `btree_gist`, comes from the sorted build, whose leaf pages hold the keys in order, so its scan gives the rows in the order of the key. The OID of `gist` is `GIST_AM_OID`.
+    let sorted = || {
+        let sorted = members.classes().gist_sorted;
+        !index.families.is_empty() && index.families.iter().all(|f| sorted.contains(f))
+    };
+    if !matches!(index.method, 403 | 405) && !(index.method == 783 && sorted()) {
         return Some(Vec::new());
     }
     let mut out = Vec::with_capacity(index.keys.len());

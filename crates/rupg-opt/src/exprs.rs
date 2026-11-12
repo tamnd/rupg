@@ -216,18 +216,19 @@ pub(crate) fn binary_in(expr: &Expr) -> Option<(u32, &Expr, &Expr)> {
 /// True when [`commute`] gives the condition with its arguments in the other order.
 pub(crate) fn can_commute(expr: &Expr) -> bool {
     let Some((op, _, _)) = binary(expr) else { return false };
-    let row = builtin::operator_by_oid(op).and_then(|o| builtin::operator_by_oid(o.commutator));
-    row.is_some() && matches!(expr.kind, ExprKind::Func(_))
+    let code = crate::commutator(op).and_then(crate::operator_code);
+    code.is_some() && matches!(expr.kind, ExprKind::Func(_))
 }
 
 /// The call of the commutator of an operator, with the arguments in the other order, as `commute_op_clause`.
 pub(crate) fn commute(expr: &Expr) -> Option<Expr> {
     let (op, left, right) = binary_in(expr)?;
-    let row = builtin::operator_by_oid(builtin::operator_by_oid(op)?.commutator)?;
+    let commutator = crate::commutator(op)?;
+    let code = crate::operator_code(commutator)?;
     let ExprKind::Func(f) = &expr.kind else { return None };
     let mut func = f.clone();
-    func.oid = row.code;
-    func.form = FuncForm::Operator(row.oid);
+    func.oid = code;
+    func.form = FuncForm::Operator(commutator);
     func.args = vec![right.clone(), left.clone()];
     let mut out = Expr::new(ExprKind::Func(func), expr.ty);
     out.location = expr.location;

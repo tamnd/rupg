@@ -286,7 +286,11 @@ impl rupg_opt::Members for Members<'_, '_> {
             .filter_map(|rel| {
                 let info = rel.index.as_ref().filter(|i| i.table == table && i.valid)?;
                 let count = usize::try_from(info.key_count).unwrap_or(0);
-                let class = |oid: &u32| builtin::opclasses().iter().find(|c| c.oid == *oid);
+                // `opfamily` and `opcdefault` of the operator class of a key column, built in or of the catalog.
+                let class = |oid: &u32| match builtin::opclasses().iter().find(|c| c.oid == *oid) {
+                    Some(c) => Some((c.family, c.default)),
+                    None => catalog.opclass(*oid).map(|c| (c.family, c.default)),
+                };
                 // `RelationGetIndexExpressions` and `RelationGetIndexPredicate` fold the constant parts, as `eval_const_expressions` does, so that a condition can match them.
                 let fold = |e: Expr| rupg_exec::fold_qual(&Query::default(), e, self.reader);
                 let exprs = info.exprs.as_deref().map_or_else(Vec::new, |text| {
@@ -321,15 +325,11 @@ impl rupg_opt::Members for Members<'_, '_> {
                     partial: info.predicate.is_some(),
                     method: info.method,
                     columns: info.keys.clone(),
-                    families: info
-                        .classes
-                        .iter()
-                        .map(|c| class(c).map_or(0, |c| c.family))
-                        .collect(),
+                    families: info.classes.iter().map(|c| class(c).map_or(0, |c| c.0)).collect(),
                     default_class: info
                         .classes
                         .iter()
-                        .map(|c| class(c).is_some_and(|c| c.default))
+                        .map(|c| class(c).is_some_and(|c| c.1))
                         .collect(),
                     options: info.options.clone(),
                     collations: info.collations.clone(),
@@ -370,6 +370,44 @@ impl rupg_opt::Members for Members<'_, '_> {
             let (name, value) = text.split_once('=')?;
             (name == "parallel_workers").then(|| value.parse().ok()).flatten()
         }))
+    }
+
+    fn classes(&self) -> rupg_opt::Classes {
+        let Some(catalog) = self.reader.catalog() else { return rupg_opt::Classes::default() };
+        let amops = catalog.amops().map(|a| builtin::AmopRow {
+            oid: a.oid,
+            family: a.family,
+            left: a.left,
+            right: a.right,
+            strategy: a.strategy,
+            purpose: a.purpose,
+            operator: a.operator,
+            method: a.method,
+            sort_family: a.sortfamily,
+        });
+        let operators = catalog.operators().map(|o| {
+            let row = rupg_opt::ClassOperator {
+                code: o.code,
+                commutator: o.commutator,
+                restrict: o.restrict,
+            };
+            (o.oid, row)
+        });
+        // `GIST_COMPRESS_PROC` and `GIST_FETCH_PROC`.
+        let numbers =
+            |family: u32| catalog.amprocs().filter(move |p| p.family == family).map(|p| p.number);
+        let gist = catalog.opfamilies().filter(|f| f.method == GIST_AM).map(|f| f.oid);
+        let gist_returns =
+            gist.filter(|&f| numbers(f).any(|n| n == 9) || numbers(f).all(|n| n != 3)).collect();
+        // `GIST_SORTSUPPORT_PROC`.
+        let gist = catalog.opfamilies().filter(|f| f.method == GIST_AM).map(|f| f.oid);
+        let gist_sorted = gist.filter(|&f| numbers(f).any(|n| n == 11)).collect();
+        rupg_opt::Classes {
+            amops: amops.collect(),
+            operators: operators.collect(),
+            gist_returns,
+            gist_sorted,
+        }
     }
 
     fn enable(&self) -> Enable {
@@ -439,6 +477,9 @@ pub(super) fn pages_per_range(index: &rupg_catalog::Relation) -> u32 {
 
 /// `BRIN_AM_OID`.
 pub(super) const BRIN_AM: u32 = 3580;
+
+/// `GIST_AM_OID`.
+const GIST_AM: u32 = 783;
 
 /// The indexes of the system catalog `table`, with the sizes of a new database. The root of an index with more pages than the metapage and one leaf is not a leaf.
 fn catalog_indexes(table: u32) -> Vec<Index> {

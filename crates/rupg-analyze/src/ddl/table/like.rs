@@ -295,7 +295,11 @@ impl Definer<'_, '_> {
                     .catalog
                     .constraints_of(source)
                     .find(|c| {
-                        c.index == index && matches!(c.kind, ConKind::Primary | ConKind::Unique)
+                        c.index == index
+                            && matches!(
+                                c.kind,
+                                ConKind::Primary | ConKind::Unique | ConKind::Exclusion
+                            )
                     })
                     .map(|c| c.oid);
                 // `generateClonedIndexStmt` marks the statement as transformed, so `DefineIndex` treats it as `ALTER TABLE ... ADD`.

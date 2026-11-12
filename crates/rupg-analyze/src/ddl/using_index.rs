@@ -7,7 +7,7 @@ use rupg_sql::nodes::{ConstrType, Constraint};
 use super::alter::Target;
 use super::{Definer, Found};
 use crate::coerce::AtOpt;
-use crate::typcache::{BTREE, default_opclass};
+use crate::typcache::{BTREE, default_opclass_in};
 use crate::typename::place;
 
 impl Definer<'_, '_> {
@@ -97,7 +97,8 @@ impl Definer<'_, '_> {
             let Some(column) = table.and_then(|t| t.column(attnum)) else {
                 return Err(Error::internal(format!("cache lookup failed for attribute {attnum}")));
             };
-            let class = default_opclass(column.ty, info.method).map_or(0, |c| c.oid);
+            let class =
+                default_opclass_in(Some(&*self.catalog), column.ty, info.method).unwrap_or(0);
             let options = index.columns.get(i).is_some_and(|c| !c.options.is_empty());
             if info.classes.get(i) != Some(&class)
                 || info.collations.get(i) != Some(&column.collation)

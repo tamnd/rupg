@@ -23,7 +23,7 @@ use super::{Definer, Transform, not_yet, quote_identifier, references, rewrite};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::ExprKind;
-use crate::typcache::{default_opclass, is_binary_coercible};
+use crate::typcache::{default_opclass_in, is_binary_coercible};
 use crate::typename::place;
 use crate::types;
 
@@ -543,9 +543,9 @@ impl Definer<'_, '_> {
 
     /// The operator class of an index column whose type changes from `old` to `new`: the default operator class of `new` for the default operator class of `old`, else the same operator class, which must accept `new`.
     fn class_after_alter_type(&self, class: u32, old: u32, new: u32, method: u32) -> Result<u32> {
-        if default_opclass(old, method).is_some_and(|c| c.oid == class) {
-            return default_opclass(new, method)
-                .map(|c| c.oid)
+        let catalog = Some(&*self.catalog);
+        if default_opclass_in(catalog, old, method) == Some(class) {
+            return default_opclass_in(catalog, new, method)
                 .ok_or_else(|| no_default_opclass(new, method));
         }
         let row = match self.catalog.opclass(class) {

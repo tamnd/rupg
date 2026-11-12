@@ -142,7 +142,7 @@ pub struct OpclassRow {
 }
 
 /// A row of `pg_amop`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct AmopRow {
     pub oid: u32,
     pub family: u32,

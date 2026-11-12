@@ -1,0 +1,101 @@
+> create extension pg_trgm
+CREATE EXTENSION
+> create extension btree_gin
+CREATE EXTENSION
+> create extension btree_gist
+CREATE EXTENSION
+> create table trg (t text)
+CREATE TABLE
+> insert into trg values ('abcdef'), ('qwerty'), ('abcxyz'), ('zzz')
+INSERT 0 4
+> create index trg_gist on trg using gist (t gist_trgm_ops)
+CREATE INDEX
+> create index trg_gin on trg using gin (t gin_trgm_ops)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> explain (costs off) select t from trg where t % 'abcdeg'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using trg_gist on trg
+row   Index Cond: (t % 'abcdeg'::text)
+EXPLAIN
+> explain (costs off) select t from trg where t like '%bcd%'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using trg_gist on trg
+row   Index Cond: (t ~~ '%bcd%'::text)
+EXPLAIN
+> set enable_bitmapscan = off
+SET
+> explain (costs off) select t from trg order by t <-> 'abc' limit 2
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Index Scan using trg_gist on trg
+row         Order By: (t <-> 'abc'::text)
+EXPLAIN
+> reset enable_bitmapscan
+RESET
+> drop index trg_gist
+DROP INDEX
+> explain (costs off) select t from trg where t ilike '%XYZ%'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on trg
+row   Recheck Cond: (t ~~* '%XYZ%'::text)
+row   ->  Bitmap Index Scan on trg_gin
+row         Index Cond: (t ~~* '%XYZ%'::text)
+EXPLAIN
+> select t from trg where t ilike '%XYZ%'
+fields t@trg.1:25:-1:-1
+row abcxyz
+SELECT 1
+> create table bgin (a int4, b text)
+CREATE TABLE
+> insert into bgin values (1, 'a'), (5, 'b'), (9, 'c')
+INSERT 0 3
+> create index bgin_a on bgin using gin (a, b)
+CREATE INDEX
+> explain (costs off) select * from bgin where a < 6 and b = 'b'
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bgin
+row   Recheck Cond: ((a < 6) AND (b = 'b'::text))
+row   ->  Bitmap Index Scan on bgin_a
+row         Index Cond: ((a < 6) AND (b = 'b'::text))
+EXPLAIN
+> select * from bgin where a < 6 and b = 'b'
+fields a@bgin.1:23:4:-1,b@bgin.2:25:-1:-1
+row 5,b
+SELECT 1
+> create table mac (a macaddr)
+CREATE TABLE
+> insert into mac values ('08:00:2b:01:02:05'), ('01:43:b5:79:eb:0f'), ('01:02:37:05:4f:36'), ('01:43:b5:79:eb:0f'), ('01:02:37:05:4f:36')
+INSERT 0 5
+> create index mac_a on mac using gist (a)
+CREATE INDEX
+> explain (costs off) select * from mac where a < '02:03:04:05:06:07'::macaddr
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using mac_a on mac
+row   Index Cond: (a < '02:03:04:05:06:07'::macaddr)
+EXPLAIN
+> select * from mac where a < '02:03:04:05:06:07'::macaddr
+fields a@mac.1:829:6:-1
+row 01:02:37:05:4f:36
+row 01:02:37:05:4f:36
+row 01:43:b5:79:eb:0f
+row 01:43:b5:79:eb:0f
+SELECT 4
+> create table parttmp (id int, valid_at daterange, exclude using gist (id with =, valid_at with &&)) partition by range (id)
+CREATE TABLE
+> create table parttmp_1_to_10 partition of parttmp for values from (1) to (10)
+CREATE TABLE
+> select conname, conrelid::regclass, contype, conparentid <> 0 from pg_constraint where conrelid in ('parttmp'::regclass, 'parttmp_1_to_10'::regclass) order by 1
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,contype@pg_constraint.4:18:1:-1,?column?:16:1:-1
+row parttmp_1_to_10_id_valid_at_excl,parttmp_1_to_10,x,t
+row parttmp_id_valid_at_excl,parttmp,x,f
+SELECT 2
+> insert into parttmp values (2, '[2000-01-01, 2000-02-01)')
+INSERT 0 1
+> insert into parttmp values (2, '[2000-01-15, 2000-02-01)')
+ERROR 23P01 conflicting key value violates exclusion constraint "parttmp_1_to_10_id_valid_at_excl"
+> insert into parttmp values (3, '[2000-01-15, 2000-02-01)')
+INSERT 0 1
+> reset enable_seqscan
+RESET
