@@ -240,6 +240,38 @@ pub(crate) fn probe(
     Some(Probe { outer: outer.clone(), other, lifted: Rc::clone(&lifted) })
 }
 
+/// For the vector scan, a correlated subquery of one value with an aggregate and no `GROUP BY`, as [`scalar`] gives it.
+pub(crate) struct Scalar {
+    /// The columns of the keys in the query outside the subquery.
+    pub(crate) outer: Vec<Expr>,
+    lifted: Rc<Lifted>,
+}
+
+impl Scalar {
+    /// The value of the subquery for a row whose keys are `keys`, as [`rows`] gives it: the value of the group of the keys, or the value of the subquery with no input row when a key is null or the keys have no group.
+    pub(crate) fn value(&self, keys: &[Option<i64>]) -> Value {
+        let key: Option<Vec<Key>> = keys.iter().map(|k| k.map(Key::Int)).collect();
+        let rows = key.and_then(|key| self.lifted.rows.get(&key)).unwrap_or(&self.lifted.empty);
+        rows.first().and_then(|row| row.first()).cloned().unwrap_or(Value::Null)
+    }
+}
+
+/// For the vector scan, a correlated subquery of one value with an aggregate and no `GROUP BY`, such as the `avg` of TPC-H Q17, which runs once with a `GROUP BY` of its integer keys. Each group and the subquery with no input row give one row. `None` for another subquery, or when the run fails, and then the subquery runs for each row.
+pub(crate) fn scalar(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<Scalar> {
+    let lifted = state(query, &SubLinkKind::Expr, params, session, cache)?;
+    let one = lifted.empty.len() == 1
+        && lifted.outer.iter().all(|e| matches!(e.ty, oid::INT2 | oid::INT4 | oid::INT8))
+        && lifted.set.is_none()
+        && lifted.bound.is_none()
+        && lifted.test.is_none();
+    one.then(|| Scalar { outer: lifted.outer.clone(), lifted: Rc::clone(&lifted) })
+}
+
 /// The lifted state of a subquery, which the first call makes and the cache keeps. `None` when the subquery runs for each row.
 fn state(
     query: &Query,

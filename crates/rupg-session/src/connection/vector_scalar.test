@@ -1,0 +1,44 @@
+> CREATE TABLE yp (pk int PRIMARY KEY, brand text, psize int)
+CREATE TABLE
+> INSERT INTO yp SELECT i, 'B' || (i % 4), i % 9 FROM generate_series(1, 300) i
+INSERT 0 300
+> INSERT INTO yp VALUES (301, NULL, NULL)
+INSERT 0 1
+> CREATE TABLE yl (lpk int, lsk int, lq numeric(15,2), lprice numeric(15,2))
+CREATE TABLE
+> INSERT INTO yl SELECT 1 + (i * 7) % 280, 1 + i % 5, (i % 50) + 1, ((i * 13) % 1000) + 0.25 FROM generate_series(1, 6000) i
+INSERT 0 6000
+> INSERT INTO yl VALUES (NULL, 1, 3, 10), (5, NULL, 4, 11), (6, 2, NULL, 12), (7, 3, 2, NULL)
+INSERT 0 4
+> SELECT sum(lprice) / 7.0 AS avg_yearly FROM yl, yp WHERE pk = lpk AND brand = 'B1' AND lq < (SELECT 0.2 * avg(lq) FROM yl WHERE lpk = pk)
+fields avg_yearly:1700:-1:-1
+row 8370.0000000000000000
+SELECT 1
+> SELECT brand, count(*) FROM yl, yp WHERE pk = lpk AND lq >= (SELECT max(lq) FROM yl l2 WHERE l2.lpk = yp.pk) GROUP BY brand ORDER BY brand NULLS FIRST
+fields brand@yp.2:25:-1:-1,count:20:8:-1
+row B0,300
+row B1,301
+row B2,300
+row B3,301
+SELECT 4
+> SELECT brand, count(*) FROM yl, yp WHERE pk = lpk AND lq > (SELECT avg(lq) FROM yl l2 WHERE l2.lpk = yp.pk AND l2.lsk = yl.lsk) GROUP BY brand ORDER BY brand NULLS FIRST
+fields brand@yp.2:25:-1:-1,count:20:8:-1
+row B0,600
+row B1,600
+row B2,600
+row B3,600
+SELECT 4
+> SELECT count(*) FROM yp WHERE psize < (SELECT count(*) FROM yl WHERE lpk = pk)
+fields count:20:8:-1
+row 40
+SELECT 1
+> SELECT lsk, count(*) FROM yl l1 WHERE lq > (SELECT avg(lq) FROM yl l2 WHERE l2.lpk = l1.lpk AND l2.lsk = l1.lsk) GROUP BY lsk ORDER BY lsk NULLS FIRST
+fields lsk@yl.2:23:4:-1,count:20:8:-1
+row 1,480
+row 2,480
+row 3,480
+row 4,480
+row 5,480
+SELECT 5
+> DROP TABLE yp, yl
+DROP TABLE
