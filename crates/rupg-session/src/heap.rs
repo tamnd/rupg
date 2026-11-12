@@ -1944,6 +1944,20 @@ impl Table {
         }
     }
 
+    /// The places of the versions, in the order of [`Table::each_version`], whose rows of the frozen columns `frozen` are `rows`, which go up. `None` when a row has no frozen version.
+    fn places_of_rows(&self, frozen: &Frozen, rows: &[usize]) -> Option<Vec<usize>> {
+        let mut out = Vec::with_capacity(rows.len());
+        let mut order = Places::new(frozen);
+        let mut at = 0;
+        self.each_version(|version| {
+            if version.values.is_empty() && rows.binary_search(&order.row(version.tid).0).is_ok() {
+                out.push(at);
+            }
+            at += 1;
+        });
+        (out.len() == rows.len()).then_some(out)
+    }
+
     /// The place of the version of each ID of `tids`, which go up, cold or not, or `None` for an ID with no version. A cold table decodes only the IDs of its headers, a vector at a time, and only the vectors up to the last ID.
     fn places_of(&self, tids: &[u64]) -> Vec<Option<usize>> {
         let Some(cold) = &self.cold else {
@@ -2830,6 +2844,15 @@ impl Heap {
         {
             return None;
         }
+        // A moved version has its row of the columns after the rows of the versions after it, so the rows of the columns are not the places of the versions.
+        let moved;
+        let places = match table.frozen.as_ref().filter(|frozen| !frozen.moved.is_empty()) {
+            Some(frozen) => {
+                moved = table.places_of_rows(frozen, places)?;
+                &moved[..]
+            }
+            None => places,
+        };
         let columns = used_columns(used);
         let mut values = table.rows_at(places, columns.as_deref())?.into_iter();
         let mut out = Vec::with_capacity(places.len());
@@ -5578,6 +5601,31 @@ mod tests {
             .collect();
         let picked: Vec<Vec<Value>> = places.iter().map(|&at| want[at].clone()).collect();
         assert_eq!(table.rows_at(&places, None).unwrap(), picked);
+        // A scan of the columns gives rows of the columns, and the rows of the moved versions are after the frozen rows, so each row gives the place of its version.
+        let frozen = table.frozen.as_ref().unwrap();
+        let rows: Vec<usize> = (0..frozen.rows)
+            .step_by(31)
+            .chain(frozen.moved.iter().map(|&(_, row)| row))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut keys = Vec::new();
+        frozen.columns[0].values_at(&rows, &mut keys).unwrap();
+        let at = table.places_of_rows(frozen, &rows).unwrap();
+        assert!(at.is_sorted());
+        assert_ne!(at, rows);
+        let ints = |values: Vec<Value>| {
+            let mut ints: Vec<i64> = values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Int8(value) => value,
+                    other => panic!("{other:?}"),
+                })
+                .collect();
+            ints.sort_unstable();
+            ints
+        };
+        assert_eq!(ints(at.iter().map(|&at| want[at][0].clone()).collect()), ints(keys));
         table.seal();
         table.chill();
         assert!(table.cold.is_some());
