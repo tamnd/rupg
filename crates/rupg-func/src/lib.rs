@@ -680,6 +680,18 @@ pub trait Session {
         let _ = (relation, columns);
         Ok(None)
     }
+    /// The columns of [`Session::table_columns`] for a table of any number of rows. A small table makes its columns from the values of its rows and keeps its rows as they are.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_small_columns(
+        &self,
+        relation: u32,
+        columns: &[(usize, rupg_column::segment::Kind)],
+    ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
+        self.table_columns(relation, columns)
+    }
     /// The rows of [`Session::table_rows`] of only the versions `tids`, which come in the order of the IDs, as the scan gives them.
     ///
     /// # Errors

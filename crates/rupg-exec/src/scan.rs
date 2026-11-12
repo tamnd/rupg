@@ -646,7 +646,8 @@ pub(crate) fn read(
             }
             if let Some(plan) = reduce.as_ref().filter(|_| !xids[index]) {
                 let (own, keys) = (&plan.own[index], &plan.keys[index]);
-                if let Some(found) = columnar::selected(relation, own, keys, session, cache)? {
+                if let Some(found) = columnar::selected(relation, own, keys, session, cache, false)?
+                {
                     selected[index] = Some(found);
                     kept_of[index] = kept;
                     rows.push(Rc::default());

@@ -49,7 +49,8 @@ pub(crate) fn run(
     let width = query.relations.len();
     let mut selected = Vec::with_capacity(width);
     for (index, relation) in query.relations.iter().enumerate() {
-        match super::selected(relation, &plan.own[index], &plan.keys[index], session, cache)? {
+        match super::selected(relation, &plan.own[index], &plan.keys[index], session, cache, true)?
+        {
             Some(found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
                 selected.push(found);
             }
@@ -113,7 +114,7 @@ pub(crate) fn run(
         if wanted.is_empty() {
             continue;
         }
-        let Some((_, read)) = session.table_columns(relation.oid, &wanted)? else {
+        let Some((_, read)) = session.table_small_columns(relation.oid, &wanted)? else {
             return Ok(None);
         };
         let at: Vec<usize> =
