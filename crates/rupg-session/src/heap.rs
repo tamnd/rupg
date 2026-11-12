@@ -40,6 +40,7 @@ pub(crate) fn copy_batch_full(batch: &mut (usize, usize), line: usize) -> bool {
     full
 }
 
+mod ann;
 mod btree;
 mod cells;
 mod fsm;
@@ -151,6 +152,8 @@ pub(crate) struct Heap {
     tasks: Option<Arc<dyn Tasks>>,
     /// The serializable transactions and their `SIREAD` locks. A lock of it comes before a lock of the state.
     ssi: Mutex<ssi::Ssi>,
+    /// The indexes of `rupg-ann` that the scans by the indexes of `hnsw` and `ivfflat` share. A lock of it comes after a lock of the state.
+    ann: Mutex<ann::Shared>,
 }
 
 #[derive(Debug, Default)]
@@ -4141,6 +4144,8 @@ impl Heap {
             table.touch();
         }
         table.purge(&gone);
+        // A new version can have the ID of a removed version once the prune frees its slot, so the indexes lose the removed versions under the lock of the state.
+        self.purge_vector_indexes(database, relation, &gone);
         let mut pruned: Vec<Pruned> = scanned
             .iter()
             .map(|_| Pruned { kept: Vec::new(), visible: true, frozen: true })
@@ -4623,6 +4628,7 @@ impl Heap {
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
     pub(crate) fn drop_tables(&self, database: u32, keep: impl Fn(u32) -> bool) {
         self.state().tables.retain(|&(db, relation)| db != database || keep(relation));
+        self.drop_vector_indexes(database, keep);
     }
 }
 
@@ -4977,6 +4983,7 @@ impl Heap {
             published: Mutex::default(),
             tasks: None,
             ssi: Mutex::default(),
+            ann: Mutex::default(),
         })
     }
 

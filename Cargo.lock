@@ -659,6 +659,7 @@ name = "rupg-exec"
 version = "0.4.20"
 dependencies = [
  "rupg-analyze",
+ "rupg-ann",
  "rupg-catalog",
  "rupg-column",
  "rupg-common",
@@ -706,6 +707,7 @@ dependencies = [
  "md-5",
  "memchr",
  "rupg-analyze",
+ "rupg-ann",
  "rupg-catalog",
  "rupg-column",
  "rupg-common",
@@ -829,6 +831,7 @@ name = "rupg-session"
 version = "0.4.20"
 dependencies = [
  "rupg-analyze",
+ "rupg-ann",
  "rupg-catalog",
  "rupg-column",
  "rupg-common",

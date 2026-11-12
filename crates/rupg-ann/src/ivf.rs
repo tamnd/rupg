@@ -45,6 +45,13 @@ impl Ivf {
         }
     }
 
+    /// Keeps the nodes for which `keep` gives true, as `VACUUM` takes out the dead rows.
+    pub fn retain(&mut self, keep: impl Fn(u32) -> bool) {
+        for list in &mut self.lists {
+            list.retain(|&n| keep(n));
+        }
+    }
+
     /// The number of lists.
     #[must_use]
     pub fn len(&self) -> usize {

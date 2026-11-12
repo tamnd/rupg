@@ -97,6 +97,29 @@ fn check_nnz(key: &Value) -> Result<(), Error> {
     Ok(())
 }
 
+/// The layout of the index of `rupg-ann` for the index `index` of `hnsw` or `ivfflat`, from its options `m`, `ef_construction` and `lists`, or `None` for another index.
+pub(crate) fn vector_kind(catalog: &Catalog, index: &Relation) -> Option<rupg_ann::index::Kind> {
+    let ann = explain::ann_index(catalog, index)?;
+    let option = |name: &str, default: usize| {
+        index
+            .options
+            .iter()
+            .find_map(|text| {
+                let (found, value) = text.split_once('=')?;
+                (found == name).then(|| value.trim().parse().ok()).flatten()
+            })
+            .unwrap_or(default)
+    };
+    let count = |n: i32| usize::try_from(n).unwrap_or(1).max(1);
+    Some(match ann.method {
+        AnnMethod::Hnsw { m } => rupg_ann::index::Kind::Graph {
+            m: count(m),
+            ef_construction: option("ef_construction", 64),
+        },
+        AnnMethod::Ivfflat { lists } => rupg_ann::index::Kind::Ivf { lists: count(lists) },
+    })
+}
+
 impl Connection {
     /// The keys of the rows `rows` of the table `table` for the index `index`, each the value of its first column, with no key for a row that a partial index does not hold.
     fn ann_keys(

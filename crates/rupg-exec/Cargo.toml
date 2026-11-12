@@ -14,6 +14,7 @@ readme.workspace = true
 
 [dependencies]
 rupg-analyze.workspace = true
+rupg-ann.workspace = true
 rupg-catalog.workspace = true
 rupg-column.workspace = true
 rupg-common.workspace = true

@@ -73,6 +73,7 @@ mod vacuum;
 mod writes;
 
 pub(crate) use activity::{Activity, Calls, Fetch, Pending, Scans};
+pub(crate) use ann::vector_kind;
 use copy_from::Begin;
 pub(crate) use explain::{btree_shape, planned};
 use extended::Failed;
