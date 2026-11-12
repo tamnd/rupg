@@ -158,7 +158,7 @@ fn operator_proof(pred: &Expr, clause: &Expr) -> bool {
 
 /// `get_op_index_interpretation`: the B-tree families of the operator, each with the types of its arguments and its strategy. An operator whose negator is `=` of a family has the strategy [`NE`] in that family.
 fn interpretations(op: u32) -> Vec<(u32, u32, u32, i16)> {
-    let btree = |a: &&builtin::AmopRow| a.method == BTREE_AM && a.purpose == b's';
+    let btree = |a: &builtin::AmopRow| a.method == BTREE_AM && a.purpose == b's';
     let mut out: Vec<_> = builtin::amops_of_operator(op)
         .filter(btree)
         .map(|a| (a.family, a.left, a.right, a.strategy))

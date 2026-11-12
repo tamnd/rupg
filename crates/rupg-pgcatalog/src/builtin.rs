@@ -142,7 +142,7 @@ pub struct OpclassRow {
 }
 
 /// A row of `pg_amop`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AmopRow {
     pub oid: u32,
     pub family: u32,
@@ -1407,6 +1407,20 @@ pub enum SessionType {
     Aggregate(SessionAggregate),
     Operator(SessionOperator),
     Cast(SessionCast),
+    Opclass(SessionOpclass),
+    Amop(AmopRow),
+}
+
+/// An operator class of the catalog of a session, such as one of an extension, for [`use_session_types`]: its row of `pg_opclass`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionOpclass {
+    pub oid: u32,
+    pub method: u32,
+    pub name: String,
+    pub family: u32,
+    pub intype: u32,
+    pub default: bool,
+    pub keytype: u32,
 }
 
 /// A cast of the catalog of a session that `CREATE CAST` made, for [`use_session_types`].
@@ -1433,6 +1447,8 @@ struct Session {
     casts: Vec<&'static CastRow>,
     operators: Vec<&'static OperatorRow>,
     aggregates: Vec<&'static AggregateRow>,
+    opclasses: Vec<&'static OpclassRow>,
+    amops: Vec<AmopRow>,
 }
 
 thread_local! {
@@ -1451,6 +1467,7 @@ struct Interned {
     casts: Vec<&'static CastRow>,
     operator: Option<&'static OperatorRow>,
     aggregate: Option<&'static AggregateRow>,
+    opclass: Option<&'static OpclassRow>,
 }
 
 /// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
@@ -1550,6 +1567,20 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
             };
             Interned { casts: vec![Box::leak(Box::new(row))], ..Interned::default() }
         }
+        SessionType::Opclass(new) => {
+            let row = OpclassRow {
+                oid: new.oid,
+                method: new.method,
+                name: new.name.clone().leak(),
+                family: new.family,
+                intype: new.intype,
+                default: new.default,
+                keytype: new.keytype,
+            };
+            Interned { opclass: Some(Box::leak(Box::new(row))), ..Interned::default() }
+        }
+        // A row of `pg_amop` has no text, so the thread keeps it with no interned copy.
+        SessionType::Amop(_) => Interned::default(),
     })
 }
 
@@ -1594,6 +1625,13 @@ pub fn use_session_types(types: Vec<SessionType>) {
     }
     SESSION.set(Session::default());
     for ty in types {
+        if let SessionType::Amop(row) = ty {
+            SESSION.with_borrow_mut(|s| {
+                s.amops.push(row);
+                s.given.push(ty);
+            });
+            continue;
+        }
         let interned = INTERNED
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -1619,6 +1657,7 @@ pub fn use_session_types(types: Vec<SessionType>) {
                 s.casts.extend(rows.casts);
                 s.operators.extend(rows.operator);
                 s.aggregates.extend(rows.aggregate);
+                s.opclasses.extend(rows.opclass);
             }
             s.given.push(ty);
         });
@@ -2275,16 +2314,38 @@ pub fn opclasses() -> &'static [OpclassRow] {
     &BUILTIN.opclasses
 }
 
-/// `get_opfamily_member`: the search operator of the family for the two types and the strategy.
-pub fn opfamily_member(family: u32, left: u32, right: u32, strategy: i16) -> Option<u32> {
-    let b = &*BUILTIN;
-    b.amop_member.get(&(family, left, right, strategy)).map(|&i| b.amops[i].operator)
+/// The operator classes that [`use_session_types`] gave to the thread, such as those of an extension, which [`opclasses`] does not have.
+pub fn session_opclasses() -> Vec<&'static OpclassRow> {
+    SESSION.with_borrow(|s| s.opclasses.clone())
 }
 
-/// The rows of `pg_amop` for this operator.
-pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow> {
+/// `get_opfamily_member`: the search operator of the family for the two types and the strategy, of a built-in family or of a family that [`use_session_types`] gave to the thread.
+pub fn opfamily_member(family: u32, left: u32, right: u32, strategy: i16) -> Option<u32> {
     let b = &*BUILTIN;
-    b.amop_operator.get(&operator).into_iter().flatten().map(|&i| &b.amops[i])
+    b.amop_member.get(&(family, left, right, strategy)).map(|&i| b.amops[i].operator).or_else(
+        || {
+            SESSION.with_borrow(|s| {
+                s.amops
+                    .iter()
+                    .find(|a| {
+                        a.family == family
+                            && a.left == left
+                            && a.right == right
+                            && a.strategy == strategy
+                            && a.purpose == b's'
+                    })
+                    .map(|a| a.operator)
+            })
+        },
+    )
+}
+
+/// The rows of `pg_amop` for this operator: the built-in rows, then the rows that [`use_session_types`] gave to the thread.
+pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = AmopRow> {
+    let b = &*BUILTIN;
+    let added: Vec<AmopRow> = SESSION
+        .with_borrow(|s| s.amops.iter().copied().filter(|a| a.operator == operator).collect());
+    b.amop_operator.get(&operator).into_iter().flatten().map(|&i| b.amops[i]).chain(added)
 }
 
 /// The rows of `pg_amproc` of the family for the left type, as `SearchSysCacheList2(AMPROCNUM, ...)` finds them.

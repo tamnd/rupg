@@ -120,6 +120,47 @@ data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x0
 data \xff\xff
 copy done
 COPY 1
+> create table o (v vector(2), h halfvec(2), s sparsevec(2))
+CREATE TABLE
+> insert into o values ('[1,2]', '[1,2]', '{1:1,2:2}/2'), ('[1,1]', '[1,1]', '{1:1,2:1}/2'), ('[1,2]', '[1,2]', '{1:1,2:2}/2'), (null, null, null)
+INSERT 0 4
+> select v from o order by v
+fields v@o.1:16385:-1:2
+row [1,1]
+row [1,2]
+row [1,2]
+row NULL
+SELECT 4
+> select h from o order by h desc
+fields h@o.2:16498:-1:2
+row NULL
+row [1,2]
+row [1,2]
+row [1,1]
+SELECT 4
+> select distinct s from o order by s
+fields s@o.3:16633:-1:2
+row {1:1,2:1}/2
+row {1:1,2:2}/2
+row NULL
+SELECT 3
+> select v, count(*) from o group by v order by v
+fields v@o.1:16385:-1:2,count:20:8:-1
+row [1,1],1
+row [1,2],2
+row NULL,1
+SELECT 3
+> select count(distinct h) from o
+fields count:20:8:-1
+row 2
+SELECT 1
+> create index on o (v)
+CREATE INDEX
+> select v from o where v = '[1,2]'
+fields v@o.1:16385:-1:2
+row [1,2]
+row [1,2]
+SELECT 2
 > drop extension vector cascade
-NOTICE 00000 drop cascades to 2 other objects
+NOTICE 00000 drop cascades to 5 other objects
 DROP EXTENSION
