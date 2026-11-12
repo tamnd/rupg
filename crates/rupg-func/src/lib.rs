@@ -1041,11 +1041,38 @@ pub fn kernel(func: u32) -> Option<Kernel> {
     Some(found)
 }
 
+/// The libraries of the extensions that rupg ships, which a crate above this one gives with [`set_libraries`]: for the `probin` and the `prosrc` of a function in C, `None` when no library has that file, else the kernel bound to the symbol, or `None` for a symbol with no binding.
+pub type Libraries = fn(bin: &str, symbol: &str) -> Option<Option<Kernel>>;
+
+/// The function of [`set_libraries`].
+static LIBRARIES: OnceLock<Libraries> = OnceLock::new();
+
+/// Gives the libraries of the extensions to the functions in C, once for the process. A later call does nothing.
+pub fn set_libraries(libraries: Libraries) {
+    let _ = LIBRARIES.set(libraries);
+}
+
+/// The rows of `pg_available_extensions`, or of `pg_available_extension_versions` with `versions`, for the extensions that rupg builds in, which a crate above this one gives with [`set_available_extensions`]. The location of each row is [`SYSTEM_LOCATION`](crate::absent::SYSTEM_LOCATION), which the function hides from a role that is not a superuser.
+pub type AvailableExtensions = fn(versions: bool) -> Vec<Vec<Value>>;
+
+/// The function of [`set_available_extensions`].
+pub(crate) static AVAILABLE_EXTENSIONS: OnceLock<AvailableExtensions> = OnceLock::new();
+
+/// Gives the extensions that rupg builds in to `pg_available_extensions`, once for the process. A later call does nothing.
+pub fn set_available_extensions(available: AvailableExtensions) {
+    let _ = AVAILABLE_EXTENSIONS.set(available);
+}
+
 /// [`kernel`] with no cache.
 fn find_kernel(func: u32) -> Option<Kernel> {
     let proc = builtin::proc_by_oid(func)?;
     let user = proc.oid >= rupg_catalog::FIRST_NORMAL_OID;
     if proc.lang == C_LANGUAGE && user {
+        if let Some(library) = LIBRARIES.get()
+            && let Some(found) = library(proc.bin, proc.src)
+        {
+            return found;
+        }
         return regress::by_symbol(proc.src);
     }
     if proc.lang != INTERNAL_LANGUAGE {

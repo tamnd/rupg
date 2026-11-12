@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod bench;
+mod contrib;
 mod dat;
 mod encodings;
 mod errcodes;
@@ -29,7 +30,7 @@ mod vendor;
 mod version;
 mod waitevents;
 
-const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | connrate [--debug] [--seconds N] [--clients N] [--postgres dir] | encodings [--check] | errcodes [--check] | grammar [file.y...] | guc [--check] | idle [--debug] [--sessions N] [--postgres dir] [--postgres-sessions N] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z> | waitevents [--check]>";
+const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | contrib [--check] | connrate [--debug] [--seconds N] [--clients N] [--postgres dir] | encodings [--check] | errcodes [--check] | grammar [file.y...] | guc [--check] | idle [--debug] [--sessions N] [--postgres dir] [--postgres-sessions N] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z> | waitevents [--check]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,6 +38,7 @@ fn main() -> ExitCode {
     let root = root();
     let result = match task {
         Some("bench") => bench::run(&root, &args[1..]),
+        Some("contrib") => contrib::run(&root, &args[1..]),
         Some("encodings") => encodings::run(&root, &args[1..]),
         Some("errcodes") => errcodes::run(&root, &args[1..]),
         Some("grammar") => grammar::run(&root, &args[1..]),

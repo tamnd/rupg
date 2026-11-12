@@ -767,6 +767,7 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         argnames,
         argdefaults: f.argdefaults.clone().map(|text| &*text.leak()),
         src: "",
+        bin: "",
         sqlbody: None,
         support: f.support,
     });

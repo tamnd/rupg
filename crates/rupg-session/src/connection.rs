@@ -49,6 +49,7 @@ mod event_trigger;
 mod exclusion;
 mod explain;
 mod extended;
+mod extension;
 mod fastpath;
 mod foreign;
 mod known;
@@ -392,6 +393,8 @@ pub struct Connection {
     database: String,
     /// The OID of the database of the session.
     database_oid: u32,
+    /// `creating_extension`: true while the script of an extension runs.
+    creating_extension: Cell<bool>,
     protocol: u32,
     statements: Statements<Arc<Prepared>>,
     portals: RefCell<Portals<Portal>>,
@@ -561,6 +564,7 @@ const BOOTSTRAP_SUPERUSER: u32 = 10;
 impl Connection {
     /// A session with the settings that [`session_settings`] gave. `protocol` is the version of the protocol that the client uses.
     pub fn new(start: &Start, settings: Settings, protocol: u32) -> Connection {
+        extension::install_hooks();
         let mut connection = Connection {
             settings: RefCell::new(settings),
             transaction: Transaction::default(),
@@ -573,6 +577,7 @@ impl Connection {
             known: RefCell::default(),
             database: start.database.clone(),
             database_oid: database::POSTGRES,
+            creating_extension: Cell::new(false),
             protocol,
             statements: Statements::new(),
             portals: RefCell::new(Portals::new()),
@@ -1742,6 +1747,12 @@ impl Connection {
         role: u32,
         call: bool,
     ) -> Result<Done, Error> {
+        if let Node::CreateExtensionStmt(stmt) = node {
+            return self.create_extension(stmt, notices);
+        }
+        if let Node::AlterExtensionStmt(stmt) = node {
+            return self.alter_extension(stmt, notices);
+        }
         if let Node::CreateTableAsStmt(stmt) = node
             && let Some(Node::ExecuteStmt(execute)) = &stmt.query
         {
@@ -3303,6 +3314,7 @@ fn definition_tag(node: &Node) -> CommandTag {
         Node::CreateEventTrigStmt(_) => CommandTag::CreateEventTrigger,
         Node::CreatePLangStmt(_) => CommandTag::CreateLanguage,
         Node::CreateExtensionStmt(_) => CommandTag::CreateExtension,
+        Node::AlterExtensionStmt(_) => CommandTag::AlterExtension,
         Node::CreateAmStmt(_) => CommandTag::CreateAccessMethod,
         Node::AlterEventTrigStmt(_) => CommandTag::AlterEventTrigger,
         Node::ViewStmt(_) => CommandTag::CreateView,
@@ -3551,6 +3563,10 @@ mod tests {
 
     #[test]
     fn a_name_that_went_away_during_the_wait_was_concurrently_dropped() {
+        big_stack(a_name_that_went_away_cases);
+    }
+
+    fn a_name_that_went_away_cases() {
         let sql = "CREATE FUNCTION s.f() RETURNS int AS 'select 1' LANGUAGE sql";
         let (list, _) = rupg_sql::parse(sql).unwrap();
         let (node, _) = statements(&list, sql)[0];
@@ -5013,6 +5029,12 @@ mod tests {
     #[test]
     fn heap_fillfactor() {
         big_stack(|| script(include_str!("connection/heap_fillfactor.test")));
+    }
+
+    /// `CREATE EXTENSION`, `ALTER EXTENSION ... UPDATE` and `DROP EXTENSION` of `pg_trgm` and `btree_gin`: the members by catalog, the C functions, the errors and notices, an extension in another schema that `DROP SCHEMA ... CASCADE` drops, update paths, `pg_available_extensions` and `pg_available_extension_versions`, and a trusted extension that a role that is not a superuser makes. `connection/create_extension.test` matches the output of PostgreSQL 18 for the same script in a new database, with the versions of `btree_gin` and `btree_gist` of PostgreSQL 19.
+    #[test]
+    fn create_extension() {
+        big_stack(|| script(include_str!("connection/create_extension.test")));
     }
 
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.
@@ -6532,8 +6554,11 @@ mod tests {
 
     /// A function in PL/pgSQL with an exception block that calls itself 100 times runs, as the `gen_subxids` of `subxid-overflow` does. `connection/plpgsql_depth.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
+    #[allow(clippy::disallowed_methods)] // A test thread, not a task of the engine.
     fn plpgsql_depth() {
-        big_stack(|| script(include_str!("connection/plpgsql_depth.test")));
+        // A level of the recursion takes about 85 KB of stack in a debug build, so 100 levels need more than the stack of `big_stack`.
+        let cases = || script(include_str!("connection/plpgsql_depth.test"));
+        std::thread::Builder::new().stack_size(32 << 20).spawn(cases).unwrap().join().unwrap();
     }
 
     /// An expression in `FROM` that gives a composite type: casts, `COALESCE` and `NULLIF`, the row type of a table, a nested composite type, aliases of the columns, the errors for too many aliases and a column definition list, a null value, `WITH ORDINALITY`, `ROWS FROM`, `LATERAL`, and the text of views with casts of rows. `connection/composite_from.test` is the output of PostgreSQL 19 for the same script in a new database.

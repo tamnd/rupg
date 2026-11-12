@@ -548,18 +548,19 @@ impl Definer<'_, '_> {
                 .map(|c| c.oid)
                 .ok_or_else(|| no_default_opclass(new, method));
         }
-        let row = builtin::opclasses().iter().find(|c| c.oid == class);
-        let Some(row) = row else {
+        let row = match self.catalog.opclass(class) {
+            Some(c) => Some((c.name.as_str(), c.intype)),
+            None => {
+                builtin::opclasses().iter().find(|c| c.oid == class).map(|c| (c.name, c.intype))
+            }
+        };
+        let Some((name, intype)) = row else {
             return Err(Error::internal(format!("cache lookup failed for opclass {class}")));
         };
-        if !is_binary_coercible(new, row.intype) {
+        if !is_binary_coercible(new, intype) {
             return Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
-                format!(
-                    "operator class \"{}\" does not accept data type {}",
-                    row.name,
-                    types::name(new)
-                ),
+                format!("operator class \"{name}\" does not accept data type {}", types::name(new)),
             ));
         }
         Ok(class)

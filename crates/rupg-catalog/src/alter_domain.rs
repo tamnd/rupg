@@ -21,8 +21,9 @@ impl Catalog {
         let Some(facts) = ty.domain.as_mut() else { return Err(no_object("domain", domain)) };
         facts.default = default;
         let (base, collation) = (facts.base, facts.collation);
+        // `GenerateTypeDependencies` with `rebuild`: the membership in an extension stays.
         let me = ObjRef::new(PG_TYPE, domain);
-        self.drop_depends_of(me);
+        self.depends.retain(|d| d.object != me || d.kind == DepKind::Extension);
         self.domain_depends(me, (base, namespace, collation), refs);
         Ok(())
     }

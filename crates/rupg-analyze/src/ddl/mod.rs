@@ -82,8 +82,8 @@ pub use copy::{
 };
 pub(crate) use drop::quote_identifier;
 pub use function::{
-    Body, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body, function_body_for,
-    function_script, function_sqlbody, inline_body,
+    Body, Libraries, REGRESS_SYMBOLS, Script, SqlBody, find_library, function_body,
+    function_body_for, function_script, function_sqlbody, inline_body, set_libraries,
 };
 pub use grant::{
     acl_allows_create, acl_roles, apply_database_change, apply_tablespace_change, database_change,
@@ -335,6 +335,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterEventTrigStmt(_)
             | Node::CreatePLangStmt(_)
             | Node::CreateExtensionStmt(_)
+            | Node::AlterExtensionStmt(_)
             | Node::CreateAmStmt(_)
             | Node::CreateFdwStmt(_)
             | Node::AlterFdwStmt(_)

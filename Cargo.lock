@@ -626,6 +626,12 @@ version = "0.4.20"
 [[package]]
 name = "rupg-contrib"
 version = "0.4.20"
+dependencies = [
+ "rupg-common",
+ "rupg-ext",
+ "rupg-func",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-crash"
@@ -670,6 +676,10 @@ dependencies = [
 [[package]]
 name = "rupg-ext"
 version = "0.4.20"
+dependencies = [
+ "rupg-common",
+ "rupg-func",
+]
 
 [[package]]
 name = "rupg-file"
@@ -822,8 +832,10 @@ dependencies = [
  "rupg-catalog",
  "rupg-column",
  "rupg-common",
+ "rupg-contrib",
  "rupg-encode",
  "rupg-exec",
+ "rupg-ext",
  "rupg-func",
  "rupg-kernels",
  "rupg-opt",

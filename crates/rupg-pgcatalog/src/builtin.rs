@@ -81,6 +81,8 @@ pub struct ProcRow {
     pub argdefaults: Option<&'static str>,
     /// `prosrc`: for an internal function, the name of the C function, which is the name of its kernel.
     pub src: &'static str,
+    /// `probin`: for a function in C, the file of its library, else empty.
+    pub bin: &'static str,
     /// `prosqlbody`: for a function in SQL with a body in SQL, the text of the statement that made it.
     pub sqlbody: Option<&'static str>,
     /// `prosupport`: the OID of the support function, or 0.
@@ -746,6 +748,7 @@ fn load_procs() -> Vec<ProcRow> {
                 _ => None,
             }),
             src: src[i],
+            bin: "",
             sqlbody: r.optional("prosqlbody", i, |v| match v {
                 Values::Text(v) => Some(*v),
                 _ => None,
@@ -1338,6 +1341,8 @@ pub struct SessionFunction {
     pub nargdefaults: i16,
     /// `prosrc` of a function in C or in `internal`, the symbol that runs it, or empty for another language.
     pub src: String,
+    /// `probin` of a function in C, the file of its library, or empty for another language.
+    pub bin: String,
     /// `prosupport`: the OID of the support function, or 0.
     pub support: u32,
 }
@@ -1576,6 +1581,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         }),
         argdefaults: new.argdefaults.clone().map(|text| &*text.leak()),
         src: new.src.clone().leak(),
+        bin: if new.bin.is_empty() { "" } else { new.bin.clone().leak() },
         sqlbody: None,
         support: new.support,
     }

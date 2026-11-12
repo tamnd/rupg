@@ -594,7 +594,7 @@ impl Connection {
     /// # Errors
     ///
     /// The errors of the statement, and `0A000` for a statement that a call cannot run yet.
-    fn call_utility(
+    pub(super) fn call_utility(
         &self,
         node: &Node,
         text: &str,

@@ -70,6 +70,8 @@ jobs:
         run: cargo xtask guc --check
       - name: time zone names
         run: cargo xtask tzdata --check
+      - name: contrib files
+        run: cargo xtask contrib --check
       - name: wait events
         run: cargo xtask waitevents --check
       - name: single-byte encodings
