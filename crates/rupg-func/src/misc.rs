@@ -209,7 +209,10 @@ fn pg_terminate_backend(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [Value::Int4(pid), Value::Int8(timeout)] = args else { return Err(bad_value()) };
     let (pid, timeout) = (*pid, *timeout);
     if timeout < 0 {
-        return Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "\"timeout\" must not be negative"));
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "\"timeout\" must not be negative",
+        ));
     }
     match signal_backend(call, pid, true) {
         Signaled::Sent => {}

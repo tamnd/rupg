@@ -45,7 +45,7 @@ pub(crate) struct Plan<'q> {
     /// The columns of each relation that an `=` with another relation reads, in their order.
     pub(crate) keys: Vec<Vec<usize>>,
     /// Each `=` of two relations: the relation and the place in `keys` of the column of each side.
-    edges: Vec<[(usize, usize); 2]>,
+    pub(crate) edges: Vec<[(usize, usize); 2]>,
 }
 
 /// The plan of the reduction of the rows of a query with the conditions `conds` of `WHERE`, or `None` when the reduction does not run. The query must join two or more tables of the user with no children through a list in `FROM`, with no write and no row lock, and each condition must be one that cannot fail. One condition at least must be an `=` of the integer columns of two tables.
@@ -164,7 +164,7 @@ fn boolean(op: BoolOp, args: Vec<Expr>) -> Expr {
 }
 
 /// The relation and the column of each side of an `=` of two columns of two relations, with integer or date values.
-fn equal_columns(cond: &Expr) -> Option<[(usize, usize); 2]> {
+pub(crate) fn equal_columns(cond: &Expr) -> Option<[(usize, usize); 2]> {
     let ExprKind::Func(f) = &cond.kind else { return None };
     if !EQUALS.contains(&f.oid) {
         return None;
@@ -187,7 +187,7 @@ fn equal_columns(cond: &Expr) -> Option<[(usize, usize); 2]> {
 }
 
 /// The relations that an expression reads.
-fn relations_of(expr: &Expr) -> Vec<usize> {
+pub(crate) fn relations_of(expr: &Expr) -> Vec<usize> {
     let mut relations = Vec::new();
     expr.find(0, &mut |e, depth| {
         if let ExprKind::Var(var) = e.kind

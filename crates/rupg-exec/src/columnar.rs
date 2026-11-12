@@ -22,7 +22,10 @@ use crate::agg;
 use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
 
 mod groups;
+mod linked;
 mod top;
+
+pub(crate) use linked::run as run_join;
 
 /// The most entries of the memo of an expression of one column of integers, so that a column of many values does not fill the memory.
 const MEMO: usize = 1 << 20;
@@ -2063,14 +2066,6 @@ pub(crate) fn run(
     let Some((rows, stored)) = session.table_columns(relation.oid, &wanted)? else {
         return Ok(None);
     };
-    let mut dicts = Vec::new();
-    let mut dict_of = vec![usize::MAX; stored.len()];
-    for (place, column) in stored.iter().enumerate() {
-        if column.kind.store() == Store::Code {
-            dict_of[place] = dicts.len();
-            dicts.push(Dict::Stored(Arc::clone(column)));
-        }
-    }
     // An `EXISTS` of `WHERE` with one integer key runs once, and the scan tests each row with a probe of the keys. Another `EXISTS` makes the row engine scan the table, with the same state of the subquery.
     let mut links = Vec::new();
     if let Some(filter) = &query.filter {
@@ -2088,6 +2083,60 @@ pub(crate) fn run(
                 return Ok(None);
             };
             links.push(Link { at, outer, keys });
+        }
+    }
+    let source = Source { rows, stored, places, types, links, tables: vec![(relation.oid, rows)] };
+    run_on(query, params, session, cache, want, source)
+}
+
+/// The columns in segments of the one relation of a query that [`run_on`] reads.
+pub(crate) struct Source {
+    /// The rows of the relation.
+    pub(crate) rows: usize,
+    /// The columns that the query reads.
+    pub(crate) stored: Vec<Arc<Stored>>,
+    /// The place in `stored` of each column of the relation, or `usize::MAX`.
+    pub(crate) places: Vec<usize>,
+    /// The type of each column of the relation.
+    pub(crate) types: Vec<u32>,
+    links: Vec<Link>,
+    /// The tables whose rows the relation has, with the number of rows that the query reads from each, for the statistics of the scans.
+    pub(crate) tables: Vec<(u32, usize)>,
+}
+
+impl Source {
+    /// The source of a relation whose columns are `stored`, with no `EXISTS` link.
+    pub(crate) fn new(
+        rows: usize,
+        stored: Vec<Arc<Stored>>,
+        places: Vec<usize>,
+        types: Vec<u32>,
+        tables: Vec<(u32, usize)>,
+    ) -> Source {
+        Source { rows, stored, places, types, links: Vec::new(), tables }
+    }
+}
+
+/// [`run`] on the columns `source` of the one relation of `query`.
+///
+/// # Errors
+///
+/// The error of an expression of the query.
+pub(crate) fn run_on(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    want: Option<usize>,
+    source: Source,
+) -> Result<Option<Vec<Vec<Value>>>> {
+    let Source { rows, stored, places, types, links, tables: read } = source;
+    let mut dicts = Vec::new();
+    let mut dict_of = vec![usize::MAX; stored.len()];
+    for (place, column) in stored.iter().enumerate() {
+        if column.kind.store() == Store::Code {
+            dict_of[place] = dicts.len();
+            dicts.push(Dict::Stored(Arc::clone(column)));
         }
     }
     let mut exec = Exec {
@@ -2131,7 +2180,7 @@ pub(crate) fn run(
         .filter(|c| c.first_var().is_some())
         .collect();
     // The columns that the targets and `HAVING` read, which the rows of the result keep.
-    let mut kept = vec![false; relation.columns.len()];
+    let mut kept = vec![false; exec.types.len()];
     for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
         if query.grouped {
             outside_aggs(expr, &mut kept);
@@ -2149,8 +2198,10 @@ pub(crate) fn run(
     }
     let kept_columns: Vec<usize> = (0..kept.len()).filter(|&c| kept[c]).collect();
     if open {
-        session.count_scan(relation.oid);
-        session.count_returned(relation.oid, rows);
+        for &(table, rows) in &read {
+            session.count_scan(table);
+            session.count_returned(table, rows);
+        }
     }
     let segments = rows.div_ceil(ROWS);
     let mut scan =

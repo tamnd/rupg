@@ -9,7 +9,8 @@ use rupg_summary::column::{CodeBuilder, FloatBuilder, IntBuilder, VECTOR};
 use rupg_types::Value;
 
 use crate::dict::{Dictionary, NONE};
-use crate::segment::{Cell, Column, Kind, Nulls, Segment, Store, Vector, WORDS};
+use crate::segment::{Cell, Column, Kind, Nulls, ROWS, Segment, Store, Vector, WORDS};
+use crate::stored::Stored;
 
 /// The values of one column that wait for a vector.
 #[derive(Clone, Debug)]
@@ -505,6 +506,111 @@ fn nulls_of(valid: Option<&[bool]>, rows: usize) -> Nulls {
     }
     debug_assert!(rows <= VECTOR);
     Nulls::Some(bits)
+}
+
+/// The values of one column in row order, which [`gathered`] keeps.
+#[derive(Clone, Debug)]
+pub enum Values {
+    Ints(Vec<i64>),
+    Floats(Vec<f64>),
+    Codes(Vec<u32>),
+}
+
+impl Values {
+    /// The number of values.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Values::Ints(values) => values.len(),
+            Values::Floats(values) => values.len(),
+            Values::Codes(codes) => codes.len(),
+        }
+    }
+
+    /// True when there is no value.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// A column of the kind `kind` with the values `values` and the null flags `nulls` in row order, and with the dictionary `dict` of its codes. The column is for rows that a query makes and reads one time, such as the rows of a join. Each vector is bit packed with no search for a smaller encoding, and the column does not decode it again to check it, because the column lives only for the query. The summary of each segment is the summary that a load makes.
+///
+/// # Errors
+///
+/// `XX000` when the values are not of the store of the kind, or when the null flags are not one for each value. An error of the encoder, which is an internal error.
+pub fn gathered(
+    kind: Kind,
+    values: &Values,
+    nulls: Option<&[bool]>,
+    dict: Option<Dictionary>,
+) -> Result<Stored> {
+    let rows = values.len();
+    let fits = matches!(
+        (values, kind.store()),
+        (Values::Ints(_), Store::Int)
+            | (Values::Floats(_), Store::Float)
+            | (Values::Codes(_), Store::Code)
+    );
+    if !fits || nulls.is_some_and(|n| n.len() != rows) {
+        return Err(Error::internal("the values of a gathered column do not fit its kind"));
+    }
+    let mut segments = Vec::with_capacity(rows.div_ceil(ROWS));
+    let mut flags = Vec::with_capacity(VECTOR);
+    for start in (0..rows).step_by(ROWS) {
+        let end = (start + ROWS).min(rows);
+        let mut summary = Summary::new(kind.store());
+        let mut vectors = Vec::with_capacity((end - start).div_ceil(VECTOR));
+        for at in (start..end).step_by(VECTOR) {
+            let stop = (at + VECTOR).min(end);
+            flags.clear();
+            match nulls {
+                Some(nulls) => flags.extend_from_slice(&nulls[at..stop]),
+                None => flags.resize(stop - at, false),
+            }
+            let buffer = match values {
+                Values::Ints(v) => Buffer::Ints(v[at..stop].to_vec()),
+                Values::Floats(v) => Buffer::Floats(v[at..stop].to_vec()),
+                // A null has the code `NONE`, as in the buffer of a load, so that the summary does not count it.
+                Values::Codes(c) => Buffer::Codes(
+                    c[at..stop]
+                        .iter()
+                        .zip(&flags)
+                        .map(|(&c, &n)| if n { NONE } else { c })
+                        .collect(),
+                ),
+            };
+            let data = match &buffer {
+                Buffer::Ints(v) => packed(v)?,
+                Buffer::Floats(v) => v.iter().flat_map(|x| x.to_bits().to_le_bytes()).collect(),
+                Buffer::Codes(c) => packed(&c.iter().map(|&c| i64::from(c)).collect::<Vec<_>>())?,
+            };
+            let valid = valid_flags(&flags);
+            #[allow(clippy::cast_possible_truncation)]
+            let vector = Vector {
+                rows: (stop - at) as u32,
+                data: data.into(),
+                nulls: nulls_of(valid.as_deref(), stop - at),
+            };
+            summarize(&mut summary, &buffer, &flags, &vector, dict.as_ref());
+            vectors.push(vector);
+        }
+        let summary = match summary {
+            Summary::Int(summary) => summary.finish(),
+            Summary::Float(summary) => summary.finish(),
+            Summary::Code(summary, bytes) => summary.finish(bytes / 8),
+        };
+        segments.push(Column { kind, vectors, summary });
+    }
+    Ok(Stored::new(kind, dict, segments, rows))
+}
+
+/// The integers `values` bit packed from their least value, with no search for another encoding.
+fn packed(values: &[i64]) -> Result<Vec<u8>> {
+    match integer::encode_only(integer::Kind::Packed, values)? {
+        Some(bytes) => Ok(bytes),
+        None => integer::encode_with(values, &Sampled::new()),
+    }
 }
 
 #[cfg(test)]
