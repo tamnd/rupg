@@ -39,7 +39,7 @@ pub(crate) fn run(
         return Ok(None);
     }
     if let [FromItem::Join(join)] = query.from.as_slice() {
-        let Some((kept, selected, pos)) = left_join(query, join, session, cache)? else {
+        let Some((kept, selected, pos)) = left_join(query, join, params, session, cache)? else {
             return Ok(None);
         };
         return finish(query, params, session, cache, want, kept, &selected, &pos, Vec::new());
@@ -48,6 +48,8 @@ pub(crate) fn run(
     if let Some(filter) = &query.filter {
         scan::conjuncts(filter, &mut conds);
     }
+    // An `EXISTS` of one table, such as the two of TPC-H Q21, is a condition of the table, which the scan of the table tests with a probe.
+    let (links, conds): (Vec<&Expr>, Vec<&Expr>) = conds.into_iter().partition(|c| link(c));
     // The `OR` of two or more tables also gives a condition of each table.
     let derived = reduce::restrictions(&conds);
     let all: Vec<&Expr> = conds.iter().copied().chain(&derived).collect();
@@ -56,8 +58,9 @@ pub(crate) fn run(
     let mut selected = Vec::with_capacity(width);
     for (index, relation) in query.relations.iter().enumerate() {
         // A condition `x IN (SELECT ...)` of the table: the subquery runs one time, and its integers then select the rows that pass the other conditions.
-        let (semi, own): (Vec<&Expr>, Vec<&Expr>) =
+        let (semi, mut own): (Vec<&Expr>, Vec<&Expr>) =
             plan.own[index].iter().copied().partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
+        own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
         let mut keys = plan.keys[index].clone();
         let mut sets = Vec::with_capacity(semi.len());
         for cond in semi {
@@ -67,7 +70,7 @@ pub(crate) fn run(
             sets.push((keys.len(), set));
             keys.push(column);
         }
-        match super::selected(relation, &own, &keys, session, cache, true)? {
+        match super::selected(relation, &own, &keys, params, session, cache, true)? {
             Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
                 if !sets.is_empty() {
                     let keep: Vec<bool> = (0..found.places.len())
@@ -240,6 +243,7 @@ fn finish(
 fn left_join(
     query: &Query,
     join: &Join,
+    params: &[Value],
     session: &dyn Session,
     cache: &Cache,
 ) -> Result<Option<(usize, Vec<Selected>, Vec<Vec<u32>>)>> {
@@ -287,7 +291,7 @@ fn left_join(
     }
     let mut selected = Vec::with_capacity(2);
     for (index, relation) in query.relations.iter().enumerate() {
-        match super::selected(relation, &own[index], &keys[index], session, cache, true)? {
+        match super::selected(relation, &own[index], &keys[index], params, session, cache, true)? {
             Some(found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
                 selected.push(found);
             }
@@ -374,7 +378,7 @@ fn retain<T>(items: &mut Vec<T>, keep: &[bool]) {
     });
 }
 
-/// True when the query has groups over a list of relations in `FROM`, with no set operation, no window and no write, and reads only the columns of its own relations. The only subqueries are the conditions `x IN (SELECT ...)` of `WHERE` that [`reduce::semi_join`] tests on the rows of one table.
+/// True when the query has groups over a list of relations in `FROM`, with no set operation, no window and no write, and reads only the columns of its own relations. The only subqueries are the conditions `x IN (SELECT ...)` of `WHERE` that [`reduce::semi_join`] tests on the rows of one table, and the conditions of one table with an `EXISTS` that [`link`] tells.
 fn shape(query: &Query, session: &dyn Session) -> bool {
     if query.relations.len() < 2
         || !query.grouped
@@ -411,7 +415,7 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
     if let Some(filter) = &query.filter {
         scan::conjuncts(filter, &mut conds);
     }
-    conds.retain(|cond| reduce::semi_join(cond, session).is_none());
+    conds.retain(|cond| reduce::semi_join(cond, session).is_none() && !link(cond));
     if let [FromItem::Join(join)] = query.from.as_slice() {
         conds.extend(&join.on);
     }
@@ -434,6 +438,24 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
         }
     }
     true
+}
+
+/// True when `cond` is a condition of `WHERE` that reads one table and has an `EXISTS`, which the scan of the table can test with the probe of [`crate::lift::probe`], as the two of TPC-H Q21. The subquery reads only its own columns and the columns of the query.
+fn link(cond: &Expr) -> bool {
+    let mut exists = false;
+    let other = cond.find(0, &mut |e, depth| match &e.kind {
+        ExprKind::SubLink(_) if depth == 0 => {
+            exists = true;
+            None
+        }
+        ExprKind::Var(var)
+            if var.levels_up > depth || (var.levels_up == depth && var.attnum <= 0) =>
+        {
+            Some(())
+        }
+        _ => None,
+    });
+    exists && other.is_none() && reduce::relations_of(cond).len() == 1 && !unsupported(cond, true)
 }
 
 /// The rows of a table by the value of a key that no two rows have.

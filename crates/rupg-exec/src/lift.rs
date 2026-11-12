@@ -1,6 +1,6 @@
 //! The run of a correlated subquery once for all the rows of the query outside it, as the dependent join elimination of Neumann and Kemper (BTW 2015) unnests it (spec/15). The subquery must read the query outside it only through conditions of `WHERE` that are an `=` of an integer of the subquery and an integer column of the query just outside it. The run without these conditions gives the rows of the subquery with their keys, and each row of the query outside then reads the rows of its key from a hash table. A subquery with an aggregate and no `GROUP BY` runs with a `GROUP BY` of the keys, and a key with no group gets the row that the subquery gives for no input, so that `count(*)` gives 0 and not null.
 //!
-//! The vector scan of one table also tests an `EXISTS` of its `WHERE` with one key and no other condition on the table as a probe of the set of the keys that have a row ([`key_set`]). The two scans keep the same state of the subquery, so it runs once also when the vector scan cannot run and the row engine scans the table.
+//! The vector scan of one table also tests an `EXISTS` of its `WHERE` with one key as a probe ([`Probe`]): of the set of the keys that have a row when the subquery has no other condition on the table, or of the bounds of [`Bound`]. The two scans keep the same state of the subquery, so it runs once also when the vector scan cannot run and the row engine scans the table.
 //!
 //! An `EXISTS` with one key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it, such as `l2.l_suppkey <> l1.l_suppkey` in TPC-H Q21, keeps only the least and the greatest value of the column for each key ([`Bound`]). A row of the query outside it tests the comparison on these two values, and not on each row of its key.
 //!
@@ -109,7 +109,7 @@ pub(crate) type Evaluate<'a> = dyn FnMut(&Expr, Option<&[Value]>) -> Result<Valu
 /// The rows of a lifted subquery for each key.
 type Buckets = rupg_kernels::hash::HashMap<Vec<Key>, Rc<Rows>>;
 
-/// The keys of an `EXISTS` that have a row, for [`key_set`].
+/// The keys of an `EXISTS` that have a row, for [`Probe`].
 pub(crate) type KeySet = rupg_kernels::hash::HashSet<i64>;
 
 /// The two queries of a lifted subquery and the value of each key outside it.
@@ -167,18 +167,77 @@ pub(crate) fn rows(
     Ok(Some(Rc::clone(&lifted.empty)))
 }
 
-/// For the vector scan, the keys of a correlated `EXISTS` with one integer key and no other condition on the query outside it: the column of the key in the query outside it, and the keys that have a row. A row whose key is not in the set, or is null, gets false, as [`rows`] gives. `None` for another subquery, or when the run fails, and then the subquery runs for each row.
-pub(crate) fn key_set(
+/// For the vector scan, a correlated `EXISTS` with one integer key, as [`probe`] gives it.
+pub(crate) struct Probe {
+    /// The column of the key in the query outside the subquery.
+    pub(crate) outer: Expr,
+    /// For the bounds of [`Bound`], the column of the query outside the subquery that the test compares.
+    pub(crate) other: Option<Expr>,
+    lifted: Rc<Lifted>,
+}
+
+impl Probe {
+    /// The `EXISTS` for the rows `0..rows`, as [`rows`] gives it, where `key` gives the key of a row and `value` its column [`Probe::other`]: false for a null key, for a key with no row, and for a null `value`. Rows with the same key one after another, as the rows of a table in the order of its key come, look up the key once.
+    pub(crate) fn tests(
+        &self,
+        rows: usize,
+        key: impl Fn(usize) -> Option<i64>,
+        value: impl Fn(usize) -> Option<i64>,
+    ) -> Vec<Option<bool>> {
+        let mut out = Vec::with_capacity(rows);
+        if let Some(set) = &self.lifted.set {
+            let mut last: Option<(i64, bool)> = None;
+            for i in 0..rows {
+                let found = key(i).is_some_and(|k| match last {
+                    Some((l, found)) if l == k => found,
+                    _ => {
+                        let found = set.contains(&k);
+                        last = Some((k, found));
+                        found
+                    }
+                });
+                out.push(Some(found));
+            }
+            return out;
+        }
+        let Some(bound) = &self.lifted.bound else {
+            out.resize(rows, Some(false));
+            return out;
+        };
+        let mut last: Option<(i64, Option<(i64, i64)>)> = None;
+        for i in 0..rows {
+            let found = key(i).is_some_and(|k| {
+                let bounds = match last {
+                    Some((l, bounds)) if l == k => bounds,
+                    _ => {
+                        let bounds = bound.keys.get(&k).copied();
+                        last = Some((k, bounds));
+                        bounds
+                    }
+                };
+                bounds.zip(value(i)).is_some_and(|(bounds, v)| bound.cmp.any(bounds, v))
+            });
+            out.push(Some(found));
+        }
+        out
+    }
+}
+
+/// For the vector scan, the probe of a correlated `EXISTS` with one integer key: with no other condition on the query outside it, the set of the keys that have a row, and with one comparison of integers, the bounds of [`Bound`]. `None` for another subquery, or when the run fails, and then the subquery runs for each row.
+pub(crate) fn probe(
     query: &Query,
     params: &[Value],
     session: &dyn Session,
     cache: &Cache,
-) -> Option<(Expr, Rc<KeySet>)> {
+) -> Option<Probe> {
     let lifted = state(query, &SubLinkKind::Exists, params, session, cache)?;
-    let ([outer], None, Some(set)) = (lifted.outer.as_slice(), &lifted.test, &lifted.set) else {
-        return None;
+    let [outer] = lifted.outer.as_slice() else { return None };
+    let other = match (&lifted.set, &lifted.bound, &lifted.test) {
+        (Some(_), _, None) => None,
+        (None, Some(bound), _) => Some(bound.outer.clone()),
+        _ => return None,
     };
-    Some((outer.clone(), Rc::clone(set)))
+    Some(Probe { outer: outer.clone(), other, lifted: Rc::clone(&lifted) })
 }
 
 /// The lifted state of a subquery, which the first call makes and the cache keeps. `None` when the subquery runs for each row.
@@ -246,8 +305,24 @@ fn lift(
             let mut bounds = Bounds::default();
             match columns.as_deref() {
                 Some([values, keys]) => {
+                    // The rows of a key often come one after another, as the rows of a table in the order of its key, so a run of the same key widens the bounds once.
+                    let mut run: Option<(i64, (i64, i64))> = None;
                     for (&key, &value) in keys.iter().zip(values) {
-                        widen(&mut bounds, key, value);
+                        let (Some(key), Some(value)) = (key, value) else { continue };
+                        match &mut run {
+                            Some((k, (min, max))) if *k == key => {
+                                *min = (*min).min(value);
+                                *max = (*max).max(value);
+                            }
+                            _ => {
+                                if let Some((k, found)) = run.replace((key, (value, value))) {
+                                    widen(&mut bounds, k, found);
+                                }
+                            }
+                        }
+                    }
+                    if let Some((k, found)) = run {
+                        widen(&mut bounds, k, found);
                     }
                 }
                 Some(_) => return Err(rupg_common::Error::internal("a lifted row has no key")),
@@ -256,7 +331,9 @@ fn lift(
                         let Ok([value, key]) = <[Value; 2]>::try_from(row) else {
                             return Err(rupg_common::Error::internal("a lifted row has no key"));
                         };
-                        widen(&mut bounds, int(key)?, int(value)?);
+                        if let (Some(key), Some(value)) = (int(key)?, int(value)?) {
+                            widen(&mut bounds, key, (value, value));
+                        }
                     }
                 }
             }
@@ -358,16 +435,15 @@ fn comparison(test: &Expr) -> Option<(Cmp, Expr)> {
     }
 }
 
-/// Adds a value of the column of the test of a [`Bound`] to the bounds of its key. A null key or value adds nothing.
-fn widen(bounds: &mut Bounds, key: Option<i64>, value: Option<i64>) {
-    let (Some(key), Some(value)) = (key, value) else { return };
+/// Adds the least and the greatest of some values of the column of the test of a [`Bound`] to the bounds of their key.
+fn widen(bounds: &mut Bounds, key: i64, (low, high): (i64, i64)) {
     bounds
         .entry(key)
         .and_modify(|(min, max)| {
-            *min = (*min).min(value);
-            *max = (*max).max(value);
+            *min = (*min).min(low);
+            *max = (*max).max(high);
         })
-        .or_insert((value, value));
+        .or_insert((low, high));
 }
 
 /// The integer of a value of a lifted row, or `None` for a null.

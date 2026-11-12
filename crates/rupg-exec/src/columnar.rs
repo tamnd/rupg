@@ -3,7 +3,6 @@
 //! The scan tests the conditions of `WHERE` on each vector of 1024 rows with a selection vector, and it makes the groups and the aggregates with the codes and the integers of the vectors. The targets, `HAVING` and `ORDER BY` then run with [`Eval`] on one row for each group, or on each row that passes, so that they give the values of the row engine. The groups come in the order that the row engine gives them, which is the order of the hash table of `HashAggregate`. A query that the scan cannot run gives `None`, and the row engine runs it.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{Aggref, BoolOp, Expr, ExprKind, FromItem, Query, SubLinkKind, Var};
@@ -636,11 +635,35 @@ struct Exec<'q> {
     links: Vec<Link>,
 }
 
-/// An `EXISTS` of `WHERE` that ran once, which [`lift::key_set`] gives: the link in the query, the column of its key, and the keys that have a row.
+/// An `EXISTS` of `WHERE` that ran once: the link in the query and its probe of [`lift::probe`].
 struct Link {
     at: *const Expr,
-    outer: Expr,
-    keys: Rc<lift::KeySet>,
+    probe: lift::Probe,
+}
+
+/// The links of the `EXISTS` of `exprs` that are not in a subquery, or `None` when an `EXISTS` has no probe of [`lift::probe`].
+fn links_of<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<Vec<Link>> {
+    let mut links = Vec::new();
+    for expr in exprs {
+        let mut found = Vec::new();
+        expr.find(0, &mut |e, depth| {
+            if depth == 0
+                && let ExprKind::SubLink(sub) = &e.kind
+            {
+                found.push((e, sub));
+            }
+            None::<()>
+        });
+        for (at, sub) in found {
+            links.push(Link { at, probe: lift::probe(&sub.query, params, session, cache)? });
+        }
+    }
+    Some(links)
 }
 
 /// The number of characters of the bytes of a `String`: the bytes less the bytes that continue a character, with the form `10xxxxxx`. Eight bytes are tested at a time.
@@ -1006,17 +1029,25 @@ impl<'q> Exec<'q> {
         self.generic(expr, batch, sel)
     }
 
-    /// The `EXISTS` of `self.links[link]`: true for a row whose key has a row of the subquery, and false for a row whose key has no row or is null.
+    /// The `EXISTS` of `self.links[link]` for each row, as [`lift::Probe::tests`] gives it for the key of the row and its other column.
     fn link(&mut self, link: usize, batch: &mut Batch, sel: &[u32]) -> Result<Col> {
-        let outer = self.links[link].outer.clone();
+        let outer = self.links[link].probe.outer.clone();
         let col = self.eval(&outer, batch, sel)?;
-        let keys = &self.links[link].keys;
-        let out: Vec<Option<bool>> = (0..sel.len())
-            .map(|i| {
-                let key = col.int(i).or_else(|| int_of(&col.value(i, &self.dicts)));
-                Some(key.is_some_and(|key| keys.contains(&key)))
-            })
-            .collect();
+        let other = match self.links[link].probe.other.clone() {
+            Some(expr) => Some(self.eval(&expr, batch, sel)?),
+            None => None,
+        };
+        let dicts = &self.dicts;
+        let int = |col: &Col, ints: Option<Ints<'_>>, i: usize| match ints {
+            Some(ints) => ints.get(i),
+            None => int_of(&col.value(i, dicts)),
+        };
+        let (keys, values) = (col.ints(), other.as_ref().and_then(Col::ints));
+        let out = self.links[link].probe.tests(
+            sel.len(),
+            |i| int(&col, keys, i),
+            |i| other.as_ref().and_then(|o| int(o, values, i)),
+        );
         Ok(Col::bools(&out))
     }
 
@@ -1744,7 +1775,7 @@ fn data_len(data: &DecodedData) -> usize {
 
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
 ///
-/// With `links`, an `EXISTS` of `WHERE` alone or in `AND`, `OR` and `NOT` is supported, and [`run`] tests it with [`lift::key_set`]. In other places a link can go to [`Exec::generic`], which does not evaluate a subquery.
+/// With `links`, an `EXISTS` of `WHERE` alone or in `AND`, `OR` and `NOT` is supported, and the scan tests it with the probe of [`lift::probe`]. In other places a link can go to [`Exec::generic`], which does not evaluate a subquery.
 fn unsupported(expr: &Expr, links: bool) -> bool {
     if links {
         match &expr.kind {
@@ -2171,25 +2202,8 @@ pub(crate) fn run(
     let Some((rows, stored)) = session.table_columns(relation.oid, &wanted)? else {
         return Ok(None);
     };
-    // An `EXISTS` of `WHERE` with one integer key runs once, and the scan tests each row with a probe of the keys. Another `EXISTS` makes the row engine scan the table, with the same state of the subquery.
-    let mut links = Vec::new();
-    if let Some(filter) = &query.filter {
-        let mut found = Vec::new();
-        filter.find(0, &mut |e, depth| {
-            if depth == 0
-                && let ExprKind::SubLink(sub) = &e.kind
-            {
-                found.push((e, sub));
-            }
-            None::<()>
-        });
-        for (at, sub) in found {
-            let Some((outer, keys)) = lift::key_set(&sub.query, params, session, cache) else {
-                return Ok(None);
-            };
-            links.push(Link { at, outer, keys });
-        }
-    }
+    // An `EXISTS` of `WHERE` with one integer key runs once, and the scan tests each row with a probe. Another `EXISTS` makes the row engine scan the table, with the same state of the subquery.
+    let Some(links) = links_of(&query.filter, params, session, cache) else { return Ok(None) };
     let source = Source { rows, stored, places, types, links, tables: vec![(relation.oid, rows)] };
     run_on(query, params, session, cache, want, source)
 }
@@ -2382,7 +2396,7 @@ pub(crate) struct Selected {
     pub(crate) keys: Vec<Vec<Option<i64>>>,
 }
 
-/// The rows of the table of `relation` that pass the conditions `conds`, which read only the columns of the table, with the integers of the columns `keys` of these rows. The vectors test the conditions, so that a join of a long table makes the values of only the rows that pass. `None` is a table that the scan reads by rows, a condition that the vectors do not run, or a key column that does not have integers.
+/// The rows of the table of `relation` that pass the conditions `conds`, which read only the columns of the table, with the integers of the columns `keys` of these rows. A condition can have an `EXISTS` with a probe of [`lift::probe`], with the parameters `params`. The vectors test the conditions, so that a join of a long table makes the values of only the rows that pass. `None` is a table that the scan reads by rows, a condition that the vectors do not run, or a key column that does not have integers.
 ///
 /// # Errors
 ///
@@ -2391,6 +2405,7 @@ pub(crate) fn selected(
     relation: &rupg_analyze::Relation,
     conds: &[&Expr],
     keys: &[usize],
+    params: &[Value],
     session: &dyn Session,
     cache: &Cache,
     small: bool,
@@ -2404,11 +2419,13 @@ pub(crate) fn selected(
         }
     }
     for cond in conds {
-        if unsupported(cond, false) {
+        if unsupported(cond, true) {
             return Ok(None);
         }
-        cond.find(0, &mut |e, _| {
+        // A column of the table in an `EXISTS` is a column of the query just outside the subquery.
+        cond.find(0, &mut |e, depth| {
             if let ExprKind::Var(var) = e.kind
+                && var.levels_up == depth
                 && let Some(slot) =
                     usize::try_from(var.attnum - 1).ok().and_then(|i| used.get_mut(i))
             {
@@ -2417,6 +2434,9 @@ pub(crate) fn selected(
             None::<()>
         });
     }
+    let Some(links) = links_of(conds.iter().copied(), params, session, cache) else {
+        return Ok(None);
+    };
     let Some(catalog) = session.catalog() else { return Ok(None) };
     let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
     let mut wanted = Vec::new();
@@ -2450,7 +2470,7 @@ pub(crate) fn selected(
         }
     }
     let mut exec = Exec {
-        params: &[],
+        params,
         session,
         cache,
         stored,
@@ -2462,9 +2482,9 @@ pub(crate) fn selected(
         likes: FxMap::default(),
         lengths: FxMap::default(),
         key_dicts: FxMap::default(),
-        slots: Vec::new(),
+        slots: params.to_vec(),
         empty: scan::Tables::default(),
-        links: Vec::new(),
+        links,
     };
     let segments = rows.div_ceil(ROWS);
     let mut scan =
@@ -2555,7 +2575,7 @@ pub(crate) fn column_keys(
     {
         return Ok(None);
     }
-    let Some(found) = selected(relation, &conds, &columns, session, cache, false)? else {
+    let Some(found) = selected(relation, &conds, &columns, &[], session, cache, false)? else {
         return Ok(None);
     };
     Ok(Some(found.keys))
