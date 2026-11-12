@@ -597,8 +597,17 @@ struct Fold<'a> {
 
 /// An expression with the type, the typmod and the place of another.
 fn with(expr: &Expr, kind: ExprKind) -> Expr {
-    Expr { kind, ty: expr.ty, typmod: expr.typmod, location: expr.location }
+    Expr {
+        kind,
+        ty: expr.ty,
+        typmod: expr.typmod,
+        location: expr.location,
+        collation: expr.collation,
+    }
 }
+
+/// `DEFAULT_COLLATION_OID`.
+const DEFAULT_COLLATION: u32 = 100;
 
 /// `BooleanEqualOperator`, `=` of `boolean`.
 const BOOLEAN_EQUAL: u32 = 91;
@@ -1172,8 +1181,16 @@ impl<'a> Fold<'a> {
                     })),
                 ))
             }
-            // The executor does not use the collation, so the folded argument takes the place of the node.
-            ExprKind::Collate(arg, _) => self.expr(arg),
+            // The executor does not use the collation, so the folded argument takes the place of the node. A constant keeps a collation other than the one of its type as `constcollid`, which `EXPLAIN` shows.
+            ExprKind::Collate(arg, collation) => {
+                let mut arg = self.expr(arg)?;
+                if matches!(arg.kind, ExprKind::Const(_)) {
+                    let own =
+                        builtin::type_by_oid(arg.ty).map_or(DEFAULT_COLLATION, |t| t.collation);
+                    arg.collation = if *collation == own { 0 } else { *collation };
+                }
+                Ok(arg)
+            }
             // `applyRelabelType`: a stack of relabels is the top one, and a relabel to the type and typmod of its argument goes.
             ExprKind::Relabel(arg, form) => {
                 let mut arg = self.expr(arg)?;

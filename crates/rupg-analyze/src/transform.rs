@@ -143,7 +143,7 @@ impl Analyzer<'_> {
                 let (ty, typmod) = (arg.ty, arg.typmod);
                 let name = na.name.as_deref().unwrap_or_default().to_owned();
                 let kind = ExprKind::NamedArg(Box::new(NamedArg { arg, name, number: 0 }));
-                Ok(Expr { kind, ty, typmod, location: place(na.location) })
+                Ok(Expr { collation: 0, kind, ty, typmod, location: place(na.location) })
             }
             Node::TypeCast(t) => self.transform_cast(t),
             Node::CaseExpr(c) => {
@@ -162,6 +162,7 @@ impl Analyzer<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 self.no_srf_since(before, "COALESCE")?;
                 Ok(Expr {
+                    collation: 0,
                     kind: ExprKind::Coalesce(args),
                     ty,
                     typmod: -1,
@@ -187,6 +188,7 @@ impl Analyzer<'_> {
                     _ => -1,
                 };
                 Ok(Expr {
+                    collation: 0,
                     kind: ExprKind::MinMax {
                         greatest: m.op == MinMaxOp::IS_GREATEST,
                         less,
@@ -422,7 +424,7 @@ impl Analyzer<'_> {
             0 => oid::UNKNOWN,
             ty => ty,
         };
-        Ok(Expr { kind: ExprKind::Param(n), ty, typmod: -1, location: at })
+        Ok(Expr { collation: 0, kind: ExprKind::Param(n), ty, typmod: -1, location: at })
     }
 
     /// `make_row_comparison_op`: `(a, b) op (c, d)`, with an operator for each pair of fields. The operators of `=` combine with `AND`, the operators of `<>` with `OR`, and the ordering operators make a [`RowCompare`]. The kind of comparison is the first kind, in the order of `CompareType`, that each operator has in a btree operator family, or `<>` for the negator of an equality operator of a btree family.
@@ -944,7 +946,7 @@ impl Analyzer<'_> {
                     return Ok(expr);
                 }
                 let kind = ExprKind::Relabel(Box::new(expr), CastForm::Explicit);
-                Ok(Expr { kind, ty: target, typmod: -1, location: at })
+                Ok(Expr { collation: 0, kind, ty: target, typmod: -1, location: at })
             }
             Some(expr) => Ok(expr),
             None => Err(Error::new(
@@ -1004,6 +1006,7 @@ impl Analyzer<'_> {
         let default = all.next().expect("the default");
         let whens = conditions.into_iter().zip(all).collect();
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::Case(Case {
                 arg: arg.map(Box::new),
                 whens,
@@ -1059,7 +1062,7 @@ impl Analyzer<'_> {
             | SqlValue::LocalTimestamp(Some(p)) => p,
             _ => -1,
         };
-        Ok(Expr { kind: ExprKind::SqlValue(value), ty, typmod, location: at })
+        Ok(Expr { collation: 0, kind: ExprKind::SqlValue(value), ty, typmod, location: at })
     }
 
     /// `transformArrayExpr`. A cast such as `ARRAY[]::int[]` gives the array type, the element type and the typmod. With no cast they are 0, 0 and -1.
@@ -1161,6 +1164,7 @@ impl Analyzer<'_> {
             _ => -1,
         };
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::Array { element, multidims, elements: coerced },
             ty: array,
             typmod,

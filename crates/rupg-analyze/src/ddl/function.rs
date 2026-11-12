@@ -659,6 +659,7 @@ fn wrap_in_subquery(query: &mut Query) {
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             let var = Var { relation: 0, attnum, levels_up: 0 };
             let expr = Expr {
+                collation: 0,
                 kind: ExprKind::Var(var),
                 ty: t.expr.ty,
                 typmod: t.expr.typmod,

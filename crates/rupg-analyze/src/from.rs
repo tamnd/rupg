@@ -1866,6 +1866,7 @@ impl Analyzer<'_> {
                 self.coerce(e, ty, typmod, Context::Implicit, None)
             } else if e.typmod != typmod {
                 Ok(Expr {
+                    collation: 0,
                     kind: ExprKind::Relabel(Box::new(e), CastForm::Implicit),
                     ty,
                     typmod,
@@ -1881,9 +1882,13 @@ impl Analyzer<'_> {
             JoinKind::Inner if !is_var(&l) && is_var(&r) => r,
             JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti => l,
             JoinKind::Right | JoinKind::RightSemi | JoinKind::RightAnti => r,
-            JoinKind::Full => {
-                Expr { kind: ExprKind::Coalesce(vec![l, r]), ty, typmod: -1, location: None }
-            }
+            JoinKind::Full => Expr {
+                collation: 0,
+                kind: ExprKind::Coalesce(vec![l, r]),
+                ty,
+                typmod: -1,
+                location: None,
+            },
         })
     }
 
@@ -1918,7 +1923,13 @@ impl Analyzer<'_> {
         if let Some((ty, typmod)) = self.domain_value
             && names.as_slice() == [Some("value")]
         {
-            return Ok(Expr { kind: ExprKind::DomainValue, ty, typmod, location: at });
+            return Ok(Expr {
+                collation: 0,
+                kind: ExprKind::DomainValue,
+                ty,
+                typmod,
+                location: at,
+            });
         }
         let (schema, table, column) = match names.as_slice() {
             [Some(column)] => {

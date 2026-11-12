@@ -5044,7 +5044,7 @@ mod tests {
     }
 
     /// `CREATE EXTENSION`, `ALTER EXTENSION ... UPDATE` and `DROP EXTENSION` of `pg_trgm` and `btree_gin`: the members by catalog, the C functions, the errors and notices, an extension in another schema that `DROP SCHEMA ... CASCADE` drops, update paths, `pg_available_extensions` and `pg_available_extension_versions`, and a trusted extension that a role that is not a superuser makes. `connection/create_extension.test` matches the output of PostgreSQL 18 for the same script in a new database, with the versions of `btree_gin` and `btree_gist` of PostgreSQL 19.
-    /// The operator classes of `pg_trgm`, `btree_gin` and `btree_gist` in the planner: index scans, bitmap scans and ordering scans with the operators of the catalog, the key order of a scan of a `gist` index of the sorted build, and an exclusion constraint of `btree_gist` of a partitioned table that its partition gets. `connection/extension_opclass.test` matches the output of PostgreSQL 18 for the same script in a new database.
+    /// The operator classes of `pg_trgm`, `btree_gin` and `btree_gist` in the planner: index scans, bitmap scans and ordering scans with the operators of the catalog, the key order of a scan of a `gist` index of the sorted build, and an exclusion constraint of `btree_gist` of a partitioned table that its partition gets. `connection/extension_opclass.test` matches the output of PostgreSQL 18 for the same script in a new database, except the scan of `text < name`, an operator of `btree_gin` 1.4 of PostgreSQL 19, which PostgreSQL 18 does not have.
     #[test]
     fn extension_opclass() {
         big_stack(|| script(include_str!("connection/extension_opclass.test")));

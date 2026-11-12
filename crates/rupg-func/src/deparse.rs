@@ -1154,6 +1154,11 @@ impl<'a> Deparser<'a> {
             let ty = label(self)?;
             self.buf.push_str(&format!("::{ty}"));
         }
+        // `get_const_collation`: the planner keeps a collation other than the one of the type.
+        if e.collation != 0 {
+            self.buf.push_str(" COLLATE ");
+            self.buf.push_str(&collation_name(e.collation, self.session)?);
+        }
         Ok(())
     }
 
@@ -2470,6 +2475,7 @@ fn get_partition_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value>
         0 => return Ok(Value::Null),
         1 => qual.remove(0),
         _ => Expr {
+            collation: 0,
             kind: ExprKind::Bool(BoolOp::And, qual),
             ty: oid::BOOL,
             typmod: -1,

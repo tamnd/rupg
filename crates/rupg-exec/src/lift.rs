@@ -623,6 +623,7 @@ fn split(query: &Query, kind: &SubLinkKind) -> Option<Split> {
         }
         let mut none = query.clone();
         none.filter = Some(Expr {
+            collation: 0,
             kind: ExprKind::Const(Value::Bool(false)),
             ty: oid::BOOL,
             typmod: -1,
@@ -669,6 +670,7 @@ fn and(mut conds: Vec<Expr>) -> Option<Expr> {
         0 => None,
         1 => conds.pop(),
         _ => Some(Expr {
+            collation: 0,
             kind: ExprKind::Bool(BoolOp::And, conds),
             ty: oid::BOOL,
             typmod: -1,

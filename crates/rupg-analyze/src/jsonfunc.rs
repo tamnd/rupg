@@ -302,7 +302,13 @@ impl Analyzer<'_> {
             io_coercion,
             column: column.map(str::to_string),
         };
-        Ok(Expr { kind: ExprKind::JsonExpr(Box::new(j)), ty, typmod, location: place(f.location) })
+        Ok(Expr {
+            collation: 0,
+            kind: ExprKind::JsonExpr(Box::new(j)),
+            ty,
+            typmod,
+            location: place(f.location),
+        })
     }
 
     /// `transformJsonBehavior`: an `ON EMPTY` or an `ON ERROR` clause, or the default behavior when the call has no clause, with its value cast to the type of `RETURNING`.

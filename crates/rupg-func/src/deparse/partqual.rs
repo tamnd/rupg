@@ -39,7 +39,7 @@ struct KeyColumn {
 
 /// An expression of type `boolean`.
 fn boolean(kind: ExprKind) -> Expr {
-    Expr { kind, ty: oid::BOOL, typmod: -1, location: None }
+    Expr { collation: 0, kind, ty: oid::BOOL, typmod: -1, location: None }
 }
 
 /// The one expression of a list of one, or else `AND` or `OR` of the expressions.
@@ -83,7 +83,13 @@ fn key_columns(
                 Error::internal(format!("cache lookup failed for attribute {attnum}"))
             })?;
             let var = ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 });
-            let expr = Expr { kind: var, ty: column.ty, typmod: column.typmod, location: None };
+            let expr = Expr {
+                collation: 0,
+                kind: var,
+                ty: column.ty,
+                typmod: column.typmod,
+                location: None,
+            };
             (expr, column.collation)
         } else {
             let expr =
@@ -137,7 +143,7 @@ fn key_argument(column: &KeyColumn) -> Expr {
         return column.expr.clone();
     }
     let kind = ExprKind::Relabel(Box::new(column.expr.clone()), CastForm::Explicit);
-    Expr { kind, ty: column.intype, typmod: -1, location: None }
+    Expr { collation: 0, kind, ty: column.intype, typmod: -1, location: None }
 }
 
 /// A constant of a bound with the collation of the key, as `transformPartitionBoundValue` gives it `constcollid`. A collation other than the one of the type shows after the constant, so the constant gets a `COLLATE`.
@@ -148,7 +154,7 @@ fn bound_constant(column: &KeyColumn, value: Expr) -> Expr {
     }
     let (ty, typmod) = (value.ty, value.typmod);
     let kind = ExprKind::Collate(Box::new(value), column.key_collation);
-    Expr { kind, ty, typmod, location: None }
+    Expr { collation: 0, kind, ty, typmod, location: None }
 }
 
 /// `make_partition_op_expr` with one value: `key op value`.
@@ -172,6 +178,7 @@ fn not_null_tests(columns: &[KeyColumn]) -> Vec<Expr> {
 /// `get_qual_for_hash`: the call of `satisfies_hash_partition` with the OID of the parent, the modulus, the remainder and the key columns.
 fn hash_qual(parent: u32, columns: &[KeyColumn], modulus: i32, remainder: i32) -> Vec<Expr> {
     let value = |value: Value, ty: u32| Expr {
+        collation: 0,
         kind: ExprKind::Const(value),
         ty,
         typmod: -1,
@@ -244,6 +251,7 @@ fn list_qual(
         let op = operator(column, EQUAL)?;
         let elements = elems.into_iter().map(|e| bound_constant(column, e)).collect();
         let array = Expr {
+            collation: 0,
             kind: ExprKind::Array { element: column.expr.ty, multidims: false, elements },
             ty: types::array_of(column.expr.ty),
             typmod: -1,

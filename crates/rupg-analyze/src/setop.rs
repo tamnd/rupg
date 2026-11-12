@@ -155,7 +155,13 @@ impl Analyzer<'_> {
         {
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             let var = Var { relation: left, attnum, levels_up: 0 };
-            let expr = Expr { kind: ExprKind::Var(var), ty, typmod, location: target.expr.place() };
+            let expr = Expr {
+                collation: 0,
+                kind: ExprKind::Var(var),
+                ty,
+                typmod,
+                location: target.expr.place(),
+            };
             targets.push(Target { name: target.name.clone(), expr, origin: None, junk: false });
         }
         // The names of the columns are visible to `ORDER BY`, which cannot add a junk column.
@@ -346,7 +352,7 @@ impl Analyzer<'_> {
             columns.push((ty, typmod));
             collations.push(collation);
             states.push(if collation == 0 { State::None } else { State::Implicit(collation, at) });
-            exprs.push(Expr { kind: ExprKind::CaseTest, ty, typmod, location: at });
+            exprs.push(Expr { collation: 0, kind: ExprKind::CaseTest, ty, typmod, location: at });
         }
         let work = if top { self.work_table(parent) } else { None };
         let op = SetOp {

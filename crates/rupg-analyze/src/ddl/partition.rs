@@ -533,6 +533,7 @@ impl Definer<'_, '_> {
             _ => self.an.env.evaluate(&expr)?,
         };
         Ok(Expr {
+            collation: 0,
             kind: ExprKind::Const(value),
             ty: column.ty,
             typmod: column.typmod,

@@ -64,6 +64,19 @@ EXPLAIN
 fields a@bgin.1:23:4:-1,b@bgin.2:25:-1:-1
 row 5,b
 SELECT 1
+> explain (costs off) select * from bgin where b < 'c'::name collate "default"
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on bgin
+row   Recheck Cond: (b < 'c'::name COLLATE "default")
+row   ->  Bitmap Index Scan on bgin_a
+row         Index Cond: (b < 'c'::name COLLATE "default")
+EXPLAIN
+> explain (costs off) select * from trg where upper(t) = 'ABC' collate "C"
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on trg
+row   Disabled: true
+row   Filter: (upper(t) = 'ABC'::text COLLATE "C")
+EXPLAIN
 > create table mac (a macaddr)
 CREATE TABLE
 > insert into mac values ('08:00:2b:01:02:05'), ('01:43:b5:79:eb:0f'), ('01:02:37:05:4f:36'), ('01:43:b5:79:eb:0f'), ('01:02:37:05:4f:36')

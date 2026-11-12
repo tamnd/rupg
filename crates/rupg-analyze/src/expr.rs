@@ -15,6 +15,8 @@ pub struct Expr {
     pub typmod: i32,
     /// The byte offset in the query text of the place that the expression starts, for the position of an error, or `None`.
     pub location: Option<usize>,
+    /// `constcollid` of a constant that the planner made from `COLLATE` of a constant, as `eval_const_expressions` sets it. It is 0 for any other expression, whose collation the tree gives.
+    pub collation: u32,
 }
 
 /// The kinds of expression.
@@ -794,12 +796,12 @@ pub enum SqlValue {
 impl Expr {
     /// An expression with no typmod and no location.
     pub fn new(kind: ExprKind, ty: u32) -> Expr {
-        Expr { kind, ty, typmod: -1, location: None }
+        Expr { kind, ty, typmod: -1, location: None, collation: 0 }
     }
 
     /// A constant.
     pub fn constant(value: Value, ty: u32, typmod: i32, location: Option<usize>) -> Expr {
-        Expr { kind: ExprKind::Const(value), ty, typmod, location }
+        Expr { kind: ExprKind::Const(value), ty, typmod, location, collation: 0 }
     }
 
     /// Sets the location.

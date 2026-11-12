@@ -544,6 +544,7 @@ impl Analyzer<'_> {
                             pulled: false,
                         };
                         Some(Item::Expr(Expr {
+                            collation: 0,
                             kind: ExprKind::SubLink(Box::new(sub)),
                             ty: expr.ty,
                             typmod: expr.typmod,
