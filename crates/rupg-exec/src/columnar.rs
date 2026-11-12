@@ -366,6 +366,83 @@ impl Ints<'_> {
     }
 }
 
+/// The `numeric` values of one side of [`Exec::decimal`] with no null: the scaled integers of a vector, or a constant.
+#[derive(Clone, Copy)]
+enum Dense<'a> {
+    Vector(&'a [i64]),
+    Const(i64),
+}
+
+impl<'a> Dense<'a> {
+    /// The side `ints` for `n` rows, or `None` when a row is null.
+    fn of(ints: Ints<'a>, n: usize) -> Option<Self> {
+        match ints {
+            Ints::Vector(v, None) => v.get(..n).map(Dense::Vector),
+            Ints::Const(Some(c)) => Some(Dense::Const(c)),
+            _ => None,
+        }
+    }
+}
+
+/// `+`, `-` or `*` (`op`) of two sides with no null, with the scales `mx` and `my`, in `i64` math. The flags of overflow of all the rows go into one flag, so the loop has no branch for each row. `None` when a row overflows, and then the caller declines to the row engine, as the `i128` math does.
+#[inline]
+fn dense_math(
+    x: Dense<'_>,
+    y: Dense<'_>,
+    mx: i64,
+    my: i64,
+    op: impl Fn(i64, i64) -> (i64, bool),
+) -> Option<Vec<i64>> {
+    let one = |a: i64, b: i64, bad: &mut bool| {
+        let (a, o1) = a.overflowing_mul(mx);
+        let (b, o2) = b.overflowing_mul(my);
+        let (v, o3) = op(a, b);
+        *bad |= o1 | o2 | o3;
+        v
+    };
+    let mut bad = false;
+    let out: Vec<i64> = match (x, y) {
+        (Dense::Vector(a), Dense::Vector(b)) => {
+            a.iter().zip(b).map(|(&a, &b)| one(a, b, &mut bad)).collect()
+        }
+        (Dense::Vector(a), Dense::Const(b)) => a.iter().map(|&a| one(a, b, &mut bad)).collect(),
+        (Dense::Const(a), Dense::Vector(b)) => b.iter().map(|&b| one(a, b, &mut bad)).collect(),
+        (Dense::Const(_), Dense::Const(_)) => return None,
+    };
+    (!bad).then_some(out)
+}
+
+/// A comparison `cmp` of two sides with no null, with the scales `mx` and `my`, as 0 and 1. The scaled values are `i64` when the scales fit, so most comparisons have no `i128`. `None` for two constants, for a vector with a scale that is not 1 and for a scale that does not fit, and then the caller compares with `i128`.
+#[inline]
+fn dense_compare(
+    x: Dense<'_>,
+    y: Dense<'_>,
+    mx: i128,
+    my: i128,
+    cmp: impl Fn(i64, i64) -> bool,
+) -> Option<Vec<i64>> {
+    let (Ok(mx), Ok(my)) = (i64::try_from(mx), i64::try_from(my)) else { return None };
+    // A vector needs the scale 1, and a constant takes its scale once.
+    let scaled = |side: Dense<'_>, m: i64| -> Option<Option<i64>> {
+        match side {
+            Dense::Const(c) => Some(Some(c.checked_mul(m)?)),
+            Dense::Vector(_) => (m == 1).then_some(None),
+        }
+    };
+    match (x, y, scaled(x, mx)?, scaled(y, my)?) {
+        (Dense::Vector(a), Dense::Vector(b), None, None) => {
+            Some(a.iter().zip(b).map(|(&a, &b)| i64::from(cmp(a, b))).collect())
+        }
+        (Dense::Vector(a), Dense::Const(_), None, Some(b)) => {
+            Some(a.iter().map(|&a| i64::from(cmp(a, b))).collect())
+        }
+        (Dense::Const(_), Dense::Vector(b), Some(a), None) => {
+            Some(b.iter().map(|&b| i64::from(cmp(a, b))).collect())
+        }
+        _ => None,
+    }
+}
+
 /// The values of an expression of the type `ty` for the rows of a selection, with the null rows. A `boolean` has the integers 0 and 1. A `numeric` of [`Data::Int`] is an integer.
 struct Col {
     data: Data,
@@ -1294,6 +1371,18 @@ impl<'q> Exec<'q> {
         if let Some(compare) = compare {
             let scale = sx.max(sy);
             let (mx, my) = (10i128.pow(u32::from(scale - sx)), 10i128.pow(u32::from(scale - sy)));
+            if let (Some(xs), Some(ys)) = (Dense::of(x, sel.len()), Dense::of(y, sel.len()))
+                && let Some(out) = match src {
+                    "numeric_eq" => dense_compare(xs, ys, mx, my, |a, b| a == b),
+                    "numeric_ne" => dense_compare(xs, ys, mx, my, |a, b| a != b),
+                    "numeric_lt" => dense_compare(xs, ys, mx, my, |a, b| a < b),
+                    "numeric_le" => dense_compare(xs, ys, mx, my, |a, b| a <= b),
+                    "numeric_gt" => dense_compare(xs, ys, mx, my, |a, b| a > b),
+                    _ => dense_compare(xs, ys, mx, my, |a, b| a >= b),
+                }
+            {
+                return Ok(Some(Col { data: Data::Int(out), nulls: None, ty: oid::BOOL }));
+            }
             let out: Vec<Option<bool>> = (0..sel.len())
                 .map(|i| Some(compare(i128::from(x.get(i)?) * mx, i128::from(y.get(i)?) * my)))
                 .collect();
@@ -1313,6 +1402,20 @@ impl<'q> Exec<'q> {
             "numeric_sub" => |a, b| a - b,
             _ => |a, b| a * b,
         };
+        if let (Some(xs), Some(ys)) = (Dense::of(x, sel.len()), Dense::of(y, sel.len()))
+            && let (Ok(mx), Ok(my)) = (i64::try_from(mx), i64::try_from(my))
+        {
+            let values = match src {
+                "numeric_add" => dense_math(xs, ys, mx, my, i64::overflowing_add),
+                "numeric_sub" => dense_math(xs, ys, mx, my, i64::overflowing_sub),
+                _ => dense_math(xs, ys, mx, my, i64::overflowing_mul),
+            };
+            return Ok(values.map(|values| Col {
+                data: Data::Dec(values, scale),
+                nulls: None,
+                ty: oid::NUMERIC,
+            }));
+        }
         let mut values = Vec::with_capacity(sel.len());
         let mut nulls = Vec::with_capacity(sel.len());
         for i in 0..sel.len() {
@@ -5952,6 +6055,19 @@ mod tests {
     use std::hash::BuildHasher;
 
     use super::*;
+
+    #[test]
+    fn the_decimal_math_with_no_null_checks_each_overflow() {
+        let a = [150_i64, -20, 7];
+        let x = Dense::Vector(&a);
+        let add = dense_math(x, Dense::Const(3), 1, 10, i64::overflowing_add);
+        assert_eq!(add, Some(vec![180, 10, 37]));
+        assert_eq!(dense_math(x, Dense::Const(i64::MAX), 1, 1, i64::overflowing_add), None);
+        assert_eq!(dense_math(x, Dense::Const(1), 1 << 62, 1, i64::overflowing_sub), None);
+        assert_eq!(dense_compare(x, Dense::Const(2), 1, 10, |a, b| a > b), Some(vec![1, 0, 0]));
+        assert_eq!(dense_compare(x, Dense::Const(2), 10, 1, |a, b| a > b), None);
+        assert_eq!(dense_compare(x, x, 1, 1, |a, b| a == b), Some(vec![1, 1, 1]));
+    }
 
     /// The column of numbers for [`packed_order`] from `number`, which gives the number of a key of a group.
     fn column_of(
