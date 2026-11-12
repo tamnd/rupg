@@ -4906,6 +4906,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/vector_semi_join.test")));
     }
 
+    /// A left join and a right join of two tables in a join of the vectors through unique keys give the rows of Postgres, with the key unique on either side, nulls in the keys, conditions of the null side in `ON` and conditions of the kept side in `WHERE`.
+    #[test]
+    fn vector_left_join() {
+        big_stack(|| script(include_str!("connection/vector_left_join.test")));
+    }
+
     /// `extract` and `date_part` of `timestamp` and `date` columns in a vector scan, and the comparisons of `float8`, give the values of Postgres, also for dates BC, infinite values, nulls and NaN.
     #[test]
     fn date_part_scan() {

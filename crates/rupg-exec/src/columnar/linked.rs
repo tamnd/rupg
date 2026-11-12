@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Query};
+use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Join, JoinKind, Query};
 use rupg_column::builder::{self, Values};
 use rupg_column::segment::Kind;
 use rupg_column::stored::{Stored, VECTOR};
@@ -37,6 +37,12 @@ pub(crate) fn run(
 ) -> Result<Option<Vec<Vec<Value>>>> {
     if !shape(query, session) {
         return Ok(None);
+    }
+    if let [FromItem::Join(join)] = query.from.as_slice() {
+        let Some((kept, selected, pos)) = left_join(query, join, session, cache)? else {
+            return Ok(None);
+        };
+        return finish(query, params, session, cache, want, kept, &selected, &pos, Vec::new());
     }
     let mut conds = Vec::new();
     if let Some(filter) = &query.filter {
@@ -96,6 +102,26 @@ pub(crate) fn run(
         })
         .map(|cond| (*cond).clone())
         .collect();
+    finish(query, params, session, cache, want, tree.root, &selected, &pos, residual)
+}
+
+/// The rows of the query from the places `pos` in [`Selected::places`] of the row of each table in each tuple of the join, with the root table `base`. The vectors test the conditions `residual` on the tuples. A place [`NONE`] is the row of nulls of the table on the null side of an outer join.
+///
+/// # Errors
+///
+/// The error of a condition or of an expression of the query.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    want: Option<usize>,
+    base: usize,
+    selected: &[Selected],
+    pos: &[Vec<u32>],
+    residual: Vec<Expr>,
+) -> Result<Option<Vec<Vec<Value>>>> {
     let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having).chain(&residual);
     if exprs.chain(&query.offset).chain(&query.limit).any(|e| unsupported(e, false)) {
         return Ok(None);
@@ -117,7 +143,7 @@ pub(crate) fn run(
         });
     }
     let Some(catalog) = session.catalog() else { return Ok(None) };
-    let rows = pos[tree.root].len();
+    let rows = pos[base].len();
     let mut columns = Vec::new();
     let mut stored = Vec::new();
     let mut types = Vec::new();
@@ -142,8 +168,11 @@ pub(crate) fn run(
         let Some((_, read)) = session.table_small_columns(relation.oid, &wanted)? else {
             return Ok(None);
         };
-        let at: Vec<usize> =
-            pos[index].iter().map(|&p| selected[index].places[p as usize]).collect();
+        let at: Vec<usize> = pos[index]
+            .iter()
+            .map(|&p| if p == NONE { usize::MAX } else { selected[index].places[p as usize] })
+            .collect();
+        let outer = pos[index].contains(&NONE);
         for (&(column, _), read) in wanted.iter().zip(&read) {
             let (values, nulls) = gather(read, &at)?;
             let column_stored =
@@ -151,14 +180,14 @@ pub(crate) fn run(
             stored.push(Arc::new(column_stored));
             let def = &relation.columns[column];
             types.push(def.ty);
-            columns.push(def.clone());
+            columns.push(rupg_analyze::Column { not_null: def.not_null && !outer, ..def.clone() });
             map[index][column] = i16::try_from(columns.len()).map_err(|_| {
                 Error::internal("a join reads more columns than a relation can have")
             })?;
         }
     }
     let mut virt = query.clone();
-    let mut root = query.relations[tree.root].clone();
+    let mut root = query.relations[base].clone();
     root.columns = columns;
     virt.relations = vec![root];
     virt.from = vec![FromItem::Relation(0)];
@@ -189,7 +218,7 @@ pub(crate) fn run(
     let tables = query
         .relations
         .iter()
-        .zip(&selected)
+        .zip(selected)
         .map(|(relation, selected)| (relation.oid, selected.places.len()))
         .collect();
     let source = Source::new(rows, stored, places, types, tables);
@@ -198,6 +227,100 @@ pub(crate) fn run(
     let out = super::run_on(&virt, params, session, cache, want, source);
     session.share_plan(&virt, None);
     out
+}
+
+/// The table that keeps all its rows, and the rows and the places of the rows of the tuples of a left join of two tables with groups, such as the join of TPC-H Q13, or `None` when the join does not have this form. `ON` must be a list of `=` of the integer columns of the two tables and of conditions of the null side, and `WHERE` a list of conditions of the kept side. One of the two sides must have a key that no two rows have.
+///
+/// When the key is unique on the null side, each row of the kept side has one row of the null side, or the row of nulls. When the key is unique on the kept side, each row of the null side that matches gives a tuple, and then each row of the kept side with no row of the null side gives a tuple with the row of nulls. As in Postgres, the conditions of the null side in `ON` and the conditions of `WHERE` filter the rows of their tables before the join.
+///
+/// # Errors
+///
+/// The error of a condition of a table.
+#[allow(clippy::type_complexity, clippy::cast_possible_truncation)]
+fn left_join(
+    query: &Query,
+    join: &Join,
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<(usize, Vec<Selected>, Vec<Vec<u32>>)>> {
+    let (FromItem::Relation(a), FromItem::Relation(b)) = (&join.left, &join.right) else {
+        return Ok(None);
+    };
+    let (kept, null) = match join.kind {
+        JoinKind::Left => (*a, *b),
+        JoinKind::Right => (*b, *a),
+        _ => return Ok(None),
+    };
+    if query.relations.len() != 2 || kept == null || join.natural || !join.using.is_empty() {
+        return Ok(None);
+    }
+    let mut own: [Vec<&Expr>; 2] = [Vec::new(), Vec::new()];
+    let mut keys: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    let mut filter = Vec::new();
+    if let Some(cond) = &query.filter {
+        scan::conjuncts(cond, &mut filter);
+    }
+    for cond in filter {
+        match reduce::relations_of(cond).as_slice() {
+            [r] if *r == kept => own[kept].push(cond),
+            _ => return Ok(None),
+        }
+    }
+    let mut on = Vec::new();
+    if let Some(cond) = &join.on {
+        scan::conjuncts(cond, &mut on);
+    }
+    for cond in on {
+        if let Some(sides) = reduce::equal_columns(cond) {
+            for (relation, column) in sides {
+                keys[relation].push(column);
+            }
+            continue;
+        }
+        match reduce::relations_of(cond).as_slice() {
+            [r] if *r == null => own[null].push(cond),
+            _ => return Ok(None),
+        }
+    }
+    if keys[kept].is_empty() {
+        return Ok(None);
+    }
+    let mut selected = Vec::with_capacity(2);
+    for (index, relation) in query.relations.iter().enumerate() {
+        match super::selected(relation, &own[index], &keys[index], session, cache, true)? {
+            Some(found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
+                selected.push(found);
+            }
+            _ => return Ok(None),
+        }
+    }
+    let key = |table: usize| -> Vec<&[Option<i64>]> {
+        selected[table].keys.iter().map(Vec::as_slice).collect()
+    };
+    let mut pos = vec![Vec::new(), Vec::new()];
+    if let Some(index) = Index::of(&key(null)) {
+        let probe = key(kept);
+        pos[kept] = (0..selected[kept].places.len() as u32).collect();
+        pos[null] = (0..selected[kept].places.len()).map(|row| index.find(&probe, row)).collect();
+    } else if let Some(index) = Index::of(&key(kept)) {
+        let probe = key(null);
+        let mut matched = vec![false; selected[kept].places.len()];
+        for row in 0..selected[null].places.len() {
+            let found = index.find(&probe, row);
+            if found != NONE {
+                matched[found as usize] = true;
+                pos[kept].push(found);
+                pos[null].push(row as u32);
+            }
+        }
+        for (row, _) in matched.iter().enumerate().filter(|(_, m)| !**m) {
+            pos[kept].push(row as u32);
+            pos[null].push(NONE);
+        }
+    } else {
+        return Ok(None);
+    }
+    Ok(Some((kept, selected, pos)))
 }
 
 /// The column `x` of the table `relation` and the integers of the subquery of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
@@ -264,9 +387,16 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
         || query.with_ties
         || query.has_target_srfs()
         || !query.barrier.is_empty()
-        || query.from.len() != query.relations.len()
-        || !query.from.iter().all(|item| matches!(item, FromItem::Relation(_)))
     {
+        return false;
+    }
+    let flat = query.from.len() == query.relations.len()
+        && query.from.iter().all(|item| matches!(item, FromItem::Relation(_)));
+    let outer = match query.from.as_slice() {
+        [FromItem::Join(join)] => matches!(join.kind, JoinKind::Left | JoinKind::Right),
+        _ => false,
+    };
+    if !flat && !outer {
         return false;
     }
     for item in &query.group {
@@ -282,6 +412,9 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
         scan::conjuncts(filter, &mut conds);
     }
     conds.retain(|cond| reduce::semi_join(cond, session).is_none());
+    if let [FromItem::Join(join)] = query.from.as_slice() {
+        conds.extend(&join.on);
+    }
     let exprs = query
         .targets
         .iter()
@@ -544,6 +677,17 @@ fn gather(stored: &Stored, at: &[usize]) -> Result<(Values, Option<Vec<bool>>)> 
     let mut nulls = Vec::with_capacity(at.len());
     let mut any = false;
     for &row in at {
+        // The row of nulls of an outer join.
+        if row == usize::MAX {
+            nulls.push(true);
+            any = true;
+            match &mut out {
+                Values::Ints(o) => o.push(0),
+                Values::Floats(o) => o.push(0.0),
+                Values::Codes(o) => o.push(0),
+            }
+            continue;
+        }
         let vector = row / VECTOR;
         let Some(slot) = decoded.get(vector) else {
             return Err(Error::internal("a row of a join is not in its table"));
