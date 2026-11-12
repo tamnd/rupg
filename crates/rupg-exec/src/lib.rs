@@ -961,6 +961,8 @@ struct Cache {
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
     /// The number of rows that the next run must give, when the query that reads it needs no more: a recursive query of `WITH`, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them, or a subquery that gives one row, which stops at the second row. The run takes it.
     want: Cell<Option<usize>>,
+    /// True when the order of the rows of the next run does not matter, as for the rows of a subquery of `ANY` or `ALL`, which the test reads as a set. The run takes it.
+    unordered: Cell<bool>,
     /// The number of bodies of functions in SQL that run around this run.
     depth: usize,
     /// The query whose rows go to the client as the run makes them, as `PortalRunSelect` sends them, from [`Plan::run_select`].
@@ -1438,6 +1440,7 @@ fn run_sub(
     if query.row_marks.is_empty() || query.write.is_some() {
         return run_query(query, params, session, cache, outer, exists);
     }
+    cache.unordered.set(false);
     let plan = Plan {
         query: Arc::new(query.clone()),
         written: Arc::clone(&cache.written),
@@ -1484,12 +1487,13 @@ fn run_query(
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
     let want = cache.want.take();
+    let unordered = cache.unordered.take();
     let filled = cache.tables.borrow().iter().any(|(q, _, _)| std::ptr::eq(*q, query));
     // A subquery that reads no column of a query outside it runs once, so the scan can run it too.
     if !exists
         && (outer.is_empty() || !correlated(query))
         && !filled
-        && let Some(rows) = columnar::run(query, params, session, cache, want)?
+        && let Some(rows) = columnar::run(query, params, session, cache, want, unordered)?
     {
         return Ok(rows);
     }
@@ -3513,6 +3517,10 @@ impl<'a> Eval<'a> {
                             SubLinkKind::Expr | SubLinkKind::RowCompare | SubLinkKind::Multi { .. }
                         ) {
                             self.cache.want.set(Some(2));
+                        }
+                        // The test of `ANY` or `ALL` reads the rows of the subquery as a set.
+                        if matches!(sub.kind, SubLinkKind::Any | SubLinkKind::All) {
+                            self.cache.unordered.set(true);
                         }
                         run_sub(query, self.params, self.session, self.cache, &frames, exists)
                     })?,
