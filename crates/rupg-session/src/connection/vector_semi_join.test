@@ -1,0 +1,61 @@
+> CREATE TABLE vc (ck int PRIMARY KEY, cname text, cbal numeric(12,2))
+CREATE TABLE
+> INSERT INTO vc SELECT i, 'cust' || i, (i * 37 % 1000) / 10.0 FROM generate_series(1, 300) i
+INSERT 0 300
+> INSERT INTO vc VALUES (301, NULL, NULL)
+INSERT 0 1
+> CREATE TABLE vo (ok bigint PRIMARY KEY, ock int, oprice numeric(12,2), odate date)
+CREATE TABLE
+> INSERT INTO vo SELECT i, 1 + i % 301, (i * 13 % 5000) / 100.0, date '1995-01-01' + i % 400 FROM generate_series(1, 3000) i
+INSERT 0 3000
+> INSERT INTO vo VALUES (3001, NULL, 1.00, NULL)
+INSERT 0 1
+> CREATE TABLE vl (lok bigint, lnum int, lqty numeric(12,2), lpk smallint)
+CREATE TABLE
+> INSERT INTO vl SELECT 1 + i % 3001, i % 7, (i * 11 % 50) + 1, (i % 20)::smallint FROM generate_series(1, 20000) i
+INSERT 0 20000
+> INSERT INTO vl VALUES (NULL, 1, 5, 1), (3001, 9, 40, NULL)
+INSERT 0 2
+> SELECT cname, ck, ok, odate, oprice, sum(lqty) FROM vc, vo, vl WHERE ok IN (SELECT lok FROM vl GROUP BY lok HAVING sum(lqty) > 200) AND ck = ock AND ok = lok GROUP BY cname, ck, ok, odate, oprice ORDER BY oprice DESC, odate, ok LIMIT 5
+fields cname@vc.2:25:-1:-1,ck@vc.1:23:4:-1,ok@vo.1:20:8:-1,odate@vo.4:1082:4:-1,oprice@vo.3:1700:-1:786438,sum:1700:-1:-1
+row cust117,117,1922,1995-11-19,49.86,205.00
+row cust166,166,767,1996-01-03,49.71,220.00
+row cust31,31,1535,1995-12-02,49.55,206.00
+row cust112,112,1917,1995-11-14,49.21,220.00
+row cust162,162,763,1995-12-30,49.19,212.00
+SELECT 5
+> SELECT count(*), sum(lqty) FROM vo, vl WHERE ok IN (SELECT lok FROM vl WHERE lqty > 49) AND ok = lok
+fields count:20:8:-1,sum:1700:-1:-1
+row 2680,77000.00
+SELECT 1
+> SELECT ock, count(*) FROM vo, vl WHERE ok = lok AND ock IN (SELECT ck FROM vc WHERE cbal > 90) GROUP BY ock ORDER BY ock LIMIT 5
+fields ock@vo.2:23:4:-1,count:20:8:-1
+row 25,67
+row 26,67
+row 27,67
+row 52,67
+row 53,67
+SELECT 5
+> SELECT ock, count(*) FROM vo, vl WHERE ok = lok AND ok IN (SELECT NULL::bigint UNION ALL SELECT 5) GROUP BY ock
+fields ock@vo.2:23:4:-1,count:20:8:-1
+row 6,7
+SELECT 1
+> SELECT lpk, count(*) FROM vo, vl WHERE ok = lok AND lpk IN (SELECT lpk FROM vl WHERE lnum = 3) AND ok IN (SELECT ok FROM vo WHERE oprice > 40) GROUP BY lpk ORDER BY lpk LIMIT 5
+fields lpk@vl.4:21:2:-1,count:20:8:-1
+row 0,183
+row 1,184
+row 2,185
+row 3,184
+row 4,182
+SELECT 5
+> SELECT ock, sum(lqty) FROM vo, vl WHERE ok = lok AND ok IN (SELECT lnum FROM vl WHERE lnum > 4) GROUP BY ock ORDER BY ock
+fields ock@vo.2:23:4:-1,sum:1700:-1:-1
+row 6,196.00
+row 7,173.00
+row 10,204.00
+SELECT 3
+> SELECT ock, count(*) FROM vo, vl WHERE ok = lok AND ok IN (SELECT lok FROM vl WHERE lqty > 1000) GROUP BY ock
+fields ock@vo.2:23:4:-1,count:20:8:-1
+SELECT 0
+> DROP TABLE vc, vo, vl
+DROP TABLE

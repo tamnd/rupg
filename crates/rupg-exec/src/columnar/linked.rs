@@ -15,7 +15,7 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxMap, Selected, Source, decode, kind_of, numeric_kind, plain,
+    Decoded, DecodedData, FxMap, FxSet, Selected, Source, decode, kind_of, numeric_kind, plain,
     unsupported,
 };
 use crate::{Cache, reduce, scan};
@@ -35,7 +35,7 @@ pub(crate) fn run(
     cache: &Cache,
     want: Option<usize>,
 ) -> Result<Option<Vec<Vec<Value>>>> {
-    if !shape(query) {
+    if !shape(query, session) {
         return Ok(None);
     }
     let mut conds = Vec::new();
@@ -49,9 +49,34 @@ pub(crate) fn run(
     let width = query.relations.len();
     let mut selected = Vec::with_capacity(width);
     for (index, relation) in query.relations.iter().enumerate() {
-        match super::selected(relation, &plan.own[index], &plan.keys[index], session, cache, true)?
-        {
-            Some(found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
+        // A condition `x IN (SELECT ...)` of the table: the subquery runs one time, and its integers then select the rows that pass the other conditions.
+        let (semi, own): (Vec<&Expr>, Vec<&Expr>) =
+            plan.own[index].iter().copied().partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
+        let mut keys = plan.keys[index].clone();
+        let mut sets = Vec::with_capacity(semi.len());
+        for cond in semi {
+            let Some((column, set)) = semi_set(cond, index, params, session, cache)? else {
+                return Ok(None);
+            };
+            sets.push((keys.len(), set));
+            keys.push(column);
+        }
+        match super::selected(relation, &own, &keys, session, cache, true)? {
+            Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
+                if !sets.is_empty() {
+                    let keep: Vec<bool> = (0..found.places.len())
+                        .map(|row| {
+                            sets.iter().all(|(at, set)| {
+                                found.keys[*at][row].is_some_and(|key| set.contains(&key))
+                            })
+                        })
+                        .collect();
+                    found.keys.truncate(plan.keys[index].len());
+                    retain(&mut found.places, &keep);
+                    for key in &mut found.keys {
+                        retain(key, &keep);
+                    }
+                }
                 selected.push(found);
             }
             _ => return Ok(None),
@@ -64,7 +89,7 @@ pub(crate) fn run(
         .iter()
         .filter(|cond| {
             let relations = reduce::relations_of(cond);
-            if relations.len() == 1 {
+            if relations.len() == 1 || matches!(cond.kind, ExprKind::SubLink(_)) {
                 return false;
             }
             !reduce::equal_columns(cond).is_some_and(|[(a, _), (b, _)]| tree.joins(a, b))
@@ -175,8 +200,59 @@ pub(crate) fn run(
     out
 }
 
-/// True when the query has groups over a list of relations in `FROM`, with no subquery, no set operation, no window and no write, and reads only the columns of its own relations.
-fn shape(query: &Query) -> bool {
+/// The column `x` of the table `relation` and the integers of the subquery of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
+///
+/// # Errors
+///
+/// The error of the subquery.
+fn semi_set(
+    cond: &Expr,
+    relation: usize,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<(usize, FxSet<i64>)>> {
+    const INTEGERS: [u32; 3] = [oid::INT2, oid::INT4, oid::INT8];
+    let ExprKind::SubLink(sub) = &cond.kind else { return Ok(None) };
+    let Some(ExprKind::Func(f)) = sub.test.as_ref().map(|t| &t.kind) else { return Ok(None) };
+    let column = f.args.iter().find_map(|arg| match &arg.kind {
+        ExprKind::Var(var)
+            if var.levels_up == 0 && var.relation == relation && INTEGERS.contains(&arg.ty) =>
+        {
+            usize::try_from(var.attnum - 1).ok()
+        }
+        _ => None,
+    });
+    let Some(column) = column else { return Ok(None) };
+    match sub.query.targets.iter().find(|t| !t.junk) {
+        Some(target) if INTEGERS.contains(&target.expr.ty) => {}
+        _ => return Ok(None),
+    }
+    let rows = crate::run_sub(&sub.query, params, session, cache, &[], false)?;
+    let mut set = FxSet::default();
+    for row in &rows {
+        match row.first() {
+            Some(Value::Int2(v)) => set.insert(i64::from(*v)),
+            Some(Value::Int4(v)) => set.insert(i64::from(*v)),
+            Some(Value::Int8(v)) => set.insert(*v),
+            Some(Value::Null) => false,
+            _ => return Ok(None),
+        };
+    }
+    Ok(Some((column, set)))
+}
+
+/// Keeps the items of `items` whose place in `keep` is true.
+fn retain<T>(items: &mut Vec<T>, keep: &[bool]) {
+    let mut at = 0;
+    items.retain(|_| {
+        at += 1;
+        keep[at - 1]
+    });
+}
+
+/// True when the query has groups over a list of relations in `FROM`, with no set operation, no window and no write, and reads only the columns of its own relations. The only subqueries are the conditions `x IN (SELECT ...)` of `WHERE` that [`reduce::semi_join`] tests on the rows of one table.
+fn shape(query: &Query, session: &dyn Session) -> bool {
     if query.relations.len() < 2
         || !query.grouped
         || query.set_op.is_some()
@@ -201,11 +277,16 @@ fn shape(query: &Query) -> bool {
             return false;
         }
     }
+    let mut conds = Vec::new();
+    if let Some(filter) = &query.filter {
+        scan::conjuncts(filter, &mut conds);
+    }
+    conds.retain(|cond| reduce::semi_join(cond, session).is_none());
     let exprs = query
         .targets
         .iter()
         .map(|t| &t.expr)
-        .chain(&query.filter)
+        .chain(conds)
         .chain(&query.having)
         .chain(&query.offset)
         .chain(&query.limit);
