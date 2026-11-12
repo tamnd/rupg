@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Join, JoinKind, Query};
+use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, Join, JoinKind, Query, SubLinkKind};
 use rupg_column::builder::{self, Values};
 use rupg_column::segment::Kind;
 use rupg_column::stored::{Stored, VECTOR};
@@ -509,7 +509,13 @@ fn link(cond: &Expr) -> bool {
         }
         _ => None,
     });
-    exists && other.is_none() && !reduce::relations_of(cond).is_empty() && !unsupported(cond, true)
+    // A condition `x IN (SELECT ...)` of one table is a set of the keys of the table, as [`semi_set`] gives it.
+    let semi = matches!(&cond.kind, ExprKind::SubLink(sub) if sub.kind == SubLinkKind::Any);
+    exists
+        && !semi
+        && other.is_none()
+        && !reduce::relations_of(cond).is_empty()
+        && !unsupported(cond, true)
 }
 
 /// The rows of a table by the value of a key that no two rows have.

@@ -14,7 +14,7 @@ use crate::columnar::{Selected, int_of};
 use crate::scan::{NONE, Narrow, Tables};
 
 /// The `=` functions of two integers or two dates whose values the reduction compares as integers: `int2eq`, `int4eq`, `int8eq`, `date_eq`, `int24eq`, `int42eq`, `int48eq`, `int84eq`, `int28eq` and `int82eq`.
-const EQUALS: [u32; 10] = [63, 65, 467, 1086, 158, 159, 852, 474, 1850, 1856];
+pub(crate) const EQUALS: [u32; 10] = [63, 65, 467, 1086, 158, 159, 852, 474, 1850, 1856];
 
 /// The non-leakproof built-in comparisons that cannot fail.
 const COMPARISONS: [&str; 18] = [
