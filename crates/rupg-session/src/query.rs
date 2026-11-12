@@ -1509,6 +1509,19 @@ impl rupg_func::Session for Reader<'_> {
         Some(&self.catalog)
     }
 
+    fn vector_index(
+        &self,
+        index: u32,
+        metric: rupg_ann::Metric,
+    ) -> Option<Arc<std::sync::Mutex<rupg_ann::index::Index>>> {
+        let (_, store) = self.activity?;
+        let relation = self.catalog.relation(index)?;
+        let table = relation.index.as_ref().filter(|i| i.ready)?.table;
+        let kind = crate::connection::vector_kind(&self.catalog, relation)?;
+        let database = database_oid(store, self.database);
+        Some(store.heap().vector_index((database, table), (index, relation.file), kind, metric))
+    }
+
     fn system_catalog(&self) -> Option<&Catalog> {
         Some(self.system.as_deref().unwrap_or(&self.catalog))
     }

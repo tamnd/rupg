@@ -447,6 +447,8 @@ pub struct AnnScan {
     pub relation: usize,
     /// The OID of the table of the relation.
     pub table: u32,
+    /// The OID of the index.
+    pub index: u32,
     pub method: AnnMethod,
     /// The key of the index, with the columns of the table as columns of the relation.
     pub key: Expr,

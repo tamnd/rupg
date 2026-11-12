@@ -5,6 +5,7 @@
 //! - [`graph`]: the single-layer proximity graph of the Vamana method of DiskANN, which `USING hnsw` maps to, with the deleted marks and the consolidation of FreshDiskANN, and the filtered traversal of ACORN-1.
 //! - [`ivf`]: the partitioned layout of `USING ivfflat`, whose lists come from the k-means of [`kmeans`].
 //! - [`rabitq`]: the RaBitQ code of each vector, one bit for each dimension, with a distance estimate that has an error bound, and the rerank with the full vectors.
+//! - [`index`]: the index over the versions of the rows of a table, which the scans of the sessions share, with the layout at the first search and the removal of the versions that `VACUUM` removes.
 //! - [`filter`]: the choice between a pre-filter scan, a filtered traversal and a post-filter search from the selectivity of the filter (spec/13 section 13.4.4).
 //!
 //! This crate first ships in milestone M6. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
@@ -13,6 +14,7 @@
 
 pub mod filter;
 pub mod graph;
+pub mod index;
 pub mod ivf;
 pub mod kmeans;
 pub mod metric;

@@ -565,6 +565,15 @@ pub trait Session {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The index of `rupg-ann` by `metric` that the scans by the index `index` of `hnsw` or `ivfflat` share, with the versions of the rows of its table that the scans added, or `None` when the session shares no index, so that a scan reads each row of the table.
+    fn vector_index(
+        &self,
+        index: u32,
+        metric: rupg_ann::Metric,
+    ) -> Option<Arc<std::sync::Mutex<rupg_ann::index::Index>>> {
+        let _ = (index, metric);
+        None
+    }
     /// The catalog whose objects the scans of the system catalogs such as `pg_class` see. It is [`Session::catalog`], but the query of `CREATE TABLE AS` does not see the rows of its new table, as its snapshot has the command ID from before `intorel_startup` made the table.
     fn system_catalog(&self) -> Option<&rupg_catalog::Catalog> {
         self.catalog()

@@ -331,6 +331,15 @@ impl Tables {
         }
     }
 
+    /// The ID of the version of a row of a relation, or `None` for a row with no version.
+    pub(crate) fn version(&self, relation: usize, row: usize) -> Option<u64> {
+        let width = self.width(relation);
+        match self.trailer(relation, row, width) {
+            Some(Value::Int8(id)) => Some(id.cast_unsigned()),
+            _ => None,
+        }
+    }
+
     /// The heap page of a row of a relation, from the ID of its version, or `None` for a row with no version.
     pub(crate) fn page(&self, relation: usize, row: usize) -> Option<i64> {
         let width = self.width(relation);

@@ -180,9 +180,13 @@ impl Graph {
 
     /// Adds the node `node` of `vectors` to the graph, as an insert of a row does.
     pub fn insert(&mut self, vectors: &Vectors, node: u32) {
+        self.insert_with(vectors, node, &mut Visited::default());
+    }
+
+    /// [`Graph::insert`] with the marks of `visited`, which the inserts of many nodes share.
+    pub fn insert_with(&mut self, vectors: &Vectors, node: u32, visited: &mut Visited) {
         self.grow(vectors.len().max(node as usize + 1));
-        let mut visited = Visited::default();
-        self.add(vectors, node, self.params.alpha, &mut visited);
+        self.add(vectors, node, self.params.alpha, visited);
     }
 
     /// Adds `node` with the robust prune of `alpha`.

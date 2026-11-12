@@ -603,6 +603,7 @@ pub fn ann_scans(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Vec<r
         out.push(rupg_plan::AnnScan {
             relation: *relation,
             table,
+            index: *index,
             method: ann.method,
             key: key.clone(),
             distance: distance.clone(),
