@@ -22,9 +22,15 @@ pub(super) const BTREE_AM: u32 = 403;
 /// `HASH_AM_OID`, the OID of the access method `hash`.
 const HASH_AM: u32 = 405;
 
-/// True for an index of an access method whose scans the planner makes: `btree`, `hash`, `gist`, `spgist`, `brin` and `gin`.
+/// True for an index of an access method whose scans the planner makes: `btree`, `hash`, `gist`, `spgist`, `brin`, `gin`, and `hnsw` and `ivfflat` of pgvector.
 fn scannable(index: &Index) -> bool {
     matches!(index.method, BTREE_AM | HASH_AM | GIST_AM | SPGIST_AM | BRIN_AM | GIN_AM)
+        || index.ann.is_some()
+}
+
+/// `amgetbitmap`: the access method gives a bitmap, so a bitmap scan can use it. `hnsw` and `ivfflat` only give the rows one by one.
+fn getbitmap(index: &Index) -> bool {
+    index.ann.is_none()
 }
 
 /// `GIST_AM_OID`.
@@ -372,6 +378,10 @@ fn index_paths<'q>(
         let forward = order(level, table.r, index, &quals, false, stats);
         let mut useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         let (order_by, ordered) = order_by(table.r, index, stats);
+        // `hnswcostestimate` and `ivfflatcostestimate`: with no ordering operator the scan costs infinity, so the index has no path.
+        if index.ann.is_some() && ordered.is_empty() {
+            continue;
+        }
         if !ordered.is_empty() {
             useful = ordered;
         }
@@ -385,7 +395,7 @@ fn index_paths<'q>(
         // `useful_predicate`: the conditions imply the predicate of a partial index, so its scan is a path also with no clause.
         if !clauses.is_empty() || !useful.is_empty() || only || !index.predicate.is_empty() {
             // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
-            if useful.is_empty() || costs.2 < 1.0 {
+            if getbitmap(index) && (useful.is_empty() || costs.2 < 1.0) {
                 let path = BitmapIndex::new(table, index, clauses.clone(), costs, stats);
                 bitmaps.push(Bitmap::Index(path));
             }
@@ -426,7 +436,7 @@ fn index_paths<'q>(
             ));
         }
         // `skip_nonnative_saop`: with `ANY` the index gives one more bitmap.
-        if index.method != BTREE_AM {
+        if index.method != BTREE_AM && getbitmap(index) {
             let with_any = bitmap_clauses(table.r, index, &restrict(index, table.r, &all, stats));
             if with_any.len() > clauses.len() {
                 let costs = index_cost(table, index, &with_any, stats);
@@ -630,6 +640,9 @@ pub(super) fn param_paths<'q>(
         let forward = order(level, r, index, &quals, false, stats);
         let mut useful = stats.useful(&BTreeSet::from([r]), &forward);
         let (order_by, ordered) = order_by(r, index, stats);
+        if index.ann.is_some() && ordered.is_empty() {
+            continue;
+        }
         if !ordered.is_empty() {
             useful = ordered;
         }
@@ -653,7 +666,7 @@ pub(super) fn param_paths<'q>(
             let costs = ordered_cost(&t, index, &clauses, &order_by, stats);
             let indexed = indexed(&t, base, &clauses);
             let enforced = t.quals[base..].to_vec();
-            if useful.is_empty() || costs.2 < 1.0 {
+            if getbitmap(index) && (useful.is_empty() || costs.2 < 1.0) {
                 let path = BitmapIndex::new(&t, index, clauses.clone(), costs, stats);
                 bitjoin.push(Bitmap::Index(path));
             }
@@ -856,7 +869,7 @@ fn arm_paths<'q>(
     let others: Vec<&Expr> = other.iter().map(|s| &*s.expr).collect();
     let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
     for index in indexes.iter().rev() {
-        if !scannable(index) {
+        if !scannable(index) || !getbitmap(index) {
             continue;
         }
         // `predOK`: the conditions of the table make the index usable, so its predicate is not useful.
@@ -1548,11 +1561,11 @@ fn order(
     out
 }
 
-/// `match_pathkeys_to_index`: the ordering operators of the index that give the order of the first keys of `query_pathkeys`, and the order that the scan gives with them. Only `gist` and `spgist` have `amcanorderbyop`. A key must be ascending with the nulls last, and an expression of the key that reads only the table must be an ordering operator of a key column and a value, as `match_clause_to_ordering_op` finds it.
+/// `match_pathkeys_to_index`: the ordering operators of the index that give the order of the first keys of `query_pathkeys`, and the order that the scan gives with them. Only `gist`, `spgist`, `hnsw` and `ivfflat` have `amcanorderbyop`. A key must be ascending with the nulls last, and an expression of the key that reads only the table must be an ordering operator of a key column and a value, as `match_clause_to_ordering_op` finds it.
 fn order_by(r: usize, index: &Index, stats: &Stats) -> (Vec<Expr>, Vec<OrderKey>) {
     let mut exprs = Vec::new();
     let mut keys = Vec::new();
-    if !matches!(index.method, GIST_AM | SPGIST_AM) {
+    if !matches!(index.method, GIST_AM | SPGIST_AM) && index.ann.is_none() {
         return (exprs, keys);
     }
     for (expr, desc, nulls_first, collation) in &stats.query {
@@ -2091,6 +2104,9 @@ fn ordered_cost(
     order_by: &[Expr],
     stats: &Stats,
 ) -> (f64, f64, f64) {
+    if let Some(ann) = index.ann {
+        return ann_cost(table, index, ann.method, (clauses, order_by), stats);
+    }
     match index.method {
         HASH_AM => hash_cost(table, index, clauses, stats),
         GIST_AM => tree_cost(table, index, (clauses, order_by), stats, 0.0),
@@ -2178,14 +2194,65 @@ fn hash_cost(
     (startup, total, selectivity)
 }
 
+/// `hnswcostestimate` and `ivfflatcostestimate` of pgvector: `genericcostestimate`, and the start cost is the part of the total cost that the scan spends before its first row. For `hnsw` the part is the rows of the graph that the search visits, from `m` and `hnsw.ef_search`, and for `ivfflat` the lists that `ivfflat.probes` visits, with half the pages read in order. When the pages of the part are more than the pages of the table, they cost as pages read in order, and the pages beyond the table cost nothing.
+fn ann_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    method: rupg_plan::AnnMethod,
+    order: (&[Clause<'_>], &[Expr]),
+    stats: &Stats,
+) -> (f64, f64, f64) {
+    let ((_, mut total, selectivity, _), pages) = generic_costs(table, index, order, stats, 0.0);
+    let random = cost::random_page() - cost::SEQ_PAGE;
+    let enable = crate::enable();
+    let tuples = index_rows(table, index);
+    let (ratio, ordered) = match method {
+        rupg_plan::AnnMethod::Hnsw { m } => {
+            let ratio = if tuples > 0.0 {
+                let m = f64::from(m);
+                let ef_search = f64::from(enable.hnsw_ef_search);
+                let entry_level = (tuples.ln() / m.ln()).trunc();
+                let layer0_max = 2.0 * m * ef_search;
+                let layer0_selectivity = 0.55 * tuples.ln() / (m.ln() * (1.0 + ef_search.ln()));
+                ((entry_level * m + layer0_max * layer0_selectivity) / tuples).min(1.0)
+            } else {
+                1.0
+            };
+            (ratio, 1.0)
+        }
+        rupg_plan::AnnMethod::Ivfflat { lists } => {
+            total -= 0.5 * pages * random;
+            ((f64::from(enable.ivfflat_probes) / f64::from(lists.max(1))).min(1.0), 0.5)
+        }
+    };
+    let mut startup = total * ratio;
+    let startup_pages = pages * ratio;
+    if startup_pages > table.pages && ratio < 0.5 {
+        startup -= ordered * startup_pages * random;
+        startup -= (startup_pages - table.pages) * cost::SEQ_PAGE;
+    }
+    (startup, total, selectivity)
+}
+
 /// `genericcostestimate` with `non_leaf` pages that are not leaf pages: the start cost, the total cost, the selectivity and `num_sa_scans`, the scans of the index for the items of the `ANY` clauses. The rows of the index that the scan reads are the rows of the table that the clauses and the parts of the predicate that they do not imply select, shared by the scans.
 fn generic_cost(
+    table: &Table<'_, '_>,
+    index: &Index,
+    order: (&[Clause<'_>], &[Expr]),
+    stats: &Stats,
+    non_leaf: f64,
+) -> (f64, f64, f64, f64) {
+    generic_costs(table, index, order, stats, non_leaf).0
+}
+
+/// [`generic_cost`], and `numIndexPages`: the pages of the index that each scan reads.
+fn generic_costs(
     table: &Table<'_, '_>,
     index: &Index,
     (clauses, order_by): (&[Clause<'_>], &[Expr]),
     stats: &Stats,
     non_leaf: f64,
-) -> (f64, f64, f64, f64) {
+) -> ((f64, f64, f64, f64), f64) {
     let rows = index_rows(table, index);
     let quals: Vec<&Expr> = clauses.iter().map(|c| &*c.expr).collect();
     let given = and_of(&quals);
@@ -2220,7 +2287,7 @@ fn generic_cost(
         others.chain(ordered).map(|o| stats.qual_costs([o])).map(|(s, p)| s + p).sum();
     let qual_op = cost::CPU_OPERATOR * (clauses.len() + order_by.len()) as f64;
     total += qual_arg + index_tuples * scans * (cost::CPU_INDEX_TUPLE + qual_op);
-    (qual_arg, total, selectivity, scans)
+    ((qual_arg, total, selectivity, scans), index_pages)
 }
 
 /// `btcostestimate` and `genericcostestimate`: the start cost and the total cost of the scan of the index, and the selectivity of its clauses. The rows of the index that the scan reads come from the clauses of the first columns: the clauses of each column up to the first column with no `=` clause, and the clauses of that column. A unique index with `=` on each key column reads one row. Each item of `ANY` is one more descent of the tree.

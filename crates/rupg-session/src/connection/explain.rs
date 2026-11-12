@@ -348,6 +348,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     predicate,
                     width,
                     pages_per_range: pages_per_range(rel),
+                    ann: ann_index(catalog, rel),
                 })
             })
             .collect();
@@ -459,6 +460,8 @@ impl rupg_opt::Members for Members<'_, '_> {
             parallel_append: on(guc::known!("enable_parallel_append")),
             parallel_hash: on(guc::known!("enable_parallel_hash")),
             gathermerge: on(guc::known!("enable_gathermerge")),
+            hnsw_ef_search: count(guc::known!("hnsw.ef_search"), 40),
+            ivfflat_probes: count(guc::known!("ivfflat.probes"), 1),
         }
     }
 }
@@ -473,6 +476,41 @@ pub(super) fn pages_per_range(index: &rupg_catalog::Relation) -> u32 {
         (name == "pages_per_range").then(|| value.parse().ok()).flatten()
     });
     option.unwrap_or(128)
+}
+
+/// The facts of an index of `hnsw` or `ivfflat`, by the symbol of the handler of its access method: `m` or `lists` of its options, and `HNSW_NORM_PROC` or `IVFFLAT_NORM_PROC` of the operator class of its key.
+pub(super) fn ann_index(
+    catalog: &rupg_catalog::Catalog,
+    index: &rupg_catalog::Relation,
+) -> Option<rupg_opt::Ann> {
+    let info = index.index.as_ref()?;
+    let am = catalog.access_method(info.method)?;
+    let option = |name: &str, default: i32| {
+        let found = index.options.iter().find_map(|text| {
+            let (found, value) = text.split_once('=')?;
+            (found == name).then(|| value.trim().parse().ok()).flatten()
+        });
+        found.unwrap_or(default)
+    };
+    let method = match catalog.function(am.handler)?.src.as_str() {
+        "hnswhandler" => rupg_plan::AnnMethod::Hnsw { m: option("m", 16) },
+        "ivfflathandler" => rupg_plan::AnnMethod::Ivfflat { lists: option("lists", 100) },
+        _ => return None,
+    };
+    let norm = info
+        .classes
+        .first()
+        .and_then(|&oid| catalog.opclass(oid))
+        .and_then(|class| {
+            catalog.amprocs().find(|p| {
+                p.family == class.family
+                    && p.number == 2
+                    && p.left == class.intype
+                    && p.right == class.intype
+            })
+        })
+        .map_or(0, |p| p.function);
+    Some(rupg_opt::Ann { method, norm })
 }
 
 /// `BRIN_AM_OID`.
@@ -519,6 +557,7 @@ fn catalog_indexes(table: u32) -> Vec<Index> {
                 predicate: Vec::new(),
                 width,
                 pages_per_range: 0,
+                ann: None,
             }
         })
         .collect()
@@ -545,7 +584,9 @@ pub(crate) fn planned(
     if members.error.take().is_some() {
         return None;
     }
-    Some((rupg_opt::join_order(&tree, &query, &members), rupg_opt::hash_tables(&tree, &query)))
+    let mut tables = rupg_opt::hash_tables(&tree, &query);
+    tables.ann = rupg_opt::ann_scans(&tree, &query, &members);
+    Some((rupg_opt::join_order(&tree, &query, &members), tables))
 }
 
 /// The options of `EXPLAIN`, as `ParseExplainOptionList` reads them.

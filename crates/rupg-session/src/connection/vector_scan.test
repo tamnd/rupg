@@ -1,0 +1,126 @@
+> create extension vector
+CREATE EXTENSION
+> create table t (val vector(3))
+CREATE TABLE
+> insert into t (val) values ('[0,0,0]'), ('[1,2,3]'), ('[1,1,1]'), (null)
+INSERT 0 4
+> create index on t using hnsw (val vector_l2_ops)
+CREATE INDEX
+> set enable_seqscan = off
+SET
+> explain (costs off) select * from t order by val <-> '[3,3,3]'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using t_val_idx on t
+row   Order By: (val <-> '[3,3,3]'::vector)
+EXPLAIN
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+row [1,1,1]
+row [0,0,0]
+SELECT 3
+> select count(*) from (select * from t order by val <-> (select null::vector)) t2
+fields count:20:8:-1
+row 3
+SELECT 1
+> explain (costs off) select * from t where val = '[1,1,1]'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+row   Disabled: true
+row   Filter: (val = '[1,1,1]'::vector)
+EXPLAIN
+> set hnsw.ef_search = 1
+SET
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+SELECT 1
+> set hnsw.iterative_scan = relaxed_order
+SET
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+row [1,1,1]
+row [0,0,0]
+SELECT 3
+> reset hnsw.iterative_scan
+RESET
+> reset hnsw.ef_search
+RESET
+> drop table t
+DROP TABLE
+> create table t (val vector(3))
+CREATE TABLE
+> insert into t (val) values ('[0,0,0]'), ('[1,2,3]'), ('[1,1,1]'), (null)
+INSERT 0 4
+> create index on t using hnsw (val vector_cosine_ops)
+CREATE INDEX
+> select * from t order by val <=> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,1,1]
+row [1,2,3]
+SELECT 2
+> drop table t
+DROP TABLE
+> create table t (val vector(3))
+CREATE TABLE
+> insert into t (val) values ('[0,0,0]'), ('[1,2,3]'), ('[1,1,1]')
+INSERT 0 3
+> create index on t using ivfflat (val vector_l2_ops) with (lists = 3)
+CREATE INDEX
+> explain (costs off) select * from t order by val <-> '[3,3,3]'
+fields QUERY PLAN:25:-1:-1
+row Index Scan using t_val_idx on t
+row   Order By: (val <-> '[3,3,3]'::vector)
+EXPLAIN
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+SELECT 1
+> set ivfflat.probes = 2
+SET
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+row [1,1,1]
+SELECT 2
+> set ivfflat.iterative_scan = relaxed_order
+SET
+> select * from t order by val <-> '[3,3,3]'
+fields val@t.1:16385:-1:3
+row [1,2,3]
+row [1,1,1]
+row [0,0,0]
+SELECT 3
+> reset ivfflat.iterative_scan
+RESET
+> reset ivfflat.probes
+RESET
+> truncate t
+NOTICE 00000 ivfflat index created with little data
+TRUNCATE TABLE
+> create index on t using ivfflat (val vector_cosine_ops) with (lists = 1)
+NOTICE 00000 ivfflat index created with little data
+CREATE INDEX
+> insert into t (val) values ('[0,0,0]'), ('[1,2,3]'), ('[1,1,1]')
+INSERT 0 3
+> reindex table t
+REINDEX
+> drop table t
+DROP TABLE
+> create table t (val sparsevec(1001))
+CREATE TABLE
+> insert into t (val) values (array_fill(1, array[1001])::vector::sparsevec)
+INSERT 0 1
+> create index on t using hnsw (val sparsevec_l2_ops)
+ERROR XX000 sparsevec cannot have more than 1000 non-zero elements for hnsw index
+> truncate t
+TRUNCATE TABLE
+> create index on t using hnsw (val sparsevec_l2_ops)
+CREATE INDEX
+> insert into t (val) values (array_fill(1, array[1001])::vector::sparsevec)
+ERROR XX000 sparsevec cannot have more than 1000 non-zero elements for hnsw index
+> insert into t (val) values ('{1:1,1001:2}/1001')
+INSERT 0 1
+> drop table t
+DROP TABLE

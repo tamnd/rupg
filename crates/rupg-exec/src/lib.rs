@@ -1621,6 +1621,19 @@ fn run_query(
         };
         let planned = planned.as_deref().map(|p| (p, session));
         let tuples = scan::tuples(query, tables, test, &mut source, planned)?;
+        // `hnswgettuple` and `ivfflatgettuple`: a scan by an index of pgvector gives only the rows that its search reaches.
+        let ann = (!query.sort.is_empty()
+            && query.relations.iter().any(|r| ann::indexed(session, r.oid)))
+        .then(|| session.hash_tables(query))
+        .flatten()
+        .filter(|t| !t.ann.is_empty());
+        let tuples = match ann {
+            Some(planned) => {
+                let mut eval = |tuple: &[usize], expr: &Expr| eval.at(tuple).eval(expr);
+                ann::keep(query, tables, &planned.ann, session, &mut eval, tuples)?
+            }
+            None => tuples,
+        };
         // `IndexOnlyNext` refuses the first row of an index only scan whose ordering operator has a lossy distance.
         if let Some((planned, _)) = planned
             && planned.iter().any(|s| s.lossy && tuples.iter().any(|t| t[s.relation] != scan::NONE))
@@ -4851,6 +4864,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 
 mod agg;
 mod analyze;
+mod ann;
 mod columnar;
 mod cursor;
 pub use cursor::{Locking, limit_values};
