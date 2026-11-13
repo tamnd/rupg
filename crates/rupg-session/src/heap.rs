@@ -2711,7 +2711,7 @@ impl Heap {
         self.columns_of(relation, view, wanted, COLUMN_ROWS)
     }
 
-    /// The columns of [`Heap::columns`] for a table of `least` or more rows. A table of fewer than [`COLUMN_ROWS`] rows makes its columns from the values of its versions and does not freeze, so that a join through the vectors can read a small table, as a dimension table, with no change to the versions.
+    /// The columns of [`Heap::columns`] for a table of `least` or more rows. A table of fewer than [`COLUMN_ROWS`] rows makes its columns from the values of its versions and does not freeze, so that a join through the vectors can read a small table, as a dimension table, with no change to the versions. A small table that has frozen rows, as a load froze them, freezes its new versions after them, because the frozen rows have no values to make a column from.
     pub(crate) fn columns_of(
         &self,
         relation: u32,
@@ -2758,7 +2758,7 @@ impl Heap {
             return None;
         }
         // A commit logs the values of the versions that it inserted, so the heap freezes only the versions of transactions that ended.
-        if large
+        if (large || table.frozen.is_some())
             && xmins
                 .iter()
                 .all(|&(xmin, _)| xmin != view.xid && committed_before(xmin, &view.snapshot))
