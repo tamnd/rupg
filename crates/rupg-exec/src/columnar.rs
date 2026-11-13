@@ -2916,7 +2916,12 @@ pub(crate) fn selected(
     let segments = rows.div_ceil(ROWS);
     let mut scan =
         Scan { exec: &mut exec, conds, segments, rows, open: true, answered: Vec::new() };
-    let mut out = Selected { rows, places: Vec::new(), keys: vec![Vec::new(); keys.len()] };
+    // The vectors have room for each row of the table, so that they do not grow and copy their values. The pages of the room that no row fills are not touched.
+    let mut out = Selected {
+        rows,
+        places: Vec::with_capacity(rows),
+        keys: (0..keys.len()).map(|_| Vec::with_capacity(rows)).collect(),
+    };
     let mut integers = true;
     scan.each(&mut |exec, batch, sel| {
         let base = batch.segment * ROWS + batch.vector * VECTOR;
