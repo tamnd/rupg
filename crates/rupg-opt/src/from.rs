@@ -30,7 +30,7 @@ use rupg_plan::{
 };
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Size, cost, exprs, parallel, pullup, setop, upper};
+use crate::{Builder, Index, Level, Link, Size, cost, exprs, parallel, pullup, setop, upper};
 pub(crate) use classes::{equality, families};
 use index::Param;
 use memoize::Memo;
@@ -90,6 +90,10 @@ pub(crate) struct Stats {
     unique: Unique,
     /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
     distinct: BTreeMap<usize, Vec<Vec<i16>>>,
+    /// The links of spec/13 of each relation that is a child table, with `rupg.use_links` on.
+    links: BTreeMap<usize, Vec<Link>>,
+    /// The OID of each relation that is one table with no sample, which a link join reads as a side.
+    plain: BTreeMap<usize, u32>,
     /// The key columns of each unique index of each relation that shows that the other columns of a row are a function of the key columns, as `remove_useless_groupby_columns` chooses them: the index is immediate and has no predicate and no expression, and each key column is `NOT NULL` or the index has `NULLS NOT DISTINCT`. Each index has the operator family of each key column.
     functional: BTreeMap<usize, Vec<KeyFamilies>>,
     /// The members of each equivalence class of the query level, each class with true when it has a constant.
@@ -1112,6 +1116,13 @@ impl<'q> Builder<'q> {
                     }
                     indexes = self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default();
                     size = self.members.map_or_else(Size::default, |m| m.size(relation.oid));
+                    if crate::enable().use_links && relation.tablesample.is_none() {
+                        stats.plain.insert(r, relation.oid);
+                        let links = self.members.map(|m| m.links(relation.oid));
+                        if let Some(links) = links.filter(|l| !l.is_empty()) {
+                            stats.links.insert(r, links);
+                        }
+                    }
                     stats.columns.insert(r, crate::statistics(relation.oid));
                     let exprs = index_statistics(self.members, r, &indexes);
                     if !exprs.is_empty() {
@@ -3437,6 +3448,10 @@ fn choose<'q>(
         if (enable.hashjoin || full) && !reads_outer {
             candidates.extend(hash_join(&input, join));
         }
+        // spec/15 section 15.9: a link of the outer side to the inner side makes the join a link join.
+        if let Some(link) = link_join(&input, join).filter(|_| !reads_outer) {
+            candidates = vec![link];
+        }
         for candidate in candidates {
             let (outer, inner) = (&outers[candidate.paths.0], &inners[candidate.paths.1]);
             let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
@@ -3688,6 +3703,7 @@ impl Candidate<'_> {
             Method::Nested => !enable.nestloop,
             Method::Merge => !enable.mergejoin,
             Method::Hash => !enable.hashjoin,
+            Method::Link(_) => false,
         }
     }
 
@@ -3703,6 +3719,8 @@ enum Method {
     Nested,
     Merge,
     Hash,
+    /// A link join of spec/15 over the index of the link with this OID.
+    Link(u32),
 }
 
 /// The conditions of a join that a kind of join tests itself, with the outer value on the left, and the other conditions.
@@ -3983,6 +4001,63 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         materialize: false,
         sort: (false, false),
         keys: Vec::new(),
+        paths: (0, 0),
+        unique: false,
+        param: None,
+        disabled: 0,
+        memo: None,
+    })
+}
+
+/// spec/15 section 15.9: a link join of the outer side, which has the child table of a link, to the inner side, which is the parent table alone, when the conditions of the join make each key column of the link equal to its key column of the parent. Its outer rows find their parent rows through the link, with no hash table, so it costs the outer side, the inner side once and the conditions of each outer row.
+fn link_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>> {
+    if !matches!(join, JoinKind::Inner | JoinKind::Left) {
+        return None;
+    }
+    let stats = input.stats;
+    let (outer, inner) = (input.outer, input.inner);
+    let [p] = *inner.rels.iter().collect::<Vec<_>>().as_slice() else { return None };
+    let parent = *stats.plain.get(p)?;
+    if !matches!(
+        inner.node.kind,
+        Kind::SeqScan(_) | Kind::IndexScan { .. } | Kind::BitmapHeapScan { .. }
+    ) || inner.node.parallel
+    {
+        return None;
+    }
+    let (clauses, other) = split(input.quals, &outer.rels, &inner.rels, exprs::can_hash);
+    let var = |e: &Expr| plain_var(e).filter(|v| v.levels_up == 0).map(|v| (v.relation, v.attnum));
+    let (link, used) = outer.rels.iter().filter(|c| stats.plain.contains_key(c)).find_map(|c| {
+        stats.links.get(c)?.iter().filter(|l| l.parent == parent).find_map(|l| {
+            let pairs = l.keys.iter().zip(&l.parent_keys);
+            let used = pairs
+                .map(|(k, pk)| {
+                    clauses.iter().position(|cl| {
+                        var(cl.outer) == Some((*c, *k)) && var(cl.inner) == Some((*p, *pk))
+                    })
+                })
+                .collect::<Option<Vec<usize>>>()?;
+            Some((l.index, used))
+        })
+    })?;
+    let (o, i) = (outer.node.cost, inner.node.cost);
+    let n = used.len() as f64;
+    let startup = o.startup + i.total;
+    let mut run = o.total - o.startup + (cost::CPU_OPERATOR * n + cost::CPU_TUPLE) * o.rows;
+    let rest =
+        clauses.iter().enumerate().filter(|(k, _)| !used.contains(k)).map(|(_, c)| &*c.qual.expr);
+    let (qual_startup, qual_cost) = stats.qual_costs(rest.chain(other.iter().map(|q| &*q.expr)));
+    let startup = startup + qual_startup + input.filter_startup;
+    run += (qual_cost + input.filter_cost) * o.rows;
+    Some(Candidate {
+        method: Method::Link(link),
+        join,
+        swapped: false,
+        startup,
+        total: startup + run,
+        materialize: false,
+        sort: (false, false),
+        keys: used.into_iter().map(|k| (k, false, false)).collect(),
         paths: (0, 0),
         unique: false,
         param: None,
@@ -4296,7 +4371,7 @@ impl<'q> Candidate<'q> {
     /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a right join, a right anti join or a full join, and no order for a hash join. A merge join whose outer side needs no sort keeps the rest of the order of the outer side after the keys of the join, as `match_unsorted_outer` gives the order of the outer path.
     fn order(&self, outer: &Rel<'q>, inner: &Rel<'q>, quals: &[Qual<'q>]) -> Vec<OrderKey> {
         match self.method {
-            Method::Nested => outer.order.clone(),
+            Method::Nested | Method::Link(_) => outer.order.clone(),
             Method::Merge
                 if !matches!(self.join, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full) =>
             {
@@ -4354,6 +4429,23 @@ impl<'q> Candidate<'q> {
                     Kind::HashJoin { join: self.join, cond, join_filter },
                     scope,
                     vec![outer.node, hash],
+                )
+            }
+            Method::Link(link) => {
+                let (clauses, other) = split(quals, &outer.rels, &inner.rels, exprs::can_hash);
+                let mut cond = Vec::new();
+                let mut join_filter = Vec::new();
+                for (i, c) in clauses.iter().enumerate() {
+                    match self.keys.iter().any(|k| k.0 == i) {
+                        true => cond.push(c.item()),
+                        false => join_filter.push(c.qual.item()),
+                    }
+                }
+                join_filter.extend(other.iter().map(|q| q.item()));
+                Node::new(
+                    Kind::LinkJoin { join: self.join, link, cond, join_filter },
+                    scope,
+                    vec![outer.node, inner.node],
                 )
             }
             Method::Merge => {

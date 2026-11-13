@@ -50,6 +50,11 @@ pub trait Members: std::fmt::Debug {
     /// The valid indexes of the table with the OID `table`, in the order of their OIDs, as `get_relation_info` reads them from `RelationGetIndexList`.
     fn indexes(&self, table: u32) -> Vec<Index>;
 
+    /// The links of spec/13 whose child is the table with the OID `table`, the indexes `USING link` that the catalog validates, in the order of their OIDs.
+    fn links(&self, _table: u32) -> Vec<Link> {
+        Vec::new()
+    }
+
     /// True when the table with the OID `table` is an ordinary table, `RELKIND_RELATION`.
     fn is_table(&self, _table: u32) -> bool {
         true
@@ -105,6 +110,19 @@ pub trait Members: std::fmt::Debug {
     fn classes(&self) -> Classes {
         Classes::default()
     }
+}
+
+/// A link of spec/13 section 13.3: an index `USING link` of a child table whose key columns hold the values of the key of a unique index of its parent table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    /// The OID of the index of the link.
+    pub index: u32,
+    /// The OID of the parent table.
+    pub parent: u32,
+    /// The key columns of the child table.
+    pub keys: Vec<i16>,
+    /// The key columns of the parent table, one for each key column of the child table.
+    pub parent_keys: Vec<i16>,
 }
 
 /// The operators and the rows of `pg_amop` of the catalog that are not built in, which the planner reads with the built-in ones, as it reads the caches of `pg_operator` and `pg_amop`.
@@ -195,6 +213,8 @@ pub struct Enable {
     pub hnsw_ef_search: i32,
     /// `ivfflat.probes` of pgvector, which `ivfflatcostestimate` reads.
     pub ivfflat_probes: i32,
+    /// `rupg.use_links` of spec/15: the planner joins a child table to its parent with a `Link Join` over a link of spec/13.
+    pub use_links: bool,
 }
 
 impl Default for Enable {
@@ -231,6 +251,7 @@ impl Default for Enable {
             gathermerge: true,
             hnsw_ef_search: 40,
             ivfflat_probes: 1,
+            use_links: true,
         }
     }
 }
@@ -798,7 +819,9 @@ fn loop_order(
         (Kind::Materialize | Kind::Memoize(_) | Kind::Gather { .. }, [child]) => {
             loop_order(child, reverse, out)
         }
-        (Kind::NestedLoop { join, .. }, [outer, inner]) if inner_or_left(join) => {
+        (Kind::NestedLoop { join, .. } | Kind::LinkJoin { join, .. }, [outer, inner])
+            if inner_or_left(join) =>
+        {
             loop_order(outer, reverse, out) && loop_order(inner, reverse, out)
         }
         (Kind::HashJoin { join, .. }, [outer, hash]) if inner_or_left(join) => {
@@ -1683,7 +1706,9 @@ fn own_items<'n, 'q>(node: &'n Node<'q>) -> Vec<(&'n Item<'q>, f64)> {
         Kind::Result { one_time, .. } => out.extend(one_time.iter().map(|i| (i, 1.0))),
         Kind::NestedLoop { join_filter, .. } => out.extend(quals(join_filter)),
         Kind::Modify { conflict: Some(conflict), .. } => out.extend(quals(&conflict.filter)),
-        Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
+        Kind::MergeJoin { cond, join_filter, .. }
+        | Kind::HashJoin { cond, join_filter, .. }
+        | Kind::LinkJoin { cond, join_filter, .. } => {
             out.extend(quals(cond).chain(quals(join_filter)));
         }
         _ => {}

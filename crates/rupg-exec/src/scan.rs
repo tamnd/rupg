@@ -1738,6 +1738,195 @@ struct JoinInput<'a> {
     right_relations: &'a [usize],
 }
 
+/// A link index between two relations of the query that a join can read, as spec/14 section 14.8.3 joins along it.
+pub(crate) struct Linked {
+    /// The child relation, whose table has the index.
+    child: usize,
+    /// The parent relation.
+    parent: usize,
+    /// The column number of each link column with the column number of its key column in the parent.
+    pairs: Vec<(i16, i16)>,
+    /// The forward link that the joins share.
+    forward: Arc<std::sync::Mutex<rupg_func::Forward>>,
+}
+
+/// The links between the relations of the query, when `rupg.use_links` is on: each link index of a table of the user that a relation reads, with each other relation that reads its parent. A relation must read the table itself, with no sample and no policies of row security, which make it a subquery.
+fn linked(query: &Query, session: &dyn Session) -> Vec<Linked> {
+    if query.relations.len() < 2 || session.setting("rupg.use_links").as_deref() != Some("on") {
+        return Vec::new();
+    }
+    let Some(catalog) = session.catalog() else { return Vec::new() };
+    let plain = |r: &rupg_analyze::Relation| {
+        r.oid >= rupg_catalog::FIRST_NORMAL_OID
+            && r.subquery.is_none()
+            && r.function.is_none()
+            && r.values.is_none()
+            && r.cte.is_none()
+            && r.tablesample.is_none()
+            && !r.excluded
+    };
+    let mut out = Vec::new();
+    for (c, child) in query.relations.iter().enumerate() {
+        if !plain(child) {
+            continue;
+        }
+        for link in rupg_analyze::links_of(catalog, child.oid) {
+            for (p, parent) in query.relations.iter().enumerate() {
+                if p == c || parent.oid != link.parent || !plain(parent) {
+                    continue;
+                }
+                let Some(forward) = session.link_forward(link.index) else { continue };
+                let pairs =
+                    link.keys.iter().copied().zip(link.parent_keys.iter().copied()).collect();
+                out.push(Linked { child: c, parent: p, pairs, forward });
+            }
+        }
+    }
+    out
+}
+
+/// For each link column of `link`, the place in `on` of the `=` of the column and its key column, with the column of the child and the column of the parent, or `None` when the conditions do not make each link column equal to its key column.
+fn link_conditions(on: &[&Expr], link: &Linked) -> Option<Vec<(usize, Var, Var)>> {
+    let is = |v: Var, relation: usize, attnum: i16| v.relation == relation && v.attnum == attnum;
+    link.pairs
+        .iter()
+        .map(|&(key, parent_key)| {
+            on.iter().enumerate().find_map(|(n, expr)| {
+                let ExprKind::Func(f) = &expr.kind else { return None };
+                let [a, b] = f.args.as_slice() else { return None };
+                if !HASH_EQUALS.contains(&f.oid) {
+                    return None;
+                }
+                let (a, b) = (plain_var(a)?, plain_var(b)?);
+                if is(a, link.child, key) && is(b, link.parent, parent_key) {
+                    Some((n, a, b))
+                } else if is(b, link.child, key) && is(a, link.parent, parent_key) {
+                    Some((n, b, a))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
+}
+
+/// The join of spec/14 section 14.8.3 along a link of `links`: for each tuple of the left side, the tuples of the right side that it joins by the `=`s of the link columns, and the places of those `=`s in `on`, or `None` when no link serves the join. A link serves an inner or a left join whose right side is the parent and whose left side has the child, and an inner join with the sides the other way.
+///
+/// The forward link gives the parent version of each child version, and the join checks each pair, as for a validated link of spec/13 section 13.2.4: the parent row must be a row of the side, which has the rows of the parent that the snapshot sees and that pass the conditions of the side, and its key must equal the key of the child. A child whose pair fails, or that the link does not have, finds its parent by its key, and the link keeps the new pair. A parent key is unique, so each child row joins the same rows as through a hash of the keys, in the same order.
+fn link_rows(
+    (left, right): (&[Vec<usize>], &[Vec<usize>]),
+    on: &[&Expr],
+    kind: JoinKind,
+    (left_relations, right_relations): (&[usize], &[usize]),
+    tables: &Tables,
+    links: &[Linked],
+) -> Option<(Vec<Vec<usize>>, Vec<usize>)> {
+    for link in links {
+        let forward = if right_relations == [link.parent]
+            && left_relations.contains(&link.child)
+            && matches!(kind, JoinKind::Inner | JoinKind::Left)
+        {
+            true
+        } else if kind == JoinKind::Inner
+            && right_relations == [link.child]
+            && left_relations.contains(&link.parent)
+        {
+            false
+        } else {
+            continue;
+        };
+        let Some(conds) = link_conditions(on, link) else { continue };
+        let (c, p) = (link.child, link.parent);
+        let (children, parents) = if forward { (left, right) } else { (right, left) };
+        // The tuples of the parent side by the row of the parent, and the rows by the IDs of their versions.
+        let mut by_row: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (i, tuple) in parents.iter().enumerate() {
+            if let Some(&row) = tuple.get(p).filter(|&&row| row != NONE) {
+                by_row.entry(row).or_default().push(i);
+            }
+        }
+        let by_version: BTreeMap<u64, usize> =
+            by_row.keys().filter_map(|&row| Some((tables.version(p, row)?, row))).collect();
+        // The key of the child of a tuple or of a row of the parent: `None` for a null, which joins no row, and no link join for a value that has no key.
+        let key_of = |tuple: &[usize], child: bool| -> std::result::Result<Option<Vec<Key>>, ()> {
+            let mut keys = Vec::with_capacity(conds.len());
+            for (_, child_var, parent_var) in &conds {
+                let value = tables.var(tuple, if child { *child_var } else { *parent_var });
+                if value == Value::Null {
+                    return Ok(None);
+                }
+                keys.push(key(value).ok_or(())?);
+            }
+            Ok(Some(keys))
+        };
+        let mut probe = vec![NONE; p + 1];
+        let mut parent_key = |row: usize| {
+            probe[p] = row;
+            key_of(&probe, false)
+        };
+        let mut pairs = link.forward.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut keyed: Option<BTreeMap<Vec<Key>, usize>> = None;
+        let mut parent_of: Vec<Option<usize>> = Vec::with_capacity(children.len());
+        for tuple in children {
+            let Some(&row) = tuple.get(c).filter(|&&row| row != NONE) else {
+                parent_of.push(None);
+                continue;
+            };
+            let Some(child_key) = key_of(tuple, true).ok()? else {
+                parent_of.push(None);
+                continue;
+            };
+            let version = tables.version(c, row);
+            let gathered =
+                version.and_then(|v| pairs.get(&v)).and_then(|v| by_version.get(v)).copied();
+            let gathered = match gathered {
+                Some(parent) if parent_key(parent).ok()?.as_ref() == Some(&child_key) => {
+                    Some(parent)
+                }
+                _ => None,
+            };
+            let found = match gathered {
+                Some(parent) => Some(parent),
+                None => {
+                    if keyed.is_none() {
+                        let mut map = BTreeMap::new();
+                        for &parent in by_row.keys() {
+                            if let Some(k) = parent_key(parent).ok()? {
+                                map.insert(k, parent);
+                            }
+                        }
+                        keyed = Some(map);
+                    }
+                    let parent = keyed.as_ref().and_then(|map| map.get(&child_key)).copied();
+                    if let (Some(v), Some(parent)) = (version, parent)
+                        && let Some(parent_version) = tables.version(p, parent)
+                    {
+                        pairs.insert(v, parent_version);
+                    }
+                    parent
+                }
+            };
+            parent_of.push(found);
+        }
+        let lists = if forward {
+            let rows = |parent: &Option<usize>| parent.and_then(|r| by_row.get(&r)).cloned();
+            parent_of.iter().map(|parent| rows(parent).unwrap_or_default()).collect()
+        } else {
+            let mut joined: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+            for (i, parent) in parent_of.iter().enumerate() {
+                if let Some(parent) = parent {
+                    joined.entry(*parent).or_default().push(i);
+                }
+            }
+            left.iter()
+                .map(|t| t.get(p).and_then(|r| joined.get(r)).cloned().unwrap_or_default())
+                .collect()
+        };
+        return Some((lists, conds.iter().map(|(n, _, _)| *n).collect()));
+    }
+    None
+}
+
 /// The value of an expression for a tuple. A condition passes when it gives true.
 pub(crate) type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<Value> + 'a;
 
@@ -1755,6 +1944,8 @@ struct Scan<'a, 'b> {
     width: usize,
     test: &'a mut Test<'b>,
     source: &'a mut Source<'b>,
+    /// The links that the joins can read.
+    links: Vec<Linked>,
 }
 
 /// True when the relations of the expression are all in the list.
@@ -1863,9 +2054,11 @@ pub(crate) fn tuples(
     test: &mut Test<'_>,
     source: &mut Source<'_>,
     planned: Option<(&[Scanned], &dyn Session)>,
+    session: &dyn Session,
 ) -> Result<Vec<Vec<usize>>> {
     let width = query.relations.len();
-    let mut scan = Scan { tables, width, test, source };
+    let links = linked(query, session);
+    let mut scan = Scan { tables, width, test, source, links };
     let mut filter = Vec::new();
     if let Some(expr) = &query.filter {
         conjuncts(expr, &mut filter);
@@ -2140,7 +2333,7 @@ impl Scan<'_, '_> {
             || join_reads(item).iter().any(|r| input.left_relations.contains(r));
         if !reads {
             input.right = self.item_tuples(item, conds, context)?;
-            return join(input, self.tables, self.test);
+            return join(input, self.tables, self.test, &self.links);
         }
         let left = std::mem::take(&mut input.left);
         let limit = join_limit(self.width);
@@ -2150,7 +2343,7 @@ impl Scan<'_, '_> {
             let marks = self.tables.marks();
             let right = self.item_tuples(item, conds.clone(), &context)?;
             let input = JoinInput { left: vec![l], right, ..input };
-            let mut tuples = join(input, self.tables, self.test)?;
+            let mut tuples = join(input, self.tables, self.test, &self.links)?;
             self.tables.compact(&marks, &mut tuples);
             if out.len() + tuples.len() > limit {
                 return Err(too_many(limit));
@@ -2420,7 +2613,12 @@ impl IntIndex {
 }
 
 /// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` that a hash can test, with a column or an expression of each side, or an `OR` of such `=`s, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
-fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
+fn join<'a>(
+    input: JoinInput<'a>,
+    tables: &Tables,
+    test: &mut Test<'_>,
+    links: &[Linked],
+) -> Result<Vec<Vec<usize>>> {
     let JoinInput { left, right, on, kind, left_relations, right_relations } = input;
     // The first `=` with a column of each side, else the first `=` with an expression of each side. A column needs no evaluation.
     let side = |e: &'a Expr, relations: &[usize]| -> Option<Side<'a>> {
@@ -2451,18 +2649,28 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
         .find(|(_, l, r)| matches!((l, r), (Side::Var(_), Side::Var(_))))
         .or_else(|| pairs.first());
     let hash = found.map(|(_, l, r)| (l, r));
+    let via_link =
+        link_rows((&left, &right), on, kind, (left_relations, right_relations), tables, links);
     // An `=` of two columns needs no test after the hash finds its rows, as the rows have the same key, and another `=` of two columns compares the values with no copy.
     let checks: Vec<Check<'_>> = on
         .iter()
         .enumerate()
         .filter_map(|(n, expr)| {
+            // The join along a link compares the keys of the link columns itself.
+            if via_link.as_ref().is_some_and(|(_, used)| used.contains(&n)) {
+                return None;
+            }
             let columns =
                 pairs.iter().find(|(at, _, _)| *at == n).and_then(|(_, l, r)| match (l, r) {
                     (Side::Var(a), Side::Var(b)) if a.attnum > 0 && b.attnum > 0 => Some((*a, *b)),
                     _ => None,
                 });
             match (columns, found) {
-                (Some(_), Some((at, Side::Var(_), Side::Var(_)))) if *at == n => None,
+                (Some(_), Some((at, Side::Var(_), Side::Var(_))))
+                    if *at == n && via_link.is_none() =>
+                {
+                    None
+                }
                 (Some((a, b)), _) => Some(Check::Columns(a, b, expr)),
                 (None, _) => Some(Check::Expr(expr)),
             }
@@ -2495,7 +2703,9 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     let mut left_keys = Vec::new();
     // An `=` of two columns of integers needs no copy of the values. The rows of the right side are in one array in the order of their keys, and a key finds its rows directly when the keys are dense.
     let ints = match hash {
-        Some((Side::Var(l), Side::Var(r))) if l.attnum > 0 && r.attnum > 0 && !left.is_empty() => {
+        Some((Side::Var(l), Side::Var(r)))
+            if l.attnum > 0 && r.attnum > 0 && !left.is_empty() && via_link.is_none() =>
+        {
             int_keys(tables, &right, *r)
                 .and_then(|keys| IntIndex::of(&keys))
                 .and_then(|found| Some((found, int_keys(tables, &left, *l)?)))
@@ -2505,6 +2715,7 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     if let Some((l, r)) = hash
         && !left.is_empty()
         && ints.is_none()
+        && via_link.is_none()
     {
         for (i, tuple) in right.iter().enumerate() {
             if let Some(k) = key(value(tuple, r)?) {
@@ -2535,6 +2746,7 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
     let mut tuple = Vec::new();
     for (n, l) in left.iter().enumerate() {
         let candidates: &[usize] = match hash {
+            _ if via_link.is_some() => via_link.as_ref().map_or(&[][..], |(lists, _)| &lists[n]),
             Some(_) => match (&ints, left_keys.get(n)) {
                 (Some((found, keys)), _) => keys[n].map_or(&[][..], |k| found.get(k)),
                 (None, Some(Some(k))) => index.get(k).map_or(&[], Vec::as_slice),

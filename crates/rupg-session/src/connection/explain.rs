@@ -275,6 +275,18 @@ impl rupg_opt::Members for Members<'_, '_> {
         rupg_func::pattern_match
     }
 
+    fn links(&self, table: u32) -> Vec<rupg_opt::Link> {
+        let Some(catalog) = self.reader.catalog() else { return Vec::new() };
+        let links = rupg_analyze::links_of(catalog, table).into_iter();
+        let link = |l: rupg_analyze::LinkDefinition| rupg_opt::Link {
+            index: l.index,
+            parent: l.parent,
+            keys: l.keys,
+            parent_keys: l.parent_keys,
+        };
+        links.map(link).collect()
+    }
+
     fn indexes(&self, table: u32) -> Vec<Index> {
         if table < rupg_catalog::FIRST_NORMAL_OID {
             return catalog_indexes(table);
@@ -463,6 +475,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             gathermerge: on(guc::known!("enable_gathermerge")),
             hnsw_ef_search: count(guc::known!("hnsw.ef_search"), 40),
             ivfflat_probes: count(guc::known!("ivfflat.probes"), 1),
+            use_links: on(guc::known!("rupg.use_links")),
         }
     }
 }

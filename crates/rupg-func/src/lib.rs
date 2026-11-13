@@ -244,6 +244,9 @@ pub type SharedRow = (Arc<[Value]>, u64);
 /// The rows of [`Session::lock_subquery_rows`], or `None` when the subquery must run again with a new snapshot.
 pub type LockedRows = Option<Vec<Vec<Value>>>;
 
+/// The forward link of a link index: the ID of the parent version by the ID of the child version, as [`Session::link_forward`] shares it.
+pub type Forward = BTreeMap<u64, u64>;
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -572,6 +575,11 @@ pub trait Session {
         metric: rupg_ann::Metric,
     ) -> Option<Arc<std::sync::Mutex<rupg_ann::index::Index>>> {
         let _ = (index, metric);
+        None
+    }
+    /// The forward link of the link index `index` (spec/13 section 13.2.2) that the joins through it share: the ID of the parent version that each child version joined, by the ID of the child version, or `None` when the session shares no link, so that a join through the link finds each parent by its key. A join checks each pair that it reads from the link, so a pair that is stale gives no wrong row.
+    fn link_forward(&self, index: u32) -> Option<Arc<std::sync::Mutex<Forward>>> {
+        let _ = index;
         None
     }
     /// The catalog whose objects the scans of the system catalogs such as `pg_class` see. It is [`Session::catalog`], but the query of `CREATE TABLE AS` does not see the rows of its new table, as its snapshot has the command ID from before `intorel_startup` made the table.

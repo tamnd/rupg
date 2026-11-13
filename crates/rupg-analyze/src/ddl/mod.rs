@@ -91,6 +91,7 @@ pub use grant::{
     acl_allows_create, acl_roles, apply_database_change, apply_tablespace_change, database_change,
     tablespace_change,
 };
+pub use link::{LinkDefinition, link_definition, links_of};
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, Take, lock_table};
 pub use matview::has_refresh_index;

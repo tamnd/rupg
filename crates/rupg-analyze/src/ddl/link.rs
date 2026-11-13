@@ -1,6 +1,6 @@
 //! `CREATE INDEX ... USING link`, the link index of spec/13 section 13.2 without a foreign key: `WITH (parent = 'orders')` names the parent table, and `parent_columns` names its key columns when they are not the primary key. The parent must have a primary key or a unique index on the key columns, as the referenced table of a foreign key must, and each column of the link must compare with its key column by an equality operator.
 
-use rupg_catalog::{NewIndexColumn, RelKind};
+use rupg_catalog::{Catalog, ConKind, DepKind, NewIndexColumn, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::RangeVar;
 
@@ -171,6 +171,107 @@ impl Definer<'_, '_> {
         self.foreign_operators("link", &keys, (&child_names, &parent_names))?;
         Ok(parent)
     }
+}
+
+/// A link index of spec/13 section 13.2 as the planner and the executor use it: the child table with the link columns, and the parent table with its key columns in the same order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkDefinition {
+    /// The OID of the link index.
+    pub index: u32,
+    /// The OID of the child table, which has the index.
+    pub child: u32,
+    /// The column number of each link column in the child table.
+    pub keys: Vec<i16>,
+    /// The OID of the parent table.
+    pub parent: u32,
+    /// The column number in the parent table of the key column of each link column.
+    pub parent_keys: Vec<i16>,
+}
+
+/// The link index `index` with its parent, or `None` when `index` is not a link index that a join can use. The parent is the table that the index depends on, and its key columns are those of `parent_columns` or of its primary key. A join through the link gives the rows of a join on the `=` of the columns only when each child row has one parent row at most, so the parent and the child must be tables with no children, each pair of columns must have one type with no collation or a deterministic one, and the parent must have an immediate unique index with no predicate on its key columns whose operator classes are the default classes of `btree`, as the equality of the join is the equality of the type. A link that is not valid gives `None` too, and the join is then a hash join, with the same rows.
+pub fn link_definition(catalog: &Catalog, index: u32) -> Option<LinkDefinition> {
+    let relation = catalog.relation(index)?;
+    let info = relation.index.as_ref()?;
+    if info.method != rupg_index::am::LINK || !info.valid || !info.ready || info.predicate.is_some()
+    {
+        return None;
+    }
+    let child = info.table;
+    let count = usize::try_from(info.key_count).ok()?;
+    let keys: Vec<i16> = info.keys.get(..count)?.to_vec();
+    if keys.is_empty() || keys.iter().any(|&k| k <= 0) {
+        return None;
+    }
+    let parent = catalog.depends().iter().find_map(|d| {
+        (d.object.class == PG_CLASS
+            && d.object.oid == index
+            && d.kind == DepKind::Normal
+            && d.referenced.class == PG_CLASS
+            && d.referenced.sub == 0)
+            .then_some(d.referenced.oid)
+    })?;
+    let plain = |oid: u32| {
+        catalog.relation(oid).is_some_and(|r| r.kind == RelKind::Table)
+            && !catalog.has_children(oid)
+    };
+    if !plain(child) || !plain(parent) {
+        return None;
+    }
+    let parent_rel = catalog.relation(parent)?;
+    let options = relation.options.as_slice();
+    let parent_keys: Vec<i16> = match text_option(options, "parent_columns") {
+        Some(list) => split_identifiers(list, ',')?
+            .iter()
+            .map(|name| parent_rel.column_number(name))
+            .collect::<Option<_>>()?,
+        None => {
+            let pk = catalog.constraints_of(parent).find(|c| c.kind == ConKind::Primary)?.index;
+            let pk = catalog.relation(pk)?.index.as_ref()?;
+            pk.keys.get(..usize::try_from(pk.key_count).ok()?)?.to_vec()
+        }
+    };
+    if parent_keys.len() != keys.len() {
+        return None;
+    }
+    let child_rel = catalog.relation(child)?;
+    for (&k, &pk) in keys.iter().zip(&parent_keys) {
+        let (c, p) = (child_rel.column(k)?, parent_rel.column(pk)?);
+        // `DEFAULT_COLLATION_OID`, `C_COLLATION_OID` and `POSIX_COLLATION_OID` are deterministic.
+        let deterministic = |collation: u32| matches!(collation, 0 | 100 | 950 | 951);
+        if c.ty != p.ty || c.collation != p.collation || !deterministic(c.collation) {
+            return None;
+        }
+    }
+    let unique = catalog.indexes_of(parent).any(|r| {
+        let Some(i) = r.index.as_ref() else { return false };
+        let count = usize::try_from(i.key_count).unwrap_or(usize::MAX);
+        let index_keys = i.keys.get(..count).unwrap_or_default();
+        i.unique
+            && i.valid
+            && i.immediate
+            && i.predicate.is_none()
+            && i.method == rupg_index::am::BTREE
+            && index_keys.len() == parent_keys.len()
+            && index_keys.iter().all(|k| parent_keys.contains(k))
+            && index_keys.iter().zip(&i.classes).all(|(&k, &class)| {
+                parent_rel.column(k).is_some_and(|c| {
+                    crate::typcache::default_opclass(c.ty, rupg_index::am::BTREE)
+                        .is_some_and(|d| d.oid == class)
+                })
+            })
+    });
+    unique.then_some(LinkDefinition { index, child, keys, parent, parent_keys })
+}
+
+/// The link indexes of the table `table` that a join can use, as [`link_definition`] finds them, in the order of their OIDs.
+pub fn links_of(catalog: &Catalog, table: u32) -> Vec<LinkDefinition> {
+    let mut out: Vec<LinkDefinition> = catalog
+        .indexes_of(table)
+        .filter(|r| r.index.as_ref().is_some_and(|i| i.method == rupg_index::am::LINK))
+        .filter_map(|r| link_definition(catalog, r.oid))
+        .collect();
+    out.sort_by_key(|l| l.index);
+    out
 }
 
 #[cfg(test)]

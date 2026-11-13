@@ -653,7 +653,8 @@ impl<'p, 'q> Exec<'p, 'q> {
             Kind::HashJoin { join, cond, join_filter } => {
                 self.hash_join(cx, context, *join, cond, join_filter)
             }
-            Kind::MergeJoin { join, cond, join_filter } => {
+            Kind::MergeJoin { join, cond, join_filter }
+            | Kind::LinkJoin { join, cond, join_filter, .. } => {
                 self.merge_join(cx, context, *join, cond, join_filter)
             }
             Kind::Hash => Err(Error::internal("a Hash node out of a Hash Join")),
@@ -1625,7 +1626,8 @@ fn depends(cx: &Cx<'_, '_, '_>, node: &Node<'_>) -> bool {
             | Kind::BitmapIndexScan { cond, .. } => check(cond),
             Kind::NestedLoop { join_filter, .. } => check(join_filter),
             Kind::HashJoin { cond, join_filter, .. }
-            | Kind::MergeJoin { cond, join_filter, .. } => {
+            | Kind::MergeJoin { cond, join_filter, .. }
+            | Kind::LinkJoin { cond, join_filter, .. } => {
                 check(cond);
                 check(join_filter);
             }
