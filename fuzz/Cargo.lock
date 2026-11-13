@@ -410,6 +410,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
 name = "pbkdf2"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -485,6 +491,7 @@ dependencies = [
  "icu_locale_core",
  "rupg-catalog",
  "rupg-common",
+ "rupg-index",
  "rupg-pgcatalog",
  "rupg-platform",
  "rupg-snowball",
@@ -492,6 +499,10 @@ dependencies = [
  "rupg-types",
  "rupg-wire",
 ]
+
+[[package]]
+name = "rupg-ann"
+version = "0.4.20"
 
 [[package]]
 name = "rupg-buffer"
@@ -555,10 +566,13 @@ dependencies = [
  "icu_provider_blob",
  "icu_segmenter",
  "md-5",
+ "memchr",
  "rupg-analyze",
+ "rupg-ann",
  "rupg-catalog",
  "rupg-column",
  "rupg-common",
+ "rupg-index",
  "rupg-pgcatalog",
  "rupg-plan",
  "rupg-platform",
@@ -592,6 +606,10 @@ dependencies = [
  "rupg-file",
  "rupg-tree",
 ]
+
+[[package]]
+name = "rupg-index"
+version = "0.4.20"
 
 [[package]]
 name = "rupg-kernels"
