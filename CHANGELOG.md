@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- rupg-jit: the Cranelift compile tier, which lowers a QIR function to machine code through `cranelift-codegen`, lifted from rudb-qc-clif at cd9f9676 as the module `clif` behind the new feature `jit`, with `cranelift-codegen` and `cranelift-frontend` pinned at `=0.125.0` (#1543)
 - rupg-jit: the direct tier, the single pass x86-64 backend that compiles a QIR pipeline function to machine code with no dependencies, lifted from rudb-qc-direct at cd9f9676 with its assembler and register analysis, and `iced-x86` as the disassembler of its tests (#1542)
 - rupg-jit: the runtime of the compiled pipelines lifted from rudb-qc-rt at cd9f9676: the morsel and state ABI, `str16` strings and their heap, `LIKE` patterns, the aggregation and distinct hash tables, and the executable memory that the native tiers load their code into (#1541)
 - `rupg.rupg_link_check(regclass)` of spec/13 section 13.2.5 in the new schema `rupg` of spec/05 section 5.10: for a link index or each link index of a table, it sets the forward value of each child row that the snapshot sees by a probe of its parent key, takes out the pairs of rows with no parent, and returns the number of pairs that it wrote or took out (#1540)

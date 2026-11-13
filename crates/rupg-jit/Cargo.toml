@@ -12,7 +12,13 @@ keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
 
+[features]
+# The Cranelift tier, the module `clif`. The facade crate `rupg` turns it on (spec/22-crate-layout.md section 22.9).
+jit = ["dep:cranelift-codegen", "dep:cranelift-frontend"]
+
 [dependencies]
+cranelift-codegen = { workspace = true, optional = true }
+cranelift-frontend = { workspace = true, optional = true }
 memchr.workspace = true
 rupg-types.workspace = true
 
