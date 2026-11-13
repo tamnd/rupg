@@ -211,7 +211,7 @@ impl Keys {
     }
 
     /// True when the set has `key`.
-    fn contains(&self, key: i64) -> bool {
+    pub(crate) fn contains(&self, key: i64) -> bool {
         match self {
             Keys::Hash(set) => set.contains(&key),
             Keys::Dense { base, bits } => key
@@ -222,7 +222,7 @@ impl Keys {
     }
 
     /// The set of `keys`, which may have a key more than once.
-    fn of(keys: impl Iterator<Item = i64> + Clone) -> Self {
+    pub(crate) fn of(keys: impl Iterator<Item = i64> + Clone) -> Self {
         let mut low = i64::MAX;
         let mut high = i64::MIN;
         let mut count = 0usize;
