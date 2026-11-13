@@ -1371,7 +1371,13 @@ impl<'q> Exec<'q> {
             }
             return Ok(Col::constant(value, ty));
         }
-        let exprs = self.links[link].outer();
+        // A subquery with no row for all keys gives each row the same value, so the rows do not evaluate their keys, which can give an error such as an overflow.
+        let none = match &self.links[link].kind {
+            LinkKind::Exists(probe) => probe.none(),
+            LinkKind::Value(scalar) => scalar.none(),
+            _ => false,
+        };
+        let exprs = if none { Vec::new() } else { self.links[link].outer() };
         let cols = exprs.iter().map(|e| self.eval(e, batch, sel)).collect::<Result<Vec<Col>>>()?;
         let dicts = &self.dicts;
         let ints: Vec<Option<Ints<'_>>> = cols.iter().map(Col::ints).collect();
