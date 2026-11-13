@@ -2,6 +2,8 @@
 //!
 //! `cargo run --release -p rupg-crash -- --files 1000000 --threads 8` is the M1 run of spec/21 section 21.9.4. The runner owns the process, so it uses the threads and the clock of the operating system.
 //!
+//! `rupg-crash sql` takes the same arguments and runs the workload of SQL of [`rupg_crash::sql`] instead, on a table with an index of each access method.
+//!
 //! Two more modes run the same workload on a real file system for the tests of spec/21 section 21.9.3. See tests/realdisk/README.md.
 //!
 //! - `rupg-crash workload --file F --seed S --steps N [--mark CMD]` runs the workload on the file `F`. Before each change it prints `pending <n> <digest>`, and after the change is acknowledged it prints `ack <n> <digest>`. The digest is the checksum of the tables and rows. If `--mark` is given, the shell runs `CMD` after each acknowledged change, with `{}` replaced by `ack<n>`.
@@ -21,7 +23,7 @@ use rupg::Platform;
 use rupg_crash::{Config, Counts, Event, digest, run, verify, workload};
 
 const USAGE: &str =
-    "usage: rupg-crash [--files N] [--threads N] [--first-seed N] [--steps N] [--sample N]
+    "usage: rupg-crash [sql] [--files N] [--threads N] [--first-seed N] [--steps N] [--sample N]
        rupg-crash workload --file F --seed S --steps N [--mark CMD]
        rupg-crash verify --file F --expect D1,D2";
 
@@ -35,7 +37,8 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("workload") => real_workload(&args[1..]),
         Some("verify") => real_verify(&args[1..]),
-        _ => simulated(&args),
+        Some("sql") => simulated(&args[1..], rupg_crash::sql::run, 40),
+        _ => simulated(&args, run, 200),
     }
 }
 
@@ -125,12 +128,12 @@ fn real_verify(args: &[String]) -> ExitCode {
     }
 }
 
-/// The T8 run on the simulated disk.
-fn simulated(args: &[String]) -> ExitCode {
+/// The T8 run on the simulated disk of the workload `run`, whose seeds have `steps` steps unless `--steps` says otherwise.
+fn simulated(args: &[String], run: fn(Config) -> Result<Counts, String>, steps: u32) -> ExitCode {
     let mut files = 10_000u64;
     let mut threads = std::thread::available_parallelism().map_or(1, |n| n.get());
     let mut first = 0u64;
-    let mut steps = 200u32;
+    let mut steps = steps;
     let mut sample = 16usize;
     for pair in args.chunks(2) {
         let value = pair.get(1).and_then(|v| v.parse::<u64>().ok());

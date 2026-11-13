@@ -19,6 +19,8 @@ rupg.workspace = true
 rupg-common.workspace = true
 rupg-file.workspace = true
 rupg-platform.workspace = true
+rupg-session.workspace = true
+rupg-wire.workspace = true
 
 [lints]
 workspace = true
