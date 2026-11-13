@@ -1,0 +1,71 @@
+> create table orders (o_id int primary key, note text)
+CREATE TABLE
+> create table lineitem (l_id int, l_order int)
+CREATE TABLE
+> create index li_ord on lineitem using link (l_order) with (parent = 'orders')
+CREATE INDEX
+> insert into orders values (1, 'a'), (2, 'b')
+INSERT 0 2
+> insert into lineitem values (1, 1), (2, 2), (3, 1), (4, null), (5, 9)
+INSERT 0 5
+> select nspname from pg_namespace where nspname = 'rupg'
+fields nspname@pg_namespace.2:19:64:-1
+row rupg
+SELECT 1
+> select proname, pronamespace::regnamespace, prorettype::regtype, proargtypes::regtype[] from pg_proc where proname = 'rupg_link_check'
+fields proname@pg_proc.2:19:64:-1,pronamespace:4089:4:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1
+row rupg_link_check,rupg,bigint,[0:0]={regclass}
+SELECT 1
+> select obj_description('rupg.rupg_link_check'::regproc, 'pg_proc')
+fields obj_description:25:-1:-1
+row check and repair the forward links of a link index or of the link indexes of a table
+SELECT 1
+> select rupg_link_check('lineitem')
+ERROR 42883 function rupg_link_check(unknown) does not exist at 8
+> select rupg.rupg_link_check('lineitem')
+fields rupg_link_check:20:8:-1
+row 3
+SELECT 1
+> select rupg.rupg_link_check('lineitem')
+fields rupg_link_check:20:8:-1
+row 0
+SELECT 1
+> select rupg.rupg_link_check('li_ord')
+fields rupg_link_check:20:8:-1
+row 0
+SELECT 1
+> select rupg.rupg_link_check('orders')
+fields rupg_link_check:20:8:-1
+row 0
+SELECT 1
+> select rupg.rupg_link_check('orders_pkey')
+fields rupg_link_check:20:8:-1
+ERROR 42809 "orders_pkey" is not a table or a link index
+> select rupg.rupg_link_check(null)
+fields rupg_link_check:20:8:-1
+row NULL
+SELECT 1
+> update orders set o_id = 3 where o_id = 2
+UPDATE 1
+> select rupg.rupg_link_check('lineitem')
+fields rupg_link_check:20:8:-1
+row 1
+SELECT 1
+> update orders set o_id = 2 where o_id = 3
+UPDATE 1
+> update lineitem set l_order = 2 where l_id = 3
+UPDATE 1
+> select rupg.rupg_link_check('lineitem')
+fields rupg_link_check:20:8:-1
+row 2
+SELECT 1
+> select l_id, note from lineitem join orders on l_order = o_id order by l_id
+fields l_id@lineitem.1:23:4:-1,note@orders.2:25:-1:-1
+row 1,a
+row 2,b
+row 3,b
+SELECT 3
+> select rupg.rupg_link_check('lineitem')
+fields rupg_link_check:20:8:-1
+row 0
+SELECT 1

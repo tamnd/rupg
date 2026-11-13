@@ -42,6 +42,7 @@ mod jsonbuild;
 mod jsonedit;
 mod jsonpath;
 mod large_object;
+mod link;
 mod lsn;
 mod mac;
 mod math;
@@ -1195,6 +1196,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| unicode::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| large_object::by_src(src))
+        .or_else(|| link::by_src(src))
         .or_else(|| encoding::by_src(src))
         .or_else(|| cash::by_src(src))
         .or_else(|| mac::by_src(src))
