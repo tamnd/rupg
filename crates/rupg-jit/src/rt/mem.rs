@@ -1,5 +1,5 @@
 // Lifted from rudb crates/rudb-qc-rt/src/mem.rs at cd9f9676 (2026-10-05).
-// Changes: `write` expects to be unused until the runtime functions that write through it are lifted.
+// Changes: none.
 
 //! Reads through addresses compiled code hands the runtime.
 
@@ -23,10 +23,6 @@ pub(crate) unsafe fn slice<'a>(at: usize, n: usize) -> &'a [u8] {
 /// # Safety
 ///
 /// `at` must be the address of `bytes.len()` writable bytes nobody else is reading.
-#[expect(
-    dead_code,
-    reason = "the runtime functions of rudb's `rt.rs` write through it, and they are not lifted yet"
-)]
 pub(crate) unsafe fn write(at: usize, bytes: &[u8]) {
     // SAFETY: the caller's contract.
     unsafe {
