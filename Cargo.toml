@@ -88,6 +88,8 @@ sha2 = { version = "0.11", default-features = false }
 # rustls, ring: TLS for rupg-server with the feature tls, so rupg does not link OpenSSL. ring also gives the hash of the certificate for SCRAM with channel binding. See spec/22-crate-layout.md section 22.5.
 ring = "0.17.14"
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "ring"] }
+# iced-x86: the disassembler of the tests of the direct compile tier in rupg-jit, a development dependency only, pinned as in rudb. See spec/22-crate-layout.md section 22.5.
+iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "intel"] }
 # loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
 loom = "0.7.2"
 
