@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `LIKE` and `ILIKE` of a `varchar` column run on the vectors as for a `text` column, and the search of the dictionary takes a pattern with more than one literal between percent signs, as `%special%requests%` of TPC-H Q13 (#1538).
 - A scalar subquery that reads no column of the outer query and does not read a CTE runs once on the vectors, at its first use, and a `numeric` column compares with a constant of more digits than the column holds (#1536).
 - `Link Join` of spec/15 over a link of spec/13: with `rupg.use_links` on, a join of a child table to its parent on the key columns of a validated `USING link` index reads the parent of each child row through the link and checks the pair, so the results equal those of a hash join, and `EXPLAIN` shows `Link Join`, `Link Cond` and, with `VERBOSE` or a non-text format, `Link: <index> (validated)` (#1537)
 - A query of one table with 1000 or more rows reads the table through the vectors, as a large table does, and the vectors test `IN` and `NOT IN` of text constants on the codes of the dictionary (#1534).

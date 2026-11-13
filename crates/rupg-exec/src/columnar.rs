@@ -1856,7 +1856,7 @@ impl<'q> Exec<'q> {
             ExprKind::Const(Value::Null) => return Ok(Some(Col::bools(&vec![None; sel.len()]))),
             _ => return Ok(None),
         };
-        if !matches!(a.kind, ExprKind::Var(_)) {
+        if !matches!(unlabel(a).kind, ExprKind::Var(_)) {
             return Ok(None);
         }
         let fold = matches!(src, "texticlike" | "texticnlike");
@@ -5502,6 +5502,20 @@ fn task_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
     exec.zone_test(cond).or_else(|| code_test(exec, tasks, cond))
 }
 
+/// The column `x` of `x::text` for a `varchar` column `x`, which is a `RelabelType` with the same bytes, as the `LIKE` of a `varchar` column has it. Another expression is as it is.
+fn unlabel(expr: &Expr) -> &Expr {
+    match &expr.kind {
+        ExprKind::Relabel(arg, _)
+            if expr.ty == oid::TEXT
+                && matches!(arg.ty, oid::VARCHAR | oid::TEXT)
+                && matches!(arg.kind, ExprKind::Var(_)) =>
+        {
+            arg
+        }
+        _ => expr,
+    }
+}
+
 /// The number of the words of the set of codes that one task of [`code_test`] fills, which is 16384 codes.
 const CODE_WORDS: usize = 256;
 
@@ -5513,6 +5527,7 @@ fn code_test(exec: &Exec<'_>, tasks: &dyn Tasks, cond: &Expr) -> Option<(usize, 
         return None;
     }
     let [a, b] = func.args.as_slice() else { return None };
+    let a = unlabel(a);
     let place = match &a.kind {
         ExprKind::Var(var) if var.levels_up == 0 && var.attnum > 0 => {
             place_of(exec, a).filter(|&p| p < exec.stored.len())?
