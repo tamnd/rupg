@@ -157,17 +157,9 @@ impl Encoded {
     ///
     /// For a value that is not of `ty`.
     pub fn push(&mut self, ty: Type, v: &Value) -> Result<()> {
-        let at = self.rows;
-        self.rows += 1;
-        if self.valid.len() < self.rows.div_ceil(8) {
-            self.valid.push(0);
-        }
         let mut w = [0u8; 16];
         let width = match (ty.oid, v) {
-            (_, Value::Null) => {
-                self.clean = false;
-                ty.data().map_or(1, Ty::bytes) as usize
-            }
+            (_, Value::Null) => ty.data().map_or(1, Ty::bytes) as usize,
             (oid::BOOL, Value::Bool(b)) => {
                 w[0] = u8::from(*b);
                 1
@@ -196,10 +188,38 @@ impl Encoded {
             (oid::BYTEA, Value::Bytea(b)) => self.string(b, &mut w),
             _ => return Err(Error::internal(format!("a value {v:?} in a column of {ty}"))),
         };
-        if !matches!(v, Value::Null) {
-            self.valid[at / 8] |= 1 << (at % 8);
+        self.cell(!matches!(v, Value::Null), &w[..width]);
+        Ok(())
+    }
+
+    /// Adds the string or the `bytea` of the bytes `b` to a column of [`Encoded::text`].
+    ///
+    /// # Errors
+    ///
+    /// For a column whose values are not `str16`.
+    pub fn push_bytes(&mut self, b: &[u8]) -> Result<()> {
+        if !self.text {
+            return Err(Error::internal("bytes in a column that is not of strings"));
         }
-        let end = self.len + width;
+        let mut w = [0u8; 16];
+        let width = self.string(b, &mut w);
+        self.cell(true, &w[..width]);
+        Ok(())
+    }
+
+    /// Adds a row with the bytes `w` of its value, valid or null.
+    fn cell(&mut self, valid: bool, w: &[u8]) {
+        let at = self.rows;
+        self.rows += 1;
+        if self.valid.len() < self.rows.div_ceil(8) {
+            self.valid.push(0);
+        }
+        if valid {
+            self.valid[at / 8] |= 1 << (at % 8);
+        } else {
+            self.clean = false;
+        }
+        let end = self.len + w.len();
         if self.values.len() * 16 < end {
             self.values.push(0);
         }
@@ -210,9 +230,8 @@ impl Encoded {
                 self.values.len() * 16,
             )
         };
-        bytes[self.len..end].copy_from_slice(&w[..width]);
+        bytes[self.len..end].copy_from_slice(w);
         self.len = end;
-        Ok(())
     }
 
     /// The `str16` of `b` in `w`, its long bytes kept in the column, and its width.
@@ -226,6 +245,12 @@ impl Encoded {
         };
         w.copy_from_slice(&header.to_le_bytes());
         16
+    }
+
+    /// The number of rows.
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        self.rows
     }
 
     /// The values as bytes.

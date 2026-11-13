@@ -248,6 +248,9 @@ pub type LockedRows = Option<Vec<Vec<Value>>>;
 /// The forward link of a link index: the ID of the parent version by the ID of the child version, as [`Session::link_forward`] shares it.
 pub type Forward = BTreeMap<u64, u64>;
 
+/// The clock and the tasks of the server, which [`Session::platform`] gives the compile tiers. A background compile outlives the call that started it, so both are shared.
+pub type Platform = (Arc<dyn rupg_platform::Clock>, Option<Arc<dyn rupg_platform::Tasks>>);
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -317,6 +320,10 @@ pub trait Session {
     }
     /// The tasks of the server, on which a scan runs its parts at the same time, or `None` for a session with no server.
     fn tasks(&self) -> Option<&dyn rupg_platform::Tasks> {
+        None
+    }
+    /// The clock and the tasks that the compile tiers of document 14 section 14.12 run on: the clock times the morsels and the tasks run the background compiles. `None` for a session that runs no compiled code.
+    fn platform(&self) -> Option<Platform> {
         None
     }
     /// The hash tables of the plan of `query`, as `rupg_opt::hash_tables` gives them, whose groups come in the order of the table. `None` when the session has no planner.

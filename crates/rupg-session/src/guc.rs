@@ -229,6 +229,13 @@ const HNSW_ITERATIVE_SCAN: [EnumOption; 3] = [
     EnumOption { name: "strict_order", value: 2, hidden: false },
 ];
 
+/// The values of `rupg.compile`.
+const COMPILE: [EnumOption; 3] = [
+    EnumOption { name: "auto", value: 0, hidden: false },
+    EnumOption { name: "interpreter", value: 1, hidden: false },
+    EnumOption { name: "direct", value: 2, hidden: false },
+];
+
 /// The values of `ivfflat.iterative_scan`, as `ivfflat_iterative_scan_options` of pgvector gives them.
 const IVFFLAT_ITERATIVE_SCAN: [EnumOption; 2] = [
     EnumOption { name: "off", value: 0, hidden: false },
@@ -236,7 +243,7 @@ const IVFFLAT_ITERATIVE_SCAN: [EnumOption; 2] = [
 ];
 
 /// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7), then the parameters of the libraries of the extensions that rupg ships, which `_PG_init` of the library defines: `hnsw.` and `ivfflat.` of pgvector, as with `shared_preload_libraries = 'vector'`. `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
-static EXTRA: [Parameter; 13] = [
+static EXTRA: [Parameter; 14] = [
     Parameter {
         name: "rupg.compat_version",
         context: Context::Backend,
@@ -283,6 +290,18 @@ static EXTRA: [Parameter; 13] = [
         extra_desc: None,
         flags: flag::NOT_IN_SAMPLE,
         kind: Kind::Real { boot: 0.10, min: 0.0, max: 1.0 },
+    },
+    // The compile tiers of spec/14 section 14.12, which `jit` does not control.
+    Parameter {
+        name: "rupg.compile",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the compile tier that the pipelines of a query start on.",
+        extra_desc: Some(
+            "auto runs the compiled pipelines in a build with a tier of machine code, starting each on the interpreter and compiling one that runs long enough, and runs the vectors otherwise; interpreter keeps every pipeline on the interpreter; and direct compiles each pipeline to machine code before it runs.",
+        ),
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Enum { boot: 0, options: &COMPILE },
     },
     Parameter {
         name: "rupg.show_extension_am",

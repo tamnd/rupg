@@ -1,0 +1,41 @@
+> CREATE TABLE cg (k int, s text, v int, w bigint, f float8, d date)
+CREATE TABLE
+> INSERT INTO cg SELECT i % 4, (ARRAY['ash','birch','alder'])[i % 3 + 1], CASE WHEN i % 17 = 0 THEN NULL ELSE i END, i::bigint * 1000003, i / 8.0, DATE '2024-02-27' + i % 3 FROM generate_series(1, 5000) i
+INSERT 0 5000
+> SET rupg.compile = interpreter
+SET
+> SELECT k, count(*), count(v), sum(v), min(w), max(f) FROM cg WHERE v > 10 GROUP BY k ORDER BY k
+fields k@cg.1:23:4:-1,count:20:8:-1,count:20:8:-1,sum:20:8:-1,min:20:8:-1,max:701:8:-1
+row 0,1175,1175,2943820,12000036,625
+row 1,1173,1173,2938809,13000039,624.625
+row 2,1173,1173,2938798,14000042,624.25
+row 3,1175,1175,2943813,11000033,624.875
+SELECT 4
+> SELECT s, count(*), avg(v) FROM cg GROUP BY s ORDER BY s
+fields s@cg.2:25:-1:-1,count:20:8:-1,avg:1700:-1:-1
+row alder,1667,2501.6558317399617591
+row ash,1666,2499.0000000000000000
+row birch,1667,2499.5315487571701721
+SELECT 3
+> SELECT d, count(*), sum(f) FROM cg GROUP BY d HAVING count(*) > 1666 ORDER BY d
+fields d@cg.6:1082:4:-1,count:20:8:-1,sum:701:8:-1
+row 2024-02-28,1667,520937.5
+row 2024-02-29,1667,521145.875
+SELECT 2
+> SELECT k, sum(v) FROM cg WHERE s LIKE 'a%' GROUP BY k ORDER BY 2 DESC, 1 LIMIT 3
+fields k@cg.1:23:4:-1,sum:20:8:-1
+row 0,1960900
+row 1,1960900
+row 2,1960866
+SELECT 3
+> SELECT k, sum(v * 1000000) FROM cg GROUP BY k
+fields k@cg.1:23:4:-1,sum:20:8:-1
+ERROR 22003 integer out of range
+> SET rupg.compile = auto
+SET
+> SELECT s, count(*), avg(v) FROM cg GROUP BY s ORDER BY s
+fields s@cg.2:25:-1:-1,count:20:8:-1,avg:1700:-1:-1
+row alder,1667,2501.6558317399617591
+row ash,1666,2499.0000000000000000
+row birch,1667,2499.5315487571701721
+SELECT 3

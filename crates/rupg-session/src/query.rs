@@ -1315,6 +1315,11 @@ impl rupg_func::Session for Reader<'_> {
         self.activity.and_then(|(_, store)| store.tasks())
     }
 
+    fn platform(&self) -> Option<rupg_func::Platform> {
+        let conn = self.conn?;
+        Some((conn.shared_clock(), self.activity.and_then(|(_, store)| store.shared_tasks())))
+    }
+
     fn interrupted(&self) -> Result<()> {
         if self.cancel.is_some_and(|c| c.swap(false, Ordering::Relaxed)) {
             return Err(Error::new(

@@ -886,6 +886,7 @@ dependencies = [
  "rupg-common",
  "rupg-func",
  "rupg-index",
+ "rupg-jit",
  "rupg-kernels",
  "rupg-opt",
  "rupg-pgcatalog",

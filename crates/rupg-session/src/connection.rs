@@ -646,6 +646,11 @@ impl Connection {
         self.clock = clock;
     }
 
+    /// The clock of the session, shared, for the background compiles of the compile tiers.
+    pub(crate) fn shared_clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
     /// Sets the file system of the server, which `COPY ... FROM` a file reads.
     pub fn set_io(&mut self, io: Arc<dyn Io>) {
         self.io = Some(io);
@@ -4724,6 +4729,12 @@ mod tests {
     #[test]
     fn group_count_top() {
         big_stack(|| script(include_str!("connection/group_count_top.test")));
+    }
+
+    /// `rupg.compile = interpreter` runs the groups of a query of one table on the compiled pipelines, with the answers and the errors of the vectors.
+    #[test]
+    fn compile_groups() {
+        big_stack(|| script(include_str!("connection/compile_groups.test")));
     }
 
     #[test]
