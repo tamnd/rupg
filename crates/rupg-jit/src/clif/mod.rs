@@ -784,7 +784,17 @@ impl<'a, 'b> Lower<'a, 'b> {
             }
             Form::Sel => {
                 let (c, a, b) = (self.val(o[0])?, self.val(o[1])?, self.val(o[2])?);
-                let r = self.b.ins().select(c, a, b);
+                let r = if matches!(ty, Ty::I128 | Ty::Str16) {
+                    // The aarch64 backend of Cranelift 0.125 panics on a select of 128 bits whose
+                    // condition is a compare of 128 bits, so each half is selected on its own.
+                    let ((a_lo, a_hi), (b_lo, b_hi)) =
+                        (self.b.ins().isplit(a), self.b.ins().isplit(b));
+                    let lo = self.b.ins().select(c, a_lo, b_lo);
+                    let hi = self.b.ins().select(c, a_hi, b_hi);
+                    self.b.ins().iconcat(lo, hi)
+                } else {
+                    self.b.ins().select(c, a, b)
+                };
                 self.def(i, r);
             }
             Form::TrapBin => {

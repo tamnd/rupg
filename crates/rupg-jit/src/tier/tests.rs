@@ -376,6 +376,34 @@ fn flow_on(m: &Module, tier: Tier) {
     }
 }
 
+/// A select of 128 bits on a compare of 128 bits, which the aarch64 backend of Cranelift does not
+/// lower as one instruction. The `jit_verify` fuzz target found it.
+const WIDE_SELECT: &str = "module wide
+func @wide version=generic plan=#1
+block b0(ptr %st, ptr %m):
+  %a = load.i128 [%st + 64]
+  %b = load.i128 [%st + 80]
+  %c = icmp.uge i128 %a, %b
+  %r = select i128 %c, %a, %b
+  store.i128 [%st + 96], %r
+  ret 0
+";
+
+#[test]
+fn a_select_of_128_bits_on_a_compare_of_128_bits_is_the_interpreters() {
+    let m = parse(WIDE_SELECT).expect("the module parses");
+    verify(&m).expect("the module verifies");
+    let mut bits = Bits(3);
+    for tier in natives() {
+        let (interp, native) = both(&m, tier);
+        for _ in 0..200 {
+            let (a, b) = (bits.wide(), bits.wide());
+            assert_eq!(run(&interp, a, b), run(&native, a, b), "{tier} on {a:#x}, {b:#x}");
+            assert_eq!(run(&native, a, b).1, a.max(b), "{tier} on {a:#x}, {b:#x}");
+        }
+    }
+}
+
 #[test]
 fn a_cancelled_query_stops_at_a_poll_on_both_tiers() {
     let m = parse(FLOW).expect("the flow module parses");

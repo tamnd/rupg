@@ -53,6 +53,14 @@ cargo +nightly run --release --example type_replay -- diff recv corpus/type_recv
 
 The server reads the files of `COPY`, so the directory must be an absolute path that the server can read, and the user must be a superuser or have `pg_read_server_files`. A case where rupg gives `0A000` counts as not supported. For an input with `now`, `today`, `tomorrow` or `yesterday`, only `OK` or the SQLSTATE of the error counts.
 
+### The compile tiers
+
+`jit_verify` runs one function of QIR, the intermediate code of `rupg-jit`, on the interpreter and on each tier of machine code that the build has: Cranelift, and the direct tier on x86-64. The input is read as a program and not as text, because text that changes byte by byte seldom parses. Its first bytes give the type and the value of four inputs, and each next group of bytes gives an instruction: an opcode, its operands from the values before it, and a type or a constant where the opcode takes one. The instructions are the ones that compute on values: arithmetic, the checked arithmetic that traps, compares, `select`, conversions and decimal scales. An instruction that does not verify is dropped. The function loads the inputs from the state and stores each value into a slot of its own.
+
+| Target | Input | Also a failure |
+|---|---|---|
+| `jit_verify` | the types and values of four inputs, then up to 32 instructions | a tier that gives another status or other bytes of the state than the interpreter, or a code generator that panics. A tier that does not lower a function runs it on the interpreter, which is not a failure |
+
 ## Run a target
 
 Install `cargo-fuzz` and the nightly toolchain:
@@ -76,4 +84,4 @@ To run a failing input again:
 cargo +nightly fuzz run -O -s none file_open artifacts/file_open/crash-<hash>
 ```
 
-`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file, and 2000 random inputs to `type_input` and `type_recv`. The nightly workflow runs each target for 20 minutes. The workflow `fuzz` runs the long runs of section 21.7 on request. Each job runs one target with one worker on each of the 4 CPUs of the runner, and a target gets more than one job because a job has a limit of 6 hours. The defaults give each M2 target 2 jobs of 11400 seconds, which is 25.3 CPU hours. At most 4 jobs run at once, so the run leaves runners for the checks of the pull requests and takes about 6.5 hours. The summary of each job gives the first and the last status lines of the fuzzer.
+`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file, 2000 random inputs to `type_input` and `type_recv`, and 300 random inputs to `jit_verify`. The nightly workflow runs each target for 20 minutes. The workflow `fuzz` runs the long runs of section 21.7 on request. Each job runs one target with one worker on each of the 4 CPUs of the runner, and a target gets more than one job because a job has a limit of 6 hours. The defaults give each M2 target 2 jobs of 11400 seconds, which is 25.3 CPU hours. At most 4 jobs run at once, so the run leaves runners for the checks of the pull requests and takes about 6.5 hours. The summary of each job gives the first and the last status lines of the fuzzer.

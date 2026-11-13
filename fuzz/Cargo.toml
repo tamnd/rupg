@@ -18,6 +18,8 @@ rupg-buffer = { path = "../crates/rupg-buffer" }
 rupg-common = { path = "../crates/rupg-common" }
 rupg-file = { path = "../crates/rupg-file" }
 rupg-func = { path = "../crates/rupg-func" }
+# The jit_verify target compares the Cranelift tier with the interpreter.
+rupg-jit = { path = "../crates/rupg-jit", features = ["jit"] }
 rupg-log = { path = "../crates/rupg-log" }
 rupg-platform = { path = "../crates/rupg-platform" }
 rupg-types = { path = "../crates/rupg-types" }
@@ -68,6 +70,13 @@ bench = false
 [[bin]]
 name = "type_recv"
 path = "fuzz_targets/type_recv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jit_verify"
+path = "fuzz_targets/jit_verify.rs"
 test = false
 doc = false
 bench = false
