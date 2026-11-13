@@ -39,6 +39,7 @@ mod identity;
 mod index;
 mod jsonpath;
 mod language;
+mod link;
 mod lock;
 mod matview;
 mod objaddr;

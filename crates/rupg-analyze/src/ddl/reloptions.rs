@@ -16,6 +16,8 @@ pub(super) enum Kind {
     Real(f64, f64),
     /// `RELOPT_TYPE_ENUM` with the words that it accepts and the detail of its error.
     Enum(&'static [&'static str], &'static str),
+    /// `RELOPT_TYPE_STRING` with no validator: any text.
+    Text,
 }
 
 /// An option that a kind of relation or a column accepts, as `relopt_gen` gives it. `toast` is true when a TOAST table also accepts it, as `RELOPT_KIND_TOAST` gives it.
@@ -314,6 +316,7 @@ pub(super) fn validate(options: &[String], known: &[Opt], toast: bool) -> Result
                     .with_detail(detail));
                 }
             }
+            Kind::Text => {}
         }
     }
     Ok(())

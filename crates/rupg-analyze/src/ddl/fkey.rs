@@ -434,7 +434,7 @@ impl Definer<'_, '_> {
     }
 
     /// `transformFkeyGetPrimaryKey`: the index, the columns and the operator classes of the primary key.
-    fn primary_key(&self, table: u32, name: &str) -> Result<(u32, Vec<i16>, Vec<u32>)> {
+    pub(super) fn primary_key(&self, table: u32, name: &str) -> Result<(u32, Vec<i16>, Vec<u32>)> {
         let index = self
             .catalog
             .constraints_of(table)
@@ -466,7 +466,7 @@ impl Definer<'_, '_> {
     }
 
     /// `transformFkeyCheckAttrs`: the first unique index, in OID order, on exactly the columns. The operator classes follow the order of the columns. With `PERIOD` the index is the index of an exclusion constraint, and its last column is the period.
-    fn unique_index(
+    pub(super) fn unique_index(
         &self,
         table: u32,
         keys: &[i16],

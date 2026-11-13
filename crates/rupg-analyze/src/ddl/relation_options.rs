@@ -25,6 +25,7 @@ const BRIN: u32 = 3580;
 fn index_options(method: u32) -> &'static [Opt] {
     match method {
         HASH => reloptions::HASH,
+        rupg_index::am::LINK => super::link::OPTIONS,
         GIST => reloptions::GIST,
         GIN => reloptions::GIN,
         SPGIST => reloptions::SPGIST,

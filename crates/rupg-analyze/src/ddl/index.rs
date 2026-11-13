@@ -341,6 +341,13 @@ impl Definer<'_, '_> {
                 self.ann_build_check(ann, column, &options)?;
             }
         }
+        let mut refs = refs;
+        if am.core == rupg_index::am::LINK {
+            let parent =
+                self.link_parent(table, &columns[..key_count], predicate.is_some(), &options)?;
+            // The link depends on its parent as a foreign key does, so `DROP TABLE` of the parent needs `CASCADE`.
+            refs.push(ObjRef::new(PG_CLASS, parent));
+        }
         let pages = self.index_pages(table, am.core);
         let new = NewIndex {
             table,
@@ -671,7 +678,10 @@ impl Definer<'_, '_> {
             )
             .at_opt(at));
         }
-        let class = self.resolve_opclass(&elem.opclass, ty, method)?;
+        // A `link` has no classes of its own: a column compares with the parent key by the equality of its `btree` class.
+        let class_method =
+            if am.core == rupg_index::am::LINK { rupg_index::am::BTREE } else { method };
+        let class = self.resolve_opclass(&elem.opclass, ty, class_method)?;
         let mut option = 0;
         // `amcanorder`: only an ordered method takes `ASC`, `DESC`, `NULLS FIRST` and `NULLS LAST`.
         if am.can_order {

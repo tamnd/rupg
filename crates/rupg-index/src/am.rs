@@ -1,4 +1,4 @@
-//! The `IndexAmRoutine` of each index access method that rupg has: the six core families of PostgreSQL 19, as `bthandler`, `hashhandler`, `gisthandler`, `ginhandler`, `spghandler` and `brinhandler` fill it, and the two of pgvector, as `ivfflathandler` and `hnswhandler` fill it. `pg_indexam_has_property`, `CREATE INDEX`, `CREATE OPERATOR CLASS` and the planner read the flags here, so each family reports the values of its PostgreSQL namesake.
+//! The `IndexAmRoutine` of each index access method that rupg has: the six core families of PostgreSQL 19, as `bthandler`, `hashhandler`, `gisthandler`, `ginhandler`, `spghandler` and `brinhandler` fill it, the two of pgvector, as `ivfflathandler` and `hnswhandler` fill it, and `link` of rupg. `pg_indexam_has_property`, `CREATE INDEX`, `CREATE OPERATOR CLASS` and the planner read the flags here, so each family reports the values of its PostgreSQL namesake.
 
 /// `BTREE_AM_OID`.
 pub const BTREE: u32 = 403;
@@ -12,6 +12,8 @@ pub const GIN: u32 = 2742;
 pub const SPGIST: u32 = 4000;
 /// `BRIN_AM_OID`.
 pub const BRIN: u32 = 3580;
+/// The OID of `link`, the link index of spec/13 section 13.2. PostgreSQL leaves the OIDs from 8000 to 9999 to development (`unused_oids`), so no pin has it.
+pub const LINK: u32 = 9900;
 
 /// The fields of an `IndexAmRoutine`. The callbacks are flags: true when the routine sets the callback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +110,7 @@ const NONE: Routine = Routine {
 };
 
 /// The routines of the core index access methods, by the OID of the row of `pg_am`.
-static CORE: [(u32, Routine); 6] = [
+static CORE: [(u32, Routine); 7] = [
     (
         BTREE,
         // `bthandler`: `BTMaxStrategyNumber`, `BTNProcs` and `BTOPTIONS_PROC`.
@@ -231,6 +233,17 @@ static CORE: [(u32, Routine); 6] = [
             can_build_parallel: true,
             summarizing: true,
             get_bitmap: true,
+            ..NONE
+        },
+    ),
+    (
+        LINK,
+        // A link stores the parent row of each child row (spec/13 section 13.2). The planner joins over it and never scans it, so it gives no row and no bitmap, and its columns compare with the equality of their `btree` classes.
+        Routine {
+            name: "link",
+            handler: "linkhandler",
+            can_multi_col: true,
+            optional_key: true,
             ..NONE
         },
     ),

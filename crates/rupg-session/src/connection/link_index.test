@@ -1,0 +1,98 @@
+!details
+> create table orders (o_id int primary key, o_alt int unique, note text)
+CREATE TABLE
+> create table lineitem (l_id int, l_order int, l_alt bigint, l_text text)
+CREATE TABLE
+> select count(*) from pg_am where amname = 'link'
+fields count:20:8:-1
+row 0
+SELECT 1
+> show rupg.show_extension_am
+fields rupg.show_extension_am:25:-1:-1
+row off
+SHOW
+> create index li_ord on lineitem using link (l_order) with (parent = 'orders')
+CREATE INDEX
+> select oid, amname, amhandler, amtype from pg_am where amname = 'link'
+fields oid@pg_am.1:26:4:-1,amname@pg_am.2:19:64:-1,amhandler@pg_am.3:24:4:-1,amtype@pg_am.4:18:1:-1
+row 9900,link,-,i
+SELECT 1
+> select relam::int as relam, relkind::text as relkind from pg_class where relname = 'li_ord'
+fields relam:23:4:-1,relkind:25:-1:-1
+row 9900,i
+SELECT 1
+> create index li_alt on lineitem using link (l_alt) with (parent = 'public.orders', parent_columns = 'o_alt')
+CREATE INDEX
+> create index on lineitem using link (l_order)
+ERROR 22023 access method "link" requires the parameter "parent"
+> create index on lineitem using link (l_order) with (parent = 'nope')
+ERROR 42P01 relation "nope" does not exist
+> create index on lineitem using link (l_order) with (parent = 'orders_pkey')
+ERROR 42809 parent relation "orders_pkey" is not a table
+> create index on lineitem using link (l_text) with (parent = 'orders', parent_columns = 'note')
+ERROR 42830 there is no unique constraint matching given keys for referenced table "orders"
+> create index on lineitem using link (l_text) with (parent = 'orders', parent_columns = 'nope')
+ERROR 42703 column "nope" of relation "orders" does not exist
+> create index on lineitem using link (l_text) with (parent = 'orders')
+ERROR 42804 foreign key constraint "link" cannot be implemented
+DETAIL Key columns "l_text" of the referencing table and "o_id" of the referenced table are of incompatible types: text and integer.
+> create index on lineitem using link (l_order, l_alt) with (parent = 'orders')
+ERROR 42830 number of link columns and parent key columns disagree
+> create unique index on lineitem using link (l_order) with (parent = 'orders')
+ERROR 0A000 access method "link" does not support unique indexes
+> create index on lineitem using link ((l_order + 1)) with (parent = 'orders')
+ERROR 0A000 access method "link" does not support index expressions
+> create index on lineitem using link (l_order) with (parent = 'orders') where l_id > 0
+ERROR 0A000 access method "link" does not support partial indexes
+> create index on lineitem using link (l_order desc) with (parent = 'orders')
+ERROR 0A000 access method "link" does not support ASC/DESC options at 38
+> create index on lineitem using link (l_order) with (parent = 'orders', fillfactor = 50)
+ERROR 22023 unrecognized parameter "fillfactor"
+> insert into orders values (1, 10, 'a'), (2, 20, 'b')
+INSERT 0 2
+> insert into lineitem values (1, 1, 10, 'x'), (2, 2, 20, 'y'), (3, 1, 20, 'z')
+INSERT 0 3
+> select l_id, o_alt from lineitem join orders on l_order = o_id order by l_id
+fields l_id@lineitem.1:23:4:-1,o_alt@orders.2:23:4:-1
+row 1,10
+row 2,20
+row 3,10
+SELECT 3
+> drop table orders
+ERROR 2BP01 cannot drop table orders because other objects depend on it
+DETAIL index li_ord depends on table orders
+index li_alt depends on table orders
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> drop table orders cascade
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to index li_ord
+drop cascades to index li_alt
+DROP TABLE
+> select count(*) from pg_am where amname = 'link'
+fields count:20:8:-1
+row 0
+SELECT 1
+> set rupg.show_extension_am = on
+SET
+> select count(*) from pg_am where amname = 'link'
+fields count:20:8:-1
+row 1
+SELECT 1
+> show rupg.graph_budget
+fields rupg.graph_budget:25:-1:-1
+row 0.1
+SHOW
+> set rupg.graph_budget = 2
+ERROR 22023 2 is outside the valid range for parameter "rupg.graph_budget" (0 .. 1)
+> show rupg.use_links
+fields rupg.use_links:25:-1:-1
+row on
+SHOW
+> show rupg.auto_link
+fields rupg.auto_link:25:-1:-1
+row on
+SHOW
+> select count(*) from pg_settings where name like 'rupg.%'
+fields count:20:8:-1
+row 0
+SELECT 1

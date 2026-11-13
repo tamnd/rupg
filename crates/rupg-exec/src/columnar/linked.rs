@@ -522,6 +522,8 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
         || query.with_ties
         || query.has_target_srfs()
         || !query.barrier.is_empty()
+        // A table with row security is a subquery with the conditions of its policies, which the scans of the stored columns do not test.
+        || query.relations.iter().any(|r| r.subquery.is_some())
     {
         return false;
     }

@@ -236,7 +236,7 @@ const IVFFLAT_ITERATIVE_SCAN: [EnumOption; 2] = [
 ];
 
 /// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7), then the parameters of the libraries of the extensions that rupg ships, which `_PG_init` of the library defines: `hnsw.` and `ivfflat.` of pgvector, as with `shared_preload_libraries = 'vector'`. `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
-static EXTRA: [Parameter; 9] = [
+static EXTRA: [Parameter; 13] = [
     Parameter {
         name: "rupg.compat_version",
         context: Context::Backend,
@@ -255,6 +255,43 @@ static EXTRA: [Parameter; 9] = [
         extra_desc: None,
         flags: flag::NOT_IN_SAMPLE | flag::DISALLOW_IN_FILE,
         kind: Kind::String { boot: Some(env!("CARGO_PKG_VERSION")) },
+    },
+    // The settings of the link indexes of spec/13 section 13.2 and of the access methods of rupg (spec/12).
+    Parameter {
+        name: "rupg.use_links",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Enables the planner's use of link joins.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Bool { boot: true },
+    },
+    Parameter {
+        name: "rupg.auto_link",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Creates a link index for each new foreign key constraint.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Bool { boot: true },
+    },
+    Parameter {
+        name: "rupg.graph_budget",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Sets the share of the column bytes of a table that its links may take.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Real { boot: 0.10, min: 0.0, max: 1.0 },
+    },
+    Parameter {
+        name: "rupg.show_extension_am",
+        context: Context::User,
+        category: "Customized Options",
+        short_desc: "Shows the access methods of rupg in pg_am.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Bool { boot: false },
     },
     Parameter {
         name: "hnsw.ef_search",
