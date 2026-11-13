@@ -632,6 +632,8 @@ struct Exec<'q> {
     likes: FxMap<*const Expr, Vec<u8>>,
     /// For each dictionary, the number of characters of each code plus one, or 0 for a code that `length` has not seen.
     lengths: FxMap<usize, Vec<u32>>,
+    /// For each `x IN (c, ...)` of integers, the set of the elements, or `None` for no element, and true when an element is null.
+    int_sets: FxMap<*const Expr, (Option<lift::Keys>, bool)>,
     /// The dictionary of each key of `GROUP BY` whose codes come from a map of [`key_map`] on the tasks.
     key_dicts: FxMap<*const Expr, usize>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
@@ -1277,10 +1279,58 @@ impl<'q> Exec<'q> {
                 if let Some(col) = self.text_in(*func, *any, args, batch, sel)? {
                     return Ok(col);
                 }
+                if let Some(col) = self.int_in(expr, *func, *any, args, batch, sel)? {
+                    return Ok(col);
+                }
             }
             _ => {}
         }
         self.generic(expr, batch, sel)
+    }
+
+    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of integers, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, as the domain of a lifted subquery also makes them. The test makes the set of the elements once, as the bits or the hash set of [`lift::Keys`], and each row looks up its value in the set. PostgreSQL also hashes the elements of a long constant array. A null element makes the test null for a row that no element is equal to. `None` for another test, for an array that is not a constant, or for a column that does not have integers.
+    fn int_in(
+        &mut self,
+        expr: &Expr,
+        func: u32,
+        any: bool,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let Some(equal) = crate::int_equality(func) else { return Ok(None) };
+        let [a, b] = args else { return Ok(None) };
+        let ExprKind::Const(Value::Array(array)) = &b.kind else { return Ok(None) };
+        if equal != any {
+            return Ok(None);
+        }
+        let key: *const Expr = expr;
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.int_sets.entry(key) {
+            let mut null_element = false;
+            let mut ints = Vec::with_capacity(array.values.len());
+            for value in &array.values {
+                match value {
+                    None | Some(Value::Null) => null_element = true,
+                    Some(value) => match int_of(value) {
+                        Some(v) => ints.push(v),
+                        None => return Ok(None),
+                    },
+                }
+            }
+            // An array with no element gives false for `ANY` and true for `ALL`, also for a null value.
+            let set = (!array.values.is_empty()).then(|| lift::Keys::of(ints.iter().copied()));
+            slot.insert((set, null_element));
+        }
+        let col = self.eval(a, batch, sel)?;
+        let Some(ints) = col.ints() else { return Ok(None) };
+        let Some((set, null_element)) = self.int_sets.get(&key) else { return Ok(None) };
+        let Some(set) = set else { return Ok(Some(Col::bools(&vec![Some(!any); sel.len()]))) };
+        // The test of a row whose value is equal to no element.
+        let other = (!null_element).then_some(!equal);
+        let out: Vec<Option<bool>> = (0..sel.len())
+            .map(|i| ints.get(i).and_then(|v| if set.contains(v) { Some(equal) } else { other }))
+            .collect();
+        Ok(Some(Col::bools(&out)))
     }
 
     /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
@@ -2698,6 +2748,7 @@ pub(crate) fn run_on(
         generic: FxMap::default(),
         likes: FxMap::default(),
         lengths: FxMap::default(),
+        int_sets: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
@@ -2928,6 +2979,7 @@ pub(crate) fn selected(
         generic: FxMap::default(),
         likes: FxMap::default(),
         lengths: FxMap::default(),
+        int_sets: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
