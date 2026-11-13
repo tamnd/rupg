@@ -1,0 +1,14 @@
+; A hash chain walk with no poll: a long chain would keep the query from being cancelled.
+module v11
+
+func @v11.generic version=generic plan=#1
+block b0(ptr %st, ptr %m):
+  %head = load.ptr [%st + 8]
+  br b1(%head)
+loop(1) b1(ptr %e):
+  %nx = load.ptr [%e]
+  %addr = bitcast ptr %nx -> i64
+  %end = icmp.eq i64 %addr, 0
+  brif %end, b2, b1(%nx)
+block b2:
+  ret 0

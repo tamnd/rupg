@@ -1,0 +1,8 @@
+; A string that points into the scan buffer stored into state that outlives the morsel.
+module v10
+
+func @v10.generic version=generic plan=#1
+block b0(ptr %st, ptr %m):
+  %s = load.str [%m + 32] class=transient
+  store.str [%st + 16], %s
+  ret 0

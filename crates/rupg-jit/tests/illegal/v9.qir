@@ -1,0 +1,12 @@
+; A guard after a store: when the guard fails the morsel reruns on the fallback, and the store
+; would happen twice.
+module v9
+  guard !G0 "F1" fallback=v9.generic inv
+
+func @v9.fast version=fast plan=#1
+block b0(ptr %st, ptr %m):
+  %x = load.i64 [%m + 8]
+  store.i64 [%st + 8], %x
+  %c = icmp.slt i64 %x, 100
+  guard %c, !G0
+  ret 0
