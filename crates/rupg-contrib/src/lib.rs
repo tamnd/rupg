@@ -1,6 +1,6 @@
 //! The contrib extensions that document 16 lists, in Rust.
 //!
-//! Each extension is a [`Builtin`] of `rupg-ext`: the control file and the scripts of the pin, unchanged, in [`generated`], and the table that binds each C symbol of the scripts to a Rust kernel. Each extension is behind a cargo feature of its name, on by default. The extension `vector` of pgvector, which `spec/13-graph-indexes.md` section 13.4 lists, is one too, with its files from `vendor/pgvector`. See `spec/16-procedures-and-extensions.md` sections 16.7 and 16.8.
+//! Each extension is a [`Builtin`] of `rupg-ext`: the control file and the scripts of the pin, unchanged, in `generated`, and the table that binds each C symbol of the scripts to a Rust kernel. Each extension is behind a cargo feature of its name, on by default. The extension `vector` of pgvector, which `spec/13-graph-indexes.md` section 13.4 lists, is one too, with its files from `vendor/pgvector`. See `spec/16-procedures-and-extensions.md` sections 16.7 and 16.8.
 
 #![forbid(unsafe_code)]
 

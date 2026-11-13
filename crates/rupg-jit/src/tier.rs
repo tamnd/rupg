@@ -24,7 +24,7 @@
 //! compiled, which is rule I1, and every other one is compiled on `direct`, which is rule I2.
 //!
 //! A pipeline `auto` compiled on `direct` may then move up to `clif` while it runs, when the rows
-//! it has left make the compile pay for itself, which the [`up`] module decides.
+//! it has left make the compile pay for itself, which the `up` module decides.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
