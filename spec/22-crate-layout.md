@@ -203,7 +203,7 @@ A lift is a copy of a file from rudb into a rupg crate, with changes. rupg does 
 | `crates/rudb-graph/src/link.rs`, `adjacency.rs`, `rid.rs`, `rids.rs`, `keymap.rs`, `degree.rs`, `span.rs` | `rupg-graph` | M6 | the row ids become the rupg `RowId` with its shard field |
 | `crates/rudb-qc-ir/src/*` | `rupg-jit` | M6 | the IR types gain the PostgreSQL types. The printer and parser are the text form of document 21 section 21.6 |
 | `crates/rudb-qc-interp/src/lib.rs`, `crates/rudb-qc-clif/src/lib.rs`, `crates/rudb-qc-direct/src/` | `rupg-jit` | M6 | the tiers stay as they are, behind the `jit` feature for the Cranelift tier |
-| `crates/rudb-qc-rt/src/abi.rs`, `code.rs`, `mem.rs`, `table.rs`, `like.rs` | `rupg-jit` | M6 | the runtime calls `rupg-func` in place of rudb's functions |
+| `crates/rudb-qc-rt/src/abi.rs`, `code.rs`, `mem.rs`, `table.rs`, `like.rs`, `text.rs`, `join.rs`, `native.rs`, `ablate.rs`, `rt.rs` | `rupg-jit` | M6 | the runtime calls `rupg-func` in place of rudb's functions. A regular expression is a pattern that the driver makes from the one of `rupg-func`, a date is the day number of PostgreSQL, and the cancel flag is the session's |
 
 The frequency synopses of H3 come from the design in `../2140/storage-v3/11-certified-frequency-synopses.md`. If the rudb code for them is not on `main` at the time of M8, rupg writes them from the design.
 
