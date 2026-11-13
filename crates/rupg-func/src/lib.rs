@@ -1091,7 +1091,7 @@ pub fn set_libraries(libraries: Libraries) {
     let _ = LIBRARIES.set(libraries);
 }
 
-/// The rows of `pg_available_extensions`, or of `pg_available_extension_versions` with `versions`, for the extensions that rupg builds in, which a crate above this one gives with [`set_available_extensions`]. The location of each row is [`SYSTEM_LOCATION`](crate::absent::SYSTEM_LOCATION), which the function hides from a role that is not a superuser.
+/// The rows of `pg_available_extensions`, or of `pg_available_extension_versions` with `versions`, for the extensions that rupg builds in, which a crate above this one gives with [`set_available_extensions`]. The location of each row is `SYSTEM_LOCATION`, which the function hides from a role that is not a superuser.
 pub type AvailableExtensions = fn(versions: bool) -> Vec<Vec<Value>>;
 
 /// The function of [`set_available_extensions`].

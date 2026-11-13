@@ -474,7 +474,7 @@ impl GroupTable {
     }
 
     /// What compiled code needs to make rows without looking itself, while the table does: the
-    /// address of the lanes' [`tails`](GroupTable::tails) and how many more rows it may make that
+    /// address of the lanes' `tails` and how many more rows it may make that
     /// way. Both zero when it may not, which is when the table looks for keys, has an [`Agreed`]
     /// set, starts its accumulators at anything but zero, or has a string key, whose long strings
     /// have to be copied into the heap. The words are good until the next insert.

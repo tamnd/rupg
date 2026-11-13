@@ -533,7 +533,7 @@ fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
     Ok(if p.is_empty() { Like::True } else { Like::Abort })
 }
 
-/// The search of `LIKE` for a pattern `%literal%` or `%first%second%...%`, where the literals have no `%`, `_` or `\\`, in many texts of a dictionary at one time. A text matches such a pattern when its bytes hold the bytes of the literals in their order with no overlap, as [`match_text`] finds it. The bytes of the texts of a dictionary are one after the other, so one search of the bytes of many codes finds the first literal in all of them, with a vector search and no call for each text. Only the texts that hold the first literal search for the others.
+/// The search of `LIKE` for a pattern `%literal%` or `%first%second%...%`, where the literals have no `%`, `_` or `\\`, in many texts of a dictionary at one time. A text matches such a pattern when its bytes hold the bytes of the literals in their order with no overlap, as `match_text` finds it. The bytes of the texts of a dictionary are one after the other, so one search of the bytes of many codes finds the first literal in all of them, with a vector search and no call for each text. Only the texts that hold the first literal search for the others.
 #[derive(Debug)]
 pub struct Infix {
     /// The search for the first literal.

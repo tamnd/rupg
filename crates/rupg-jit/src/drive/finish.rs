@@ -192,7 +192,7 @@ impl Encoded {
         Ok(())
     }
 
-    /// Adds the string or the `bytea` of the bytes `b` to a column of [`Encoded::text`].
+    /// Adds the string or the `bytea` of the bytes `b` to a column of `Encoded::text`.
     ///
     /// # Errors
     ///
