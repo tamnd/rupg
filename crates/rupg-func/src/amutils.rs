@@ -2,6 +2,7 @@
 
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
+use rupg_index::am::{BTREE, GIST, Routine, SPGIST};
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
@@ -11,12 +12,6 @@ use crate::{BrinRanges, Call, Kernel, Session, bad_value};
 const DESC: i16 = 1;
 /// `INDOPTION_NULLS_FIRST`.
 const NULLS_FIRST: i16 = 2;
-/// The OID of `btree`.
-const BTREE: u32 = 403;
-/// The OID of `gist`.
-const GIST: u32 = 783;
-/// The OID of `spgist`.
-const SPGIST: u32 = 4000;
 /// `GIST_COMPRESS_PROC`.
 const GIST_COMPRESS: i16 = 3;
 /// `GIST_DISTANCE_PROC`.
@@ -24,51 +19,9 @@ const GIST_DISTANCE: i16 = 8;
 /// `GIST_FETCH_PROC`.
 const GIST_FETCH: i16 = 9;
 
-/// The fields of an `IndexAmRoutine` that the properties read.
-struct Routine {
-    can_order: bool,
-    can_order_by_op: bool,
-    can_backward: bool,
-    can_unique: bool,
-    can_multi_col: bool,
-    search_array: bool,
-    search_nulls: bool,
-    clusterable: bool,
-    can_include: bool,
-    /// `amgettuple` is set.
-    get_tuple: bool,
-    /// `amcanreturn` is set.
-    can_return: bool,
-}
-
 /// `GetIndexAmRoutineByAmId` with `noerror`: the routine of a built-in index access method, or `None` for an OID that is not an index access method.
 fn routine(am: u32) -> Option<Routine> {
-    let r = |flags: [bool; 11]| Routine {
-        can_order: flags[0],
-        can_order_by_op: flags[1],
-        can_backward: flags[2],
-        can_unique: flags[3],
-        can_multi_col: flags[4],
-        search_array: flags[5],
-        search_nulls: flags[6],
-        clusterable: flags[7],
-        can_include: flags[8],
-        get_tuple: flags[9],
-        can_return: flags[10],
-    };
-    let (t, f) = (true, false);
-    Some(match am {
-        BTREE => r([t, f, t, t, t, t, t, t, t, t, t]),
-        // hash
-        405 => r([f, f, t, f, f, f, f, f, f, t, f]),
-        GIST => r([f, t, f, f, t, f, t, t, t, t, t]),
-        // gin
-        2742 => r([f, f, f, f, t, f, f, f, f, f, f]),
-        SPGIST => r([f, t, f, f, f, f, t, f, t, t, t]),
-        // brin
-        3580 => r([f, f, f, f, t, f, t, f, f, f, f]),
-        _ => return None,
-    })
+    rupg_index::am::core(am).copied()
 }
 
 /// The facts of an index that the properties read: the access method, the number of columns, the number of key columns, and `indclass` and `indoption` of the key columns.

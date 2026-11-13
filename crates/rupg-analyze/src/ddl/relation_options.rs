@@ -83,7 +83,7 @@ impl Definer<'_, '_> {
         }
         let Some(rel) = self.catalog.relation(target.oid) else { return Ok(()) };
         let toast = rel.toast;
-        let method = rel.index.as_ref().map_or(0, |i| i.method);
+        let method = rel.index.as_ref().map_or(0, |i| self.core_method(i.method));
         let options = reloptions::transform(&rel.options, defs, None, HEAP_NAMESPACES, reset)?;
         match target.kind {
             b'r' | b'm' => reloptions::validate(&options, reloptions::HEAP, false)?,

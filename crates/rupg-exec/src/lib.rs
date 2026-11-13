@@ -2754,7 +2754,11 @@ fn order(
         match bound {
             // One row has no order.
             _ if rows.len() <= 1 => {}
-            // A plan with no `Sort` gives the rows in the order of its scans, which `ORDER BY` keeps for equal keys. The order of a scan by distance of a `gist` index is not known.
+            // An ordered scan of a `gist` index gives the rows of its leaf from its queue, a pairing heap, which does not keep the order of the leaf for equal distances.
+            _ if session.join_order(query).is_some_and(|order| order.iter().any(|s| s.knn)) => {
+                rows = rupg_index::gist::pairing_order(rows, |a, b| keys.compare(a, b))?;
+            }
+            // A plan with no `Sort` gives the rows in the order of its scans, which `ORDER BY` keeps for equal keys.
             _ if session
                 .join_order(query)
                 .is_some_and(|order| order.iter().any(|s| !s.keys.is_empty())) =>

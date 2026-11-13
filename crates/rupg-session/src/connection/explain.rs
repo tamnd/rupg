@@ -323,7 +323,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     nulls_not_distinct: info.nulls_not_distinct,
                     immediate: info.immediate,
                     partial: info.predicate.is_some(),
-                    method: info.method,
+                    method: core_method(catalog, info.method),
                     columns: info.keys.clone(),
                     families: info.classes.iter().map(|c| class(c).map_or(0, |c| c.0)).collect(),
                     default_class: info
@@ -397,11 +397,12 @@ impl rupg_opt::Members for Members<'_, '_> {
         // `GIST_COMPRESS_PROC` and `GIST_FETCH_PROC`.
         let numbers =
             |family: u32| catalog.amprocs().filter(move |p| p.family == family).map(|p| p.number);
-        let gist = catalog.opfamilies().filter(|f| f.method == GIST_AM).map(|f| f.oid);
+        let is_gist = |f: &&rupg_catalog::OpFamily| core_method(catalog, f.method) == GIST_AM;
+        let gist = catalog.opfamilies().filter(is_gist).map(|f| f.oid);
         let gist_returns =
             gist.filter(|&f| numbers(f).any(|n| n == 9) || numbers(f).all(|n| n != 3)).collect();
         // `GIST_SORTSUPPORT_PROC`.
-        let gist = catalog.opfamilies().filter(|f| f.method == GIST_AM).map(|f| f.oid);
+        let gist = catalog.opfamilies().filter(is_gist).map(|f| f.oid);
         let gist_sorted = gist.filter(|&f| numbers(f).any(|n| n == 11)).collect();
         rupg_opt::Classes {
             amops: amops.collect(),
@@ -518,6 +519,19 @@ pub(super) const BRIN_AM: u32 = 3580;
 
 /// `GIST_AM_OID`.
 const GIST_AM: u32 = 783;
+
+/// The OID of the core access method whose handler the row `am` of `pg_am` names, so that the planner treats `CREATE ACCESS METHOD gist2 TYPE INDEX HANDLER gisthandler` as `gist`: `am` itself for a core method, a method of a library or an unknown handler.
+pub(super) fn core_method(catalog: &rupg_catalog::Catalog, am: u32) -> u32 {
+    if am < rupg_catalog::FIRST_NORMAL_OID {
+        return am;
+    }
+    let Some(handler) = catalog.access_method(am).map(|a| a.handler) else { return am };
+    let found = match catalog.function(handler) {
+        Some(f) => rupg_index::am::by_handler(&f.src),
+        None => builtin::proc_by_oid(handler).and_then(|p| rupg_index::am::by_handler(p.src)),
+    };
+    found.and_then(|(core, _)| core).unwrap_or(am)
+}
 
 /// The indexes of the system catalog `table`, with the sizes of a new database. The root of an index with more pages than the metapage and one leaf is not a leaf.
 fn catalog_indexes(table: u32) -> Vec<Index> {

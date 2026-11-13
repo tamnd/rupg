@@ -242,7 +242,7 @@ impl Definer<'_, '_> {
                 format!("access method \"{}\" does not support exclusion constraints", am.name),
             ));
         }
-        let options = self.create_index_options(method, &stmt.options)?;
+        let options = self.create_index_options(am.core, &stmt.options)?;
         let temp =
             self.catalog.relation(table).is_some_and(|r| self.catalog.is_temp_schema(r.namespace));
         let tablespace =
@@ -257,7 +257,7 @@ impl Definer<'_, '_> {
         let mut exprs = Vec::new();
         for (i, element) in all.iter().enumerate() {
             let column =
-                self.index_column(table, element, i >= key_count, method, stmt.isconstraint)?;
+                self.index_column(table, element, i >= key_count, am, stmt.isconstraint)?;
             if column.key == 0 {
                 exprs.extend(element.expr.as_ref().map(|e| strip_collate(e).clone()));
             }
@@ -341,7 +341,7 @@ impl Definer<'_, '_> {
                 self.ann_build_check(ann, column, &options)?;
             }
         }
-        let pages = self.index_pages(table, method);
+        let pages = self.index_pages(table, am.core);
         let new = NewIndex {
             table,
             name: stmt.idxname.as_deref().map(str::to_string),
@@ -570,9 +570,10 @@ impl Definer<'_, '_> {
         table: u32,
         element: &Element,
         included: bool,
-        method: u32,
+        am: super::opclass::Method,
         isconstraint: bool,
     ) -> Result<NewIndexColumn> {
+        let method = am.oid;
         let elem = &element.elem;
         let at = place(elem.location);
         let rel = self.catalog.relation(table);
@@ -672,7 +673,8 @@ impl Definer<'_, '_> {
         }
         let class = self.resolve_opclass(&elem.opclass, ty, method)?;
         let mut option = 0;
-        if method == BTREE {
+        // `amcanorder`: only an ordered method takes `ASC`, `DESC`, `NULLS FIRST` and `NULLS LAST`.
+        if am.can_order {
             if elem.ordering == SortByDir::SORTBY_DESC {
                 option |= 1;
             }

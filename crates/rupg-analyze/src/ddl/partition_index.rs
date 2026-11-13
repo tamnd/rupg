@@ -320,7 +320,7 @@ impl Definer<'_, '_> {
             exprs: info.exprs.clone(),
             predicate: info.predicate.clone(),
             refs,
-            pages: self.index_pages(child, info.method),
+            pages: self.index_pages(child, self.core_method(info.method)),
         };
         let (temp, child_partitioned) = self.catalog.relation(child).map_or((false, false), |r| {
             (self.catalog.is_temp_schema(r.namespace), r.kind == RelKind::Partitioned)
