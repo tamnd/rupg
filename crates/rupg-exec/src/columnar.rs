@@ -32,6 +32,9 @@ const MEMO: usize = 1 << 20;
 /// The number of rows between the read of the slot of a row and its probe: enough reads at once to hide most of the wait for the memory, and few enough that the slots stay in the cache.
 const PREFETCH_ROWS: usize = 16;
 
+/// The least number of rows of a table that a query of one table reads through the vectors. A smaller table costs less to read by rows than to make columns of.
+const SCAN_ROWS: usize = 1000;
+
 /// The most groups that the map of `GROUP BY` has room for before the scan sees the rate of new groups: four vectors.
 const START_GROUPS: usize = 4 * VECTOR;
 
@@ -1204,9 +1207,81 @@ impl<'q> Exec<'q> {
                     return Ok(col);
                 }
             }
+            ExprKind::ScalarArrayOp { func, any, args, collation } if plain(*collation) => {
+                if let Some(col) = self.text_in(*func, *any, args, batch, sel)? {
+                    return Ok(col);
+                }
+            }
             _ => {}
         }
         self.generic(expr, batch, sel)
+    }
+
+    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
+    fn text_in(
+        &mut self,
+        func: u32,
+        any: bool,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let (equal, padded) = match (src(func), any) {
+            ("texteq", true) => (true, false),
+            ("textne", false) => (false, false),
+            ("bpchareq", true) => (true, true),
+            ("bpcharne", false) => (false, true),
+            _ => return Ok(None),
+        };
+        let [a, b] = args else { return Ok(None) };
+        let ExprKind::Const(Value::Array(array)) = &b.kind else { return Ok(None) };
+        let mut null_element = false;
+        let mut texts: Vec<&[u8]> = Vec::with_capacity(array.values.len());
+        for value in &array.values {
+            match value {
+                None | Some(Value::Null) => null_element = true,
+                Some(Value::Text(text)) => texts.push(text.as_bytes()),
+                Some(_) => return Ok(None),
+            }
+        }
+        let col = self.eval(a, batch, sel)?;
+        let Data::Code(codes, d) = &col.data else { return Ok(None) };
+        let dict = &self.dicts[*d];
+        if !dict.is_text() {
+            return Ok(None);
+        }
+        let trim = |t: &[u8]| -> usize { t.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1) };
+        // The test of a row whose value is equal to no element.
+        let other = (!null_element).then_some(!equal);
+        let mut out: Vec<Option<bool>> = Vec::with_capacity(sel.len());
+        if padded {
+            let mut wanted: Vec<&[u8]> = texts.iter().map(|t| &t[..trim(t)]).collect();
+            wanted.sort_unstable();
+            wanted.dedup();
+            for (i, &code) in codes.iter().enumerate() {
+                if code == 0 || col.null(i) {
+                    out.push(None);
+                    continue;
+                }
+                let Some(text) = dict.text(code) else { return Ok(None) };
+                let found = wanted.binary_search(&&text[..trim(text)]).is_ok();
+                out.push(if found { Some(equal) } else { other });
+            }
+        } else {
+            let mut wanted: Vec<u32> =
+                texts.iter().map(|t| dict.find(t)).filter(|&c| c != 0 && c != MISSING).collect();
+            wanted.sort_unstable();
+            wanted.dedup();
+            for (i, &code) in codes.iter().enumerate() {
+                if code == 0 || col.null(i) {
+                    out.push(None);
+                    continue;
+                }
+                let found = wanted.binary_search(&code).is_ok();
+                out.push(if found { Some(equal) } else { other });
+            }
+        }
+        Ok(Some(Col::bools(&out)))
     }
 
     /// The subquery of `self.links[link]` for each row: the `EXISTS` that [`lift::Probe::tests`] gives for the key of the row and its other column, or the value that [`lift::Scalar::value`] gives for the keys of the row.
@@ -2456,7 +2531,7 @@ pub(crate) fn run(
         places[column] = wanted.len();
         wanted.push((column, kind));
     }
-    let Some((rows, stored)) = session.table_columns(relation.oid, &wanted)? else {
+    let Some((rows, stored)) = session.table_columns_of(relation.oid, &wanted, SCAN_ROWS)? else {
         return Ok(None);
     };
     // An `EXISTS` of `WHERE` with one integer key runs once, and the scan tests each row with a probe. Another `EXISTS` makes the row engine scan the table, with the same state of the subquery.

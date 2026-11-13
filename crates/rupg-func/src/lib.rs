@@ -701,6 +701,20 @@ pub trait Session {
     ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
         self.table_columns(relation, columns)
     }
+    /// The columns of [`Session::table_columns`] for a table of `least` or more rows. A table with fewer rows than a frozen table makes its columns from the values of its rows and keeps its rows as they are.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_columns_of(
+        &self,
+        relation: u32,
+        columns: &[(usize, rupg_column::segment::Kind)],
+        least: usize,
+    ) -> Result<Option<(usize, Vec<Arc<rupg_column::stored::Stored>>)>> {
+        let _ = least;
+        self.table_columns(relation, columns)
+    }
     /// The rows of [`Session::table_rows`] of only the versions `tids`, which come in the order of the IDs, as the scan gives them.
     ///
     /// # Errors
