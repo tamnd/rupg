@@ -40,6 +40,11 @@ fn float(ty: Ty, bits: u128) -> f64 {
     if ty == Ty::F32 { f64::from(f32of(bits)) } else { f64of(bits) }
 }
 
+/// The sign bit of a float of type `ty`.
+fn sign(ty: Ty) -> u128 {
+    if ty == Ty::F32 { 1 << 31 } else { 1 << 63 }
+}
+
 /// The bits of a float of type `ty`.
 fn unfloat(ty: Ty, x: f64) -> u128 {
     if ty == Ty::F32 { u128::from((x as f32).to_bits()) } else { u128::from(x.to_bits()) }
@@ -127,8 +132,9 @@ pub fn unary(op: Op, ty: Ty, to: Ty, a: u128) -> Result<u128, Fault> {
         Op::Fext => unfloat(to, f64::from(f32of(a))),
         Op::Ftrunc => unfloat(to, f64of(a)),
         Op::Bitcast => a,
-        Op::Fneg => unfloat(ty, -float(ty, a)),
-        Op::Fabs => unfloat(ty, float(ty, a).abs()),
+        // Negation and the absolute value change the sign bit and nothing else, as IEEE 754 says, so a NaN keeps its payload and stays signaling. Through `f64` an `f32` NaN would come back quiet in a debug build and not in a release build.
+        Op::Fneg => a ^ sign(ty),
+        Op::Fabs => a & !sign(ty),
         Op::Fsqrt => {
             if ty == Ty::F32 {
                 u128::from(f32of(a).sqrt().to_bits())

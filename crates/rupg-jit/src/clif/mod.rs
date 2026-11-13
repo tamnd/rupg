@@ -720,13 +720,6 @@ impl<'a, 'b> Lower<'a, 'b> {
         self.b.ins().bor(eq, both)
     }
 
-    /// Runs `op` on an `f32` in `f64`, as the interpreter does.
-    fn via_f64(&mut self, a: Value, ty: Ty, op: Op) -> Value {
-        let x = if ty == Ty::F32 { self.b.ins().fpromote(types::F64, a) } else { a };
-        let r = if op == Op::Fneg { self.b.ins().fneg(x) } else { self.b.ins().fabs(x) };
-        if ty == Ty::F32 { self.b.ins().fdemote(types::F32, r) } else { r }
-    }
-
     /// Checked add and subtract of two 128 bit values: the result and whether it overflowed.
     fn checked128(&mut self, op: Op, a: Value, b: Value) -> (Value, Value) {
         let (r, of) = match op {
@@ -1121,7 +1114,9 @@ impl<'a, 'b> Lower<'a, 'b> {
                     a
                 }
             }
-            Op::Fneg | Op::Fabs if from.is_float() => self.via_f64(a, from, op),
+            // Cranelift's `fneg` and `fabs` change only the sign bit, as the interpreter does, so a NaN keeps its bits.
+            Op::Fneg if from.is_float() => self.b.ins().fneg(a),
+            Op::Fabs if from.is_float() => self.b.ins().fabs(a),
             Op::Fsqrt if from.is_float() && to == from => self.b.ins().sqrt(a),
             Op::StrLen => {
                 let lo = self.low64(a, from);
