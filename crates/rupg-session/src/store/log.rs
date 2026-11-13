@@ -253,10 +253,13 @@ pub(super) fn read(io: &dyn Io, image: &Path, epoch: u64) -> Result<Option<Vec<V
     let len = usize::try_from(file.size()?).map_err(|_| corrupt("the log is too large"))?;
     let mut bytes = vec![0; len];
     file.read_at(0, &mut bytes)?;
-    // A crash after the new file and before the sync of its head leaves a log with no records.
+    // A crash after the new file and before the sync of its head leaves a log with no records: a file shorter than the head, or one whose zeros reached the disk and whose head did not. No record is written before the head is on the disk.
     let Some(head) = bytes.get(..16) else {
         return Ok(Some(Vec::new()));
     };
+    if head.iter().all(|&b| b == 0) {
+        return Ok(Some(Vec::new()));
+    }
     if &head[..8] != MAGIC || head[8..] != epoch.to_le_bytes() {
         return Err(corrupt("the file is not a log of rupg"));
     }
@@ -286,6 +289,26 @@ mod tests {
     use rupg_platform::sim::SimIo;
 
     use super::*;
+
+    /// A crash in the making of a log can leave its zeros on the disk with no head, and the log then has no records.
+    #[test]
+    fn a_log_whose_head_did_not_reach_the_disk_has_no_records() {
+        use rupg_platform::sim::{CrashPlan, Fate};
+        let io = SimIo::new(1);
+        let image = PathBuf::from("/data/data.rupg");
+        let at = path(&image, 2);
+        let file = io.open(&at, OpenMode::CreateNew).unwrap();
+        let mut head = MAGIC.to_vec();
+        head.extend_from_slice(&2u64.to_le_bytes());
+        file.write_at(0, &head).unwrap();
+        grow(&*file, HEAD, HEAD + 1).unwrap();
+        io.crash(&CrashPlan { fates: vec![Fate::Lost, Fate::Written], order: Vec::new() }).unwrap();
+        assert_eq!(read(&io, &image, 2).unwrap(), Some(Vec::new()));
+        // A head of another log is still an error.
+        let file = io.open(&at, OpenMode::ReadWrite).unwrap();
+        file.write_at(0, b"rupg\x00log\x07\0\0\0\0\0\0\0").unwrap();
+        assert!(read(&io, &image, 2).is_err());
+    }
 
     /// Commits on threads of the operating system that wait at the same time for the log all come back, and the log has each of their records.
     #[test]

@@ -862,6 +862,8 @@ dependencies = [
  "rupg-common",
  "rupg-file",
  "rupg-platform",
+ "rupg-session",
+ "rupg-wire",
 ]
 
 [[package]]

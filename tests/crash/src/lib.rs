@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod sql;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -128,6 +130,14 @@ impl Io for Hooked {
 
     fn sync_dir(&self, path: &Path) -> Result<()> {
         self.io.sync_dir(path)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        self.io.rename(from, to)
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<(String, bool)>> {
+        self.io.read_dir(path)
     }
 }
 
