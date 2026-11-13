@@ -50,6 +50,10 @@ pub(super) fn grouped(
     needed: usize,
 ) -> Result<Option<Grouped>> {
     let Some(options) = options(exec.session) else { return Ok(None) };
+    // A subquery that runs again for each row of the query outside it does not make a pipeline at each run.
+    if exec.cache.rescans.get() {
+        return Ok(None);
+    }
     let Some((clock, tasks)) = exec.session.platform() else { return Ok(None) };
     if !exec.links.is_empty() || !crate::agg::outer_calls(query).is_empty() {
         return Ok(None);

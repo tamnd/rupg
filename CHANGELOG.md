@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A correlated subquery of one table that cannot run once for all rows, such as `EXISTS (SELECT 1 FROM t WHERE t.k > o.k)`, runs on the vectors for each row of the outer query, with the outer columns as parameters. When the vectors give an error, the row engine runs the subquery for that row and gives the result or the error of PostgreSQL (#1564).
 - A table of fewer than 65536 rows that a load froze puts the rows that come after the load into its columns at the next scan. Before, the scan of such a table read each row with the row engine after one more insert (#1563).
 - Crash test: `rupg-crash sql` runs a workload of SQL transactions, checkpoints, restarts and `CREATE INDEX`/`DROP INDEX` on a table with an index of each access method, on the simulated disk. After each crash the rows and the indexes must be those of the last acknowledged step or the step in flight, and each index must answer its query as a sequential scan does. It joins the nightly crash job. Its first run found that a log whose zeros reached the disk before its head failed the open with `XX001 the file is not a log of rupg`. Such a log now reads as a log with no records, since no record is written before the head is synced (#1562)
 - `x IN (c, ...)` and `x NOT IN (c, ...)` of integers with a constant list test a set of the list elements. The vector scan makes the set once for each statement, and the row engine reads the constant array in place, with no copy for each row (#1561).

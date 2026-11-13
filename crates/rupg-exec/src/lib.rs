@@ -1000,6 +1000,120 @@ struct Cache {
     sent: RefCell<Rows>,
     /// The kernel and the `proisstrict` of each function that [`Cache::plain_kernel`] found, by the OID of the function, or `None` for a function that needs the full path of [`Eval::func`].
     kernels: RefCell<Vec<(u32, Option<PlainKernel>)>>,
+    /// The query of each correlated subquery with parameters in the place of the columns of the query outside it, by the address of the subquery, as [`bound_rows`] runs it on the vectors, or `None` for a subquery of another shape.
+    bound: RefCell<Vec<(*const Query, KeptBound)>>,
+    /// True while a correlated subquery runs on the vectors for one row of the query outside it, as [`bound_rows`] runs it. The compiled engine then does not run, because it makes its pipeline again at each run.
+    rescans: Cell<bool>,
+}
+
+/// The [`Bound`] form of a subquery, or `None` for a subquery that [`bind`] does not change.
+type KeptBound = Option<Rc<Bound>>;
+
+/// A correlated subquery of one table with a parameter in the place of each column of the query just outside it, as `ExecReScan` runs a `SubPlan` again with new values of its `PARAM_EXEC` parameters.
+struct Bound {
+    /// The subquery with the parameters.
+    query: Query,
+    /// The columns of the query outside, in the order of the parameters after the `base` parameters of the statement.
+    vars: Vec<Expr>,
+    base: usize,
+    /// True when the vectors did not run the subquery, so that the row engine runs it for each row.
+    declined: Cell<bool>,
+}
+
+/// The [`Bound`] form of `query` after `base` parameters. `None` when the subquery reads no column of the query just outside it, or when it reads a column of a query further out, a system column or a whole row of the query outside, an aggregate of an outer query, or a subquery of its own.
+fn bind(query: &Query, base: usize) -> Option<Bound> {
+    if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
+        || !matches!(query.relations.as_slice(), [r] if r.subquery.is_none())
+    {
+        return None;
+    }
+    let mut bound = query.clone();
+    let mut vars: Vec<Expr> = Vec::new();
+    let mut bad = false;
+    bound.each_expr_mut(0, &mut |expr, _| {
+        expr.each_mut(0, &mut |e, depth| match &e.kind {
+            ExprKind::SubLink(_) | ExprKind::PlaceHolder(_) => {
+                bad = true;
+                true
+            }
+            ExprKind::Agg(agg) if agg.levels_up != 0 => {
+                bad = true;
+                true
+            }
+            ExprKind::Var(var) if var.levels_up > depth => {
+                if depth != 0 || var.levels_up != 1 || var.attnum <= 0 {
+                    bad = true;
+                    return true;
+                }
+                let at = match vars.iter().position(|v| v.kind == e.kind) {
+                    Some(at) => at,
+                    None => {
+                        vars.push(e.clone());
+                        vars.len() - 1
+                    }
+                };
+                e.kind = ExprKind::Param(base + at + 1);
+                true
+            }
+            _ => false,
+        });
+    });
+    (!bad && !vars.is_empty()).then(|| Bound {
+        query: bound,
+        vars,
+        base,
+        declined: Cell::new(false),
+    })
+}
+
+/// The rows of a correlated subquery of one table for the row of the query outside it, through [`columnar::run`] with the values of the columns of the outer row as parameters. `EXISTS` needs one row. `None` when the subquery has another shape or the vectors do not run it, and also when the vectors give an error: the row engine then runs the subquery for this row, as PostgreSQL reads the rows in their order and can stop before the row of the error.
+fn bound_rows(
+    query: &Query,
+    (params, session, cache): (&[Value], &dyn Session, &Cache),
+    outer: &[Frame<'_>],
+    (want, unordered): (Option<usize>, bool),
+    exists: bool,
+) -> Result<Option<Rows>> {
+    let found = cache
+        .bound
+        .borrow()
+        .iter()
+        .find(|(q, _)| std::ptr::eq(*q, query))
+        .map(|(_, bound)| bound.clone());
+    let bound = match found {
+        Some(bound) => bound,
+        None => {
+            let bound = bind(query, params.len()).map(Rc::new);
+            cache.bound.borrow_mut().push((std::ptr::from_ref(query), bound.clone()));
+            bound
+        }
+    };
+    let Some(bound) = bound.filter(|b| !b.declined.get() && b.base == params.len()) else {
+        return Ok(None);
+    };
+    let empty = scan::Tables::default();
+    let mut values = params.to_vec();
+    {
+        let mut eval = Eval::new(params, session, &empty, cache, outer);
+        for var in &bound.vars {
+            values.push(eval.eval(var)?);
+        }
+    }
+    let want = if exists { Some(1) } else { want };
+    let rescans = cache.rescans.replace(true);
+    let result = columnar::run(&bound.query, &values, session, cache, want, unordered);
+    cache.rescans.set(rescans);
+    match result {
+        Ok(Some(rows)) if exists => {
+            Ok(Some(rows.into_iter().take(1).map(|_| Vec::new()).collect()))
+        }
+        Ok(Some(rows)) => Ok(Some(rows)),
+        Ok(None) => {
+            bound.declined.set(true);
+            Ok(None)
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 impl Cache {
@@ -1518,6 +1632,13 @@ fn run_query(
     let want = cache.want.take();
     let unordered = cache.unordered.take();
     let filled = cache.tables.borrow().iter().any(|(q, _, _)| std::ptr::eq(*q, query));
+    if !outer.is_empty()
+        && !filled
+        && let Some(rows) =
+            bound_rows(query, (params, session, cache), outer, (want, unordered), exists)?
+    {
+        return Ok(rows);
+    }
     // A subquery that reads no column of a query outside it runs once, so the scan can run it too.
     if !exists
         && (outer.is_empty() || !correlated(query))
