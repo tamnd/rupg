@@ -656,6 +656,15 @@ enum LinkKind {
     Value(lift::Scalar),
     /// An `x IN (SELECT ...)` whose subquery reads no column of the query.
     In(InSet),
+    /// A subquery of one value that reads no column of the query, which runs at its first use, as the `InitPlan` of PostgreSQL.
+    Once(Once),
+}
+
+/// The subquery of a [`LinkKind::Once`] and its value after its first run.
+struct Once {
+    /// A copy of the subquery, whose address is the key of its rows in the cache.
+    expr: Expr,
+    value: Option<Value>,
 }
 
 /// The integers of an `x IN (SELECT ...)` whose subquery reads no column of the query, as [`in_set`] gives them.
@@ -734,6 +743,7 @@ impl Link {
             }
             LinkKind::Value(scalar) => scalar.outer.clone(),
             LinkKind::In(found) => vec![found.outer.clone()],
+            LinkKind::Once(_) => Vec::new(),
         }
     }
 
@@ -745,6 +755,7 @@ impl Link {
             }
             LinkKind::Value(scalar) => scalar.outer.iter_mut().collect(),
             LinkKind::In(found) => vec![&mut found.outer],
+            LinkKind::Once(_) => Vec::new(),
         }
     }
 }
@@ -772,6 +783,13 @@ fn links_of<'a>(
                 SubLinkKind::Exists => {
                     LinkKind::Exists(lift::probe(&sub.query, params, session, cache)?)
                 }
+                SubLinkKind::Expr
+                    if !sub.volatile
+                        && !crate::correlated(&sub.query)
+                        && !reads_cte(&sub.query) =>
+                {
+                    LinkKind::Once(Once { expr: at.clone(), value: None })
+                }
                 SubLinkKind::Expr => LinkKind::Value(lift::scalar(&sub.query)?),
                 SubLinkKind::Any => LinkKind::In(in_set(at, params, session, cache)?),
                 _ => return None,
@@ -780,6 +798,18 @@ fn links_of<'a>(
         }
     }
     Some(links)
+}
+
+/// True when a query, or a query in it, reads a query of `WITH`. A run of the subquery on its own does not see the queries of `WITH` of the queries outside it.
+fn reads_cte(query: &Query) -> bool {
+    query.relations.iter().any(|r| r.cte.is_some() || r.subquery.as_deref().is_some_and(reads_cte))
+        || query.all_exprs(0).iter().any(|(e, depth)| {
+            e.find(*depth, &mut |e, _| match &e.kind {
+                ExprKind::SubLink(sub) if reads_cte(&sub.query) => Some(()),
+                _ => None,
+            })
+            .is_some()
+        })
 }
 
 /// Runs the subqueries of one value of the links in `conds`, before the scan of the `rows` rows reads them. The links go in the order of their conditions, so that the conditions before a link have no link that did not run. When few rows pass these conditions, the subquery reads only the rows of their keys, as [`domain`] gives them. False when a subquery must run for each row.
@@ -854,6 +884,41 @@ fn domain(
 fn numeric_kind(ty: u32, typmod: i32) -> Option<Kind> {
     let scale = u8::try_from(typmod.checked_sub(4)? & 0xffff).ok()?;
     (ty == oid::NUMERIC && typmod >= 4 && scale <= 18).then_some(Kind::Numeric(scale))
+}
+
+/// A comparison of a column of [`Data::Dec`] with a `numeric` constant that [`decs`] does not take, because its scale is more than 18 or it does not fit in a `bigint`, as the `avg` of the subquery of TPC-H Q22. Each value of the column is an integer count of `10^-scale`, so the test of the constant `c` is the same as a test of the floor or the ceiling of `c * 10^scale`: `x > c` is `x > floor`, `x >= c` is `x >= ceiling`, `x < c` is `x < ceiling` and `x <= c` is `x <= floor`. `None` for other columns and for a constant that is not finite.
+fn wide_compare(src: &str, a: &Col, b: &Col, rows: usize) -> Option<Col> {
+    let (side, constant, flip) = match (&a.data, &b.data) {
+        (_, Data::Const(Value::Numeric(c))) => (decs(a)?, c, false),
+        (Data::Const(Value::Numeric(c)), _) => (decs(b)?, c, true),
+        _ => return None,
+    };
+    let (x, scale) = side;
+    let scaled = constant.to_decimal(u32::from(scale))?;
+    let (floor, exact) = match Numeric::from_decimal(scaled, u32::from(scale)).compare(constant) {
+        std::cmp::Ordering::Equal => (scaled, true),
+        std::cmp::Ordering::Greater => (scaled - 1, false),
+        std::cmp::Ordering::Less => (scaled, false),
+    };
+    let ceiling = if exact { floor } else { floor + 1 };
+    // The operator with the column on its left side.
+    let op = match (src, flip) {
+        ("numeric_lt", true) => "numeric_gt",
+        ("numeric_le", true) => "numeric_ge",
+        ("numeric_gt", true) => "numeric_lt",
+        ("numeric_ge", true) => "numeric_le",
+        (op, _) => op,
+    };
+    let test = |v: i128| match op {
+        "numeric_eq" => exact && v == floor,
+        "numeric_ne" => !exact || v != floor,
+        "numeric_lt" => v < ceiling,
+        "numeric_le" => v <= floor,
+        "numeric_gt" => v > floor,
+        _ => v >= ceiling,
+    };
+    let out: Vec<Option<bool>> = (0..rows).map(|i| x.get(i).map(|v| test(i128::from(v)))).collect();
+    Some(Col::bools(&out))
 }
 
 /// True for a stored column whose integers are the values of its type, which is not true of a `numeric` column.
@@ -1286,6 +1351,25 @@ impl<'q> Exec<'q> {
 
     /// The subquery of `self.links[link]` for each row: the `EXISTS` that [`lift::Probe::tests`] gives for the key of the row and its other column, or the value that [`lift::Scalar::value`] gives for the keys of the row.
     fn link(&mut self, link: usize, batch: &mut Batch, sel: &[u32]) -> Result<Col> {
+        // `ExecEvalParamExec` runs an `InitPlan` when a row first reads its value, so a scan with no row here does not run it.
+        if let LinkKind::Once(once) = &self.links[link].kind {
+            let ty = self.links[link].ty;
+            if sel.is_empty() {
+                return Ok(Col::constant(Value::Null, ty));
+            }
+            let value = match &once.value {
+                Some(value) => value.clone(),
+                None => {
+                    let mut eval =
+                        Eval::new(self.params, self.session, &self.empty, self.cache, &[]);
+                    eval.eval(&once.expr)?
+                }
+            };
+            if let LinkKind::Once(once) = &mut self.links[link].kind {
+                once.value = Some(value.clone());
+            }
+            return Ok(Col::constant(value, ty));
+        }
         let exprs = self.links[link].outer();
         let cols = exprs.iter().map(|e| self.eval(e, batch, sel)).collect::<Result<Vec<Col>>>()?;
         let dicts = &self.dicts;
@@ -1329,6 +1413,9 @@ impl<'q> Exec<'q> {
                     values.push((value, 0));
                 }
                 Ok(self.collect(self.links[link].ty, None, values))
+            }
+            LinkKind::Once(_) => {
+                Err(Error::internal("a subquery that runs once has no outer columns"))
             }
         }
     }
@@ -1682,7 +1769,9 @@ impl<'q> Exec<'q> {
         };
         let [a, b] = args else { return Ok(None) };
         let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
-        let (Some((x, sx)), Some((y, sy))) = (decs(&a), decs(&b)) else { return Ok(None) };
+        let (Some((x, sx)), Some((y, sy))) = (decs(&a), decs(&b)) else {
+            return Ok(if compare.is_some() { wide_compare(src, &a, &b, sel.len()) } else { None });
+        };
         if let Some(compare) = compare {
             let scale = sx.max(sy);
             let (mx, my) = (10i128.pow(u32::from(scale - sx)), 10i128.pow(u32::from(scale - sy)));
