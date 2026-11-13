@@ -10044,6 +10044,10 @@ mod tests {
     /// A prepared statement keeps its composite constants when the catalog changes, as `PlanCacheRelCallback` invalidates only the plans that read the changed relation: after `ALTER TABLE ... ALTER COLUMN ... TYPE` of the row type, the old constant fails, as in `rowtypes-alter`, even after more changes of the catalog. A statement that reads the table is planned again with a new constant.
     #[test]
     fn prepared_row_constant_altered() {
+        big_stack(prepared_row_constant_altered_cases);
+    }
+
+    fn prepared_row_constant_altered_cases() {
         let (mut a, _) = connect_to(&Arc::new(Store::new()), 1234);
         send(&mut a, &query("CREATE TABLE rta (a int, b bytea)"));
         send(
