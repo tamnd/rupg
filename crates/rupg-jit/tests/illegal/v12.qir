@@ -1,0 +1,16 @@
+; A checked add on a nullable column with no test of its validity: a NULL row holds garbage and
+; must not raise an overflow.
+module v12
+  error !E0 overflow "INT64 (a + b)"
+
+func @v12.generic version=generic plan=#1
+  valid %a, %av
+block b0(ptr %st, ptr %m):
+  %a = load.i64 [%m + 8]
+  %av = load.bit [%m + 16]
+  %sum = sadd.t i64 %a, 1, !E0
+  %keep = and i1 %av, %av
+  %w = zext i1 %keep -> i64
+  %out = add i64 %sum, %w
+  store.i64 [%st + 8], %out
+  ret 0

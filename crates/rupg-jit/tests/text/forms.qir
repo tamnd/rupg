@@ -1,0 +1,76 @@
+; One instruction of every form, so the printer and the parser are held to all of them.
+module forms
+  error !E0 overflow "INT64 (a + b)"
+  error !E1 divide "Division by zero"
+  error !E2 conversion "DOUBLE to INTEGER"
+  guard !G0 "F3 zone map" fallback=forms.generic inv
+  counter #0 "rows"
+  kernel @K0 "lower(VARCHAR)"
+  blob 0 25616263
+
+func @forms.fast version=fast plan=#3 morsel-local
+  state 0 64 "scalars"
+  state 64 1024 "scratch"
+  valid %a, %av
+block b0(ptr %st, ptr %m):
+  %a = load.i64 [%m + 8] inv
+  %av = load.bit [%m + 5]
+  %b = load.i64 [%st + 8] nt a16
+  %f = load.f64 [%st + 16]
+  %g = load.f32 [%st + 24]
+  %s = load.str [%m + 32] class=transient
+  %c = icmp.slt i64 %b, -7
+  guard %c, !G0
+  brif %av, b1, b2
+block b1:
+  %sum = sadd.t i64 %a, %b, !E0
+  %q = sdiv.t i64 %sum, 3, !E1
+  %neg = sneg.t i64 %q, !E0
+  %up = dup.t i64 %neg, 2, !E0
+  %dn = ddown i64 %up, 1
+  %wide = smulw i64 %dn, %b
+  %lo = trunc i128 %wide -> i32
+  %fx = sitof i32 %lo -> f64
+  %fy = fadd f64 %fx, %f
+  %fz = fmin.tot f64 %fy, 0x7ff8000000000000
+  %fl = fcmp.lt.tot f64 %fz, -0.0
+  %gx = fext f32 %g -> f64
+  %gi = ftosi.t f64 %gx -> i32, !E2
+  %gs = sext i32 %gi -> i64
+  %sel = select i64 %fl, %gs, %dn
+  %len = str.len str16 %s
+  %inl = str.inl str16 %s
+  %w0 = str.w0 str16 %s
+  %w1 = str.w1 str16 %s
+  %s2 = str.mk %w0, %w1 class=transient
+  %p = rtcall @str_promote(%st, %s2) class=temporary
+  store.str [%st + 32], %p
+  %eqs = rtcall @str_eq(%p, %s)
+  %e8 = zext i1 %eqs -> i64
+  %len64 = zext i32 %len -> i64
+  %inl64 = zext i1 %inl -> i64
+  %x1 = add i64 %sel, %e8
+  %x2 = add i64 %x1, %len64
+  %x3 = add i64 %x2, %inl64
+  store.i64 [%st + 40], %x3
+  %same = memeq %st, %m, 16
+  memcpy %st, %m, 16
+  prefetch.r [%st + %a*8 + 64]
+  %old = atomic.add i64 %st, 1
+  %won = cas i64 %st, %old, 2
+  %o8 = zext i1 %won -> i64
+  %o9 = zext i1 %same -> i64
+  %oo = or i64 %o8, %o9
+  ctr.add #0, %oo
+  vcall @K0(1, %st, %m)
+  sadd.ov i64 %a, 1, b3, b4
+block b2:
+  switch i64 %b, b5(1), [0: b6, 7: b6]
+block b3(i64 %ok):
+  br b5(%ok)
+cold block b4:
+  trap !E0
+block b5(i64 %res):
+  ret %res
+cold block b6:
+  ret 1

@@ -752,6 +752,9 @@ version = "0.4.20"
 [[package]]
 name = "rupg-jit"
 version = "0.4.20"
+dependencies = [
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-kernels"

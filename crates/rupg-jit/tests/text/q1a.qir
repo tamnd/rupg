@@ -1,0 +1,74 @@
+; The probe pipeline of JOB 1a from section 6.8 of the QIR document, in the syntax this crate
+; prints. It is the example the round-trip and verifier tests start from.
+module q1a
+  error !E0 cancel "query cancelled"
+  guard !G0 "ht_t.size <= L2/2" fallback=q1a.p3.staged inv
+  counter #0 "probe matches"
+
+func @q1a.p3.fused version=fused plan=#14
+block b0(ptr %st, ptr %m):
+  %n = load.i32 [%m + 8] inv
+  %sel = load.ptr [%m + 16] inv
+  %c_mid = load.ptr [%m + 32] inv
+  %c_ct = load.ptr [%m + 40] inv
+  %ctbm = load.i64 [%st + 64] inv
+  %dir = load.ptr [%st + 72] inv
+  %shift = load.i64 [%st + 80] inv
+  %mn0 = load.i32 [%st + 96]
+  %mv0 = load.i8 [%st + 100]
+  %mv0b = trunc i8 %mv0 -> i1
+  br b1(0, %mn0, %mv0b)
+loop(1) batch b1(i32 %i, i32 %mn, i1 %mv):
+  %done = icmp.uge i32 %i, %n
+  brif %done, b7(%mn, %mv), b2
+block b2:
+  %r = load.i32 [%sel + %i*4]
+  %ct = load.i32 [%c_ct + %r*4]
+  %ct64 = zext i32 %ct -> i64
+  %bit = lshr i64 %ctbm, %ct64
+  %bit1 = trunc i64 %bit -> i1
+  %inext = add i32 %i, 1
+  brif %bit1, b3, b1(%inext, %mn, %mv)
+block b3:
+  %mid = load.i32 [%c_mid + %r*4]
+  %k = zext i32 %mid -> i64
+  %h1 = crc32c i64 6763793487589347598, %k
+  %h2 = crc32c i64 4593845798347983834, %k
+  %h2r = rotr i64 %h2, 32
+  %hx = xor i64 %h1, %h2r
+  %h = mul i64 %hx, 11400714819323198485
+  %slot = lshr i64 %h, %shift
+  %w = load.i64 [%dir + %slot*8]
+  %t4 = lshr i64 %h, 60
+  %t48 = add i64 %t4, 48
+  %tb = shl i64 1, %t48
+  %hit = and i64 %w, %tb
+  %miss = icmp.eq i64 %hit, 0
+  %e0 = and i64 %w, 281474976710655
+  brif %miss, b1(%inext, %mn, %mv), b4(%e0)
+loop(2) b4(i64 %e):
+  poll 1024
+  %ep = bitcast i64 %e -> ptr
+  %key = load.i32 [%ep + 8]
+  %eq = icmp.eq i32 %key, %mid
+  brif %eq, b5(%ep), b6
+block b5(ptr %hitp):
+  %py = load.i32 [%hitp + 12]
+  %pyv = load.bit [%hitp + 128]
+  %lt = icmp.slt i32 %py, %mn
+  %nmv = not i1 %mv
+  %bet = or i1 %nmv, %lt
+  %take = and i1 %bet, %pyv
+  %mn2 = select i32 %take, %py, %mn
+  %mv2 = or i1 %mv, %pyv
+  ctr.add #0, 1
+  br b1(%inext, %mn2, %mv2)
+block b6:
+  %nx = load.i64 [%ep]
+  %end = icmp.eq i64 %nx, 0
+  brif %end, b1(%inext, %mn, %mv), b4(%nx)
+block b7(i32 %mnf, i1 %mvf):
+  store.i32 [%st + 96], %mnf
+  %mvb = zext i1 %mvf -> i8
+  store.i8 [%st + 100], %mvb
+  ret 0
