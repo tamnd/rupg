@@ -1,6 +1,6 @@
 //! The compile tiers of document 14, lifted from rudb's query compiler.
 //!
-//! [`ir`] is QIR, the typed SSA form with block parameters, an explicit null model and a text form that round-trips (document 21 section 21.6), lifted from `rudb-qc-ir`. [`interp`] is the first tier, which runs a QIR function with no machine code, lifted from `rudb-qc-interp`. [`types`] gives the QIR type of each PostgreSQL type that fits a machine value. The runtime, the direct tier and the Cranelift tier come in later lifts (document 22 section 22.7).
+//! [`ir`] is QIR, the typed SSA form with block parameters, an explicit null model and a text form that round-trips (document 21 section 21.6), lifted from `rudb-qc-ir`. [`interp`] is the first tier, which runs a QIR function with no machine code, lifted from `rudb-qc-interp`. [`rt`] is the runtime that compiled pipelines call: the morsel ABI, `str16` strings, `LIKE` patterns, the aggregation hash tables and the executable memory of the native tiers, lifted from `rudb-qc-rt`. [`types`] gives the QIR type of each PostgreSQL type that fits a machine value. The functions that compiled code calls, the direct tier and the Cranelift tier come in later lifts (document 22 section 22.7).
 //!
 //! This crate may contain `unsafe`. Each `unsafe` block must have a `// SAFETY:` comment that states the invariant. `cargo xtask style` checks this.
 //!
@@ -10,4 +10,5 @@
 
 pub mod interp;
 pub mod ir;
+pub mod rt;
 pub mod types;
