@@ -299,7 +299,7 @@ pub(crate) fn rows(
         "pg_largeobject" => large_object_pages(table, catalog),
         "pg_foreign_data_wrapper" => fdws(table, catalog),
         "pg_event_trigger" => event_triggers(table, catalog),
-        "pg_am" => access_methods(table, catalog),
+        "pg_am" => access_methods(table, catalog, session),
         "pg_foreign_server" => servers(table, catalog),
         "pg_user_mapping" => user_mappings(table, catalog),
         "pg_publication" => publications(table, catalog),
@@ -1442,17 +1442,28 @@ fn options(options: &[String]) -> Value {
     if options.is_empty() { Value::Null } else { text_array(options) }
 }
 
-fn access_methods<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
-    catalog
-        .access_methods()
-        .map(|m| {
+/// The access methods that statements made, after `link` of rupg when `rupg.show_extension_am` is on or an index of the database uses it (spec/05 section 5.10). `link` has no handler function in `pg_proc`.
+fn access_methods<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Vec<Row<'a>> {
+    let link = rupg_index::am::LINK;
+    let shown = session.setting("rupg.show_extension_am").is_some_and(|v| v == "on")
+        || catalog.relations().any(|r| r.index.as_ref().is_some_and(|i| i.method == link));
+    let rupg = shown.then(|| {
+        let mut row = Row::new(table);
+        row.set("oid", oid(link))
+            .set("amname", Value::text("link".to_string()))
+            .set("amhandler", oid(0))
+            .set("amtype", Value::Char(b'i'));
+        row
+    });
+    rupg.into_iter()
+        .chain(catalog.access_methods().map(|m| {
             let mut row = Row::new(table);
             row.set("oid", oid(m.oid))
                 .set("amname", Value::text(m.name.clone()))
                 .set("amhandler", oid(m.handler))
                 .set("amtype", Value::Char(m.kind));
             row
-        })
+        }))
         .collect()
 }
 

@@ -7734,6 +7734,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/exclusion_index_attach.test")));
     }
 
+    /// `CREATE INDEX ... USING link` of spec/13 section 13.2: the parent of `WITH (parent = ...)` needs a primary key or a unique index on the key, the columns must compare, the index depends on its parent, `link` is in `pg_am` while a link exists or `rupg.show_extension_am` is on, and the settings of the links are not in `pg_settings`. rupg has no PostgreSQL namesake, so `connection/link_index.test` gives the behavior of spec/13.
+    #[test]
+    fn link_index() {
+        big_stack(|| script(include_str!("connection/link_index.test")));
+    }
+
     /// The planner scans `brin`, `spgist` and `gist` indexes, with the costs of `brincostestimate`, `spgcostestimate` and `gistcostestimate`. A `brin` index gives only a bitmap, and `ANY` is not a clause of these indexes. `connection/index_am_paths.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_am_paths() {
