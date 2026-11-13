@@ -45,180 +45,40 @@ const BRIN_MINMAX_MULTI_OPTIONS: &[reloptions::Opt] =
 /// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in families and classes.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
-/// `BTREE_AM_OID`.
-const BTREE_AM: u32 = 403;
-/// `HASH_AM_OID`.
-const HASH_AM: u32 = 405;
-/// `GIST_AM_OID`.
-const GIST_AM: u32 = 783;
-/// `GIN_AM_OID`.
-const GIN_AM: u32 = 2742;
-/// `SPGIST_AM_OID`.
-const SPGIST_AM: u32 = 4000;
-/// `BRIN_AM_OID`.
-const BRIN_AM: u32 = 3580;
+use rupg_index::am::{
+    BTREE as BTREE_AM, GIN as GIN_AM, GIST as GIST_AM, HASH as HASH_AM, SPGIST as SPGIST_AM,
+};
 
-/// The facts of the `IndexAmRoutine` of an index access method that the commands read.
+/// An index access method that the commands read: the OID of its row of `pg_am` and its `IndexAmRoutine`.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Method {
     pub(super) oid: u32,
-    pub(super) name: &'static str,
-    /// `amstrategies`, or 0 when the operators have no fixed numbers.
-    strategies: i32,
-    /// `amsupport`.
-    support: i32,
-    /// `amoptsprocnum`.
-    options: i32,
-    /// `amcanorder`.
-    can_order: bool,
-    /// `amcanorderbyop`.
-    can_order_by_op: bool,
-    /// `amcanhash`.
-    can_hash: bool,
-    /// `amstorage`.
-    storage: bool,
-    /// `amcanunique`.
-    pub(super) can_unique: bool,
-    /// `amcanmulticol`.
-    pub(super) can_multi_col: bool,
-    /// `amcaninclude`.
-    pub(super) can_include: bool,
+    /// The OID of the core access method whose handler the row names, which gives the behavior of the method: `oid` itself for a core method or a method of a library, and the OID of `gist` for a method made by `CREATE ACCESS METHOD ... HANDLER gisthandler`.
+    pub(super) core: u32,
+    routine: &'static rupg_index::am::Routine,
 }
 
-/// The index access methods of `pg_am`, as `bthandler`, `hashhandler`, `gisthandler`, `ginhandler`, `spghandler` and `brinhandler` give them.
-static METHODS: [Method; 6] = [
-    Method {
-        oid: BTREE_AM,
-        name: "btree",
-        strategies: 5,
-        support: 6,
-        options: 5,
-        can_order: true,
-        can_order_by_op: false,
-        can_hash: false,
-        storage: false,
-        can_unique: true,
-        can_multi_col: true,
-        can_include: true,
-    },
-    Method {
-        oid: HASH_AM,
-        name: "hash",
-        strategies: 1,
-        support: 3,
-        options: 3,
-        can_order: false,
-        can_order_by_op: false,
-        can_hash: true,
-        storage: false,
-        can_unique: false,
-        can_multi_col: false,
-        can_include: false,
-    },
-    Method {
-        oid: GIST_AM,
-        name: "gist",
-        strategies: 0,
-        support: 12,
-        options: 10,
-        can_order: false,
-        can_order_by_op: true,
-        can_hash: false,
-        storage: true,
-        can_unique: false,
-        can_multi_col: true,
-        can_include: true,
-    },
-    Method {
-        oid: GIN_AM,
-        name: "gin",
-        strategies: 0,
-        support: 7,
-        options: 7,
-        can_order: false,
-        can_order_by_op: false,
-        can_hash: false,
-        storage: true,
-        can_unique: false,
-        can_multi_col: true,
-        can_include: false,
-    },
-    Method {
-        oid: SPGIST_AM,
-        name: "spgist",
-        strategies: 0,
-        support: 7,
-        options: 7,
-        can_order: false,
-        can_order_by_op: true,
-        can_hash: false,
-        storage: true,
-        can_unique: false,
-        can_multi_col: false,
-        can_include: true,
-    },
-    Method {
-        oid: BRIN_AM,
-        name: "brin",
-        strategies: 0,
-        support: 15,
-        options: 5,
-        can_order: false,
-        can_order_by_op: false,
-        can_hash: false,
-        storage: true,
-        can_unique: false,
-        can_multi_col: true,
-        can_include: false,
-    },
-];
+impl std::ops::Deref for Method {
+    type Target = rupg_index::am::Routine;
 
-/// `GetIndexAmRoutineByAmId`: the index access method of the OID.
-pub(super) fn method_of(oid: u32) -> Option<&'static Method> {
-    METHODS.iter().find(|m| m.oid == oid)
+    fn deref(&self) -> &Self::Target {
+        self.routine
+    }
 }
 
-/// The index access methods of the libraries of the extensions that rupg ships, by the symbol of the handler: `ivfflathandler` and `hnswhandler` of pgvector. A statement of the script of the extension makes the row of `pg_am`, so the OID is the one of that row.
-static LIBRARY_METHODS: [(&str, Method); 2] = [
-    (
-        "ivfflathandler",
-        Method {
-            oid: 0,
-            name: "ivfflat",
-            strategies: 0,
-            support: 5,
-            options: 0,
-            can_order: false,
-            can_order_by_op: true,
-            can_hash: false,
-            storage: false,
-            can_unique: false,
-            can_multi_col: false,
-            can_include: false,
-        },
-    ),
-    (
-        "hnswhandler",
-        Method {
-            oid: 0,
-            name: "hnsw",
-            strategies: 0,
-            support: 3,
-            options: 0,
-            can_order: false,
-            can_order_by_op: true,
-            can_hash: false,
-            storage: false,
-            can_unique: false,
-            can_multi_col: false,
-            can_include: false,
-        },
-    ),
-];
+/// `GetIndexAmRoutineByAmId`: the core index access method of the OID.
+pub(super) fn method_of(oid: u32) -> Option<Method> {
+    rupg_index::am::core(oid).map(|routine| Method { oid, core: oid, routine })
+}
+
+/// The `btree` access method, whose families give the order of an ordering operator, `FOR ORDER BY`.
+fn btree_method() -> Method {
+    method_of(BTREE_AM).expect("btree is a core access method")
+}
 
 /// The name of an access method for `get_am_name`.
 fn method_name(oid: u32) -> &'static str {
-    METHODS.iter().find(|m| m.oid == oid).map_or("", |m| m.name)
+    rupg_index::am::core(oid).map_or("", |m| m.name)
 }
 
 /// The word of a family or a class in a message.
@@ -766,7 +626,7 @@ impl Definer<'_, '_> {
         operators: &mut [Member],
         functions: &mut [Member],
     ) {
-        match method.oid {
+        match method.core {
             BTREE_AM | HASH_AM => {
                 let mut intype = self.catalog.opclass(class).map_or(0, |c| c.intype);
                 let mut class = class;
@@ -787,7 +647,7 @@ impl Definer<'_, '_> {
                 }
             }
             GIST_AM | GIN_AM | SPGIST_AM => {
-                let hard: &[i32] = match method.oid {
+                let hard: &[i32] = match method.core {
                     GIST_AM => &[1, 2, 5, 6, 7],
                     GIN_AM => &[2, 3],
                     _ => &[1, 2, 3, 4, 5],
@@ -911,8 +771,8 @@ impl Definer<'_, '_> {
 
     /// `get_index_am_oid` and `GetIndexAmRoutineByAmId`: the index access method of the name, built in or made by `CREATE ACCESS METHOD` with the handler of a library that rupg has. The table access method `heap` is not an index access method.
     pub(super) fn index_method(&self, name: &str) -> Result<Method> {
-        if let Some(method) = METHODS.iter().find(|m| m.name == name) {
-            return Ok(*method);
+        if let Some((oid, routine)) = rupg_index::am::core_by_name(name) {
+            return Ok(Method { oid, core: oid, routine });
         }
         let not_index = || {
             Error::new(
@@ -932,22 +792,31 @@ impl Definer<'_, '_> {
         if am.kind != b'i' {
             return Err(not_index());
         }
-        let symbol = self.catalog.function(am.handler).map(|f| f.src.as_str());
-        let Some((_, method)) = LIBRARY_METHODS.iter().find(|(s, _)| Some(*s) == symbol) else {
-            return Err(not_yet("an index access method of this handler", None));
+        self.handler_method(am)
+            .ok_or_else(|| not_yet("an index access method of this handler", None))
+    }
+
+    /// The method of a row of `pg_am` by the symbol of its handler, a core handler or one of a library.
+    fn handler_method(&self, am: &rupg_catalog::AccessMethod) -> Option<Method> {
+        let (core, routine) = match self.catalog.function(am.handler) {
+            Some(f) => rupg_index::am::by_handler(&f.src)?,
+            None => rupg_index::am::by_handler(builtin::proc_by_oid(am.handler)?.src)?,
         };
-        Ok(Method { oid: am.oid, ..*method })
+        Some(Method { oid: am.oid, core: core.unwrap_or(am.oid), routine })
+    }
+
+    /// The OID of the core access method that gives the behavior of the access method `oid`, as [`Method::core`]: `oid` itself unless a row of `pg_am` names a core handler.
+    pub(super) fn core_method(&self, oid: u32) -> u32 {
+        self.method_by_oid(oid).map_or(oid, |m| m.core)
     }
 
     /// `GetIndexAmRoutineByAmId`: the index access method of the OID, built in or of the library of an extension.
     pub(super) fn method_by_oid(&self, oid: u32) -> Option<Method> {
         if let Some(method) = method_of(oid) {
-            return Some(*method);
+            return Some(method);
         }
         let am = self.catalog.access_method(oid)?;
-        let symbol = self.catalog.function(am.handler)?.src.as_str();
-        let (_, method) = LIBRARY_METHODS.iter().find(|(s, _)| *s == symbol)?;
-        Some(Method { oid, ..*method })
+        self.handler_method(am)
     }
 
     /// `get_am_name`: the name of an access method, built in or made by a statement.
@@ -1011,7 +880,7 @@ impl Definer<'_, '_> {
                     let sortfamily = if item.order_family.is_empty() {
                         0
                     } else {
-                        self.opfamily_oid(&METHODS[0], &item.order_family)?
+                        self.opfamily_oid(&btree_method(), &item.order_family)?
                     };
                     let mut member = Member::new(false, operator, item.number);
                     member.sortfamily = sortfamily;
@@ -1151,7 +1020,7 @@ impl Definer<'_, '_> {
                     let sortfamily = if item.order_family.is_empty() {
                         0
                     } else {
-                        self.opfamily_oid(&METHODS[0], &item.order_family)?
+                        self.opfamily_oid(&btree_method(), &item.order_family)?
                     };
                     let mut member = Member::new(false, operator, item.number);
                     member.sortfamily = sortfamily;

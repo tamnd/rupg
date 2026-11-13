@@ -417,6 +417,12 @@ pub struct Scanned {
     pub backward: bool,
     /// True for an index only scan with an ordering operator whose distance function is lossy, the `<->` of the `gist` operator classes `circle_ops` and `poly_ops`, which sets `xs_recheckorderby`: `IndexOnlyNext` refuses its first row.
     pub lossy: bool,
+    /// For a scan of a `gist` index of `point_ops`, whose sorted build puts the leaf keys in the Z-order of `gist_bbox_zorder_cmp` and equal keys in the order of the heap: the column of the key. The scan has no keys then.
+    pub zorder: Option<usize>,
+    /// True for an ordered scan of a `gist` index whose distances are exact: the queue of the scan, a pairing heap, gives the rows with equal distances in its own order.
+    pub knn: bool,
+    /// For a scan of a `gist` index of `point_ops`, each condition `<@` of the key point in a constant `polygon` or `circle`, as the column of the key and the bounding box of the query. `gist_point_consistent` keeps only the points in the box within `EPSILON` before it tests the point with the operator, so a point that the operator finds in the polygon can be out of the scan.
+    pub fuzzy: Vec<(usize, [f64; 4])>,
 }
 
 /// The hash tables of the plan of a query, for the executor. A set operation is at a path from the top operation of the query: false for the left side and true for the right side.

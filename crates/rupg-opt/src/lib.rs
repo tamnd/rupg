@@ -525,17 +525,77 @@ pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Opti
         node = node.children.first()?;
     }
     let mut out = Vec::new();
-    loop_order(node, false, &mut |relation, reverse, index| {
-        let (keys, backward, lossy) = match index {
-            Some((index, backward, lossy)) => {
-                (index_keys(query, members, relation, index, backward)?, backward, lossy)
-            }
-            None => (Vec::new(), false, false),
+    loop_order(node, false, &mut |relation, reverse, used| {
+        let Some(used) = used else {
+            let (keys, fuzzy) = (Vec::new(), Vec::new());
+            let (backward, lossy, zorder, knn) = (false, false, None, false);
+            out.push(Scanned { relation, reverse, keys, backward, lossy, zorder, knn, fuzzy });
+            return Some(());
         };
-        out.push(Scanned { relation, reverse, keys, backward, lossy });
+        let gist = gist_leaf(query, members, relation, used.index);
+        let zorder = gist.flatten();
+        let keys = match zorder {
+            Some(_) => Vec::new(),
+            None => index_keys(query, members, relation, used.index, used.backward)?,
+        };
+        let knn = gist.is_some() && used.exact_order;
+        let (backward, lossy, fuzzy) = (used.backward, used.lossy, used.fuzzy);
+        out.push(Scanned { relation, reverse, keys, backward, lossy, zorder, knn, fuzzy });
         Some(())
     })
     .then_some(out)
+}
+
+/// For an index of `gist` of the relation `r`: `Some`, with the column of the key when the index has one key column of `point_ops`, whose sorted build orders the leaf keys by `gist_bbox_zorder_cmp`. `None` for an index of another access method.
+fn gist_leaf(query: &Query, members: &dyn Members, r: usize, index: u32) -> Option<Option<usize>> {
+    let relation = query.relations.get(r)?;
+    let index = members.indexes(relation.oid).into_iter().find(|i| i.oid == index)?;
+    if index.method != rupg_index::am::GIST {
+        return None;
+    }
+    // `POINT_OPS` is the built-in family 1029, whose `sortsupport` is `gist_point_sortsupport`, so that `gistbuild` always sorts its keys. The type `point` is 600.
+    let zorder = match (index.keys.as_slice(), index.families.as_slice()) {
+        ([attnum], [1029]) => usize::try_from(*attnum)
+            .ok()
+            .and_then(|a| a.checked_sub(1))
+            .filter(|&c| relation.columns.get(c).is_some_and(|col| col.ty == 600)),
+        _ => None,
+    };
+    Some(zorder)
+}
+
+/// An index scan of the joins of a plan, for [`join_order`].
+#[derive(Clone, Debug)]
+struct Used {
+    index: u32,
+    /// The scan goes backward.
+    backward: bool,
+    /// An index only scan with an ordering operator whose distance is lossy.
+    lossy: bool,
+    /// An ordered scan whose ordering operators all give exact distances.
+    exact_order: bool,
+    /// The conditions of the scan that test a key point in a constant polygon or circle, for [`Scanned::fuzzy`].
+    fuzzy: Vec<(usize, [f64; 4])>,
+}
+
+/// [`Scanned::fuzzy`] of the conditions `cond` of an index scan of the relation `r`: the conditions `<@` of a column of the relation and a constant `polygon` or `circle`, the operators 756 and 758, which only `point_ops` of `gist` has.
+fn fuzzy_conditions(r: usize, cond: &[Item<'_>]) -> Vec<(usize, [f64; 4])> {
+    let mut out = Vec::new();
+    for item in cond {
+        let Some((op @ (756 | 758), left, right)) = exprs::binary(&item.expr) else { continue };
+        let (ExprKind::Var(var), ExprKind::Const(Value::Bytea(bytes))) = (&left.kind, &right.kind)
+        else {
+            continue;
+        };
+        if var.relation != r || var.levels_up != 0 {
+            continue;
+        }
+        let column = usize::try_from(var.attnum).ok().and_then(|a| a.checked_sub(1));
+        if let (Some(column), Some(b)) = (column, rupg_index::gist::query_box(op == 756, bytes)) {
+            out.push((column, b));
+        }
+    }
+    out
 }
 
 /// The keys of the order of the rows of an index scan of the relation `r` by the index `index`, as `build_index_pathkeys` gives them, or the other order when `backward`. `None` when the index has an expression, or an operator class that is not the default class of the type of its column, or the relation is a catalog, whose rows have only the columns that the query reads.
@@ -703,11 +763,11 @@ fn op_path(top: &SetOp, op: &SetOp, path: &mut Vec<bool>) -> bool {
     false
 }
 
-/// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join. `out` takes each relation with `reverse`, and with its index and true for a backward scan for an index scan.
+/// The relations of the join tree `node` for [`join_order`], with `reverse` for the rows of an inner side of a hash join. `out` takes each relation with `reverse`, and the facts of its index for an index scan.
 fn loop_order(
     node: &Node<'_>,
     reverse: bool,
-    out: &mut impl FnMut(usize, bool, Option<(u32, bool, bool)>) -> Option<()>,
+    out: &mut impl FnMut(usize, bool, Option<Used>) -> Option<()>,
 ) -> bool {
     let inner_or_left = |join: &JoinKind| matches!(join, JoinKind::Inner | JoinKind::Left);
     let base = node.scope == 0 && node.member.is_none();
@@ -724,9 +784,16 @@ fn loop_order(
         (Kind::BitmapHeapScan { relation, .. }, [_]) if base => {
             out(*relation, reverse, None).is_some()
         }
-        (Kind::IndexScan { relation, index, backward, only, order_by, .. }, []) if base => {
-            let lossy = *only && order_by.iter().any(|item| lossy_distance(&item.expr));
-            out(*relation, reverse, Some((*index, *backward, lossy))).is_some()
+        (Kind::IndexScan { relation, index, backward, only, cond, order_by, .. }, []) if base => {
+            let lossy_order = order_by.iter().any(|item| lossy_distance(&item.expr));
+            let used = Used {
+                index: *index,
+                backward: *backward,
+                lossy: *only && lossy_order,
+                exact_order: !order_by.is_empty() && !lossy_order,
+                fuzzy: fuzzy_conditions(*relation, cond),
+            };
+            out(*relation, reverse, Some(used)).is_some()
         }
         (Kind::Materialize | Kind::Memoize(_) | Kind::Gather { .. }, [child]) => {
             loop_order(child, reverse, out)

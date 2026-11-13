@@ -1951,9 +1951,14 @@ pub(crate) fn tuples(
         relations == all
     });
     if let Some((planned, session)) = planned {
+        for s in planned.iter().filter(|s| !s.fuzzy.is_empty()) {
+            acc.retain(|tuple| in_fuzzy_boxes(tables, s, tuple[s.relation]));
+        }
         let mut ranks = Vec::with_capacity(planned.len());
         for s in planned {
-            ranks.push(if s.keys.is_empty() {
+            ranks.push(if let Some(column) = s.zorder {
+                Some(zorder_ranks(tables, s.relation, column, &acc))
+            } else if s.keys.is_empty() {
                 None
             } else {
                 Some(index_ranks(tables, s, &acc, session)?)
@@ -2026,6 +2031,45 @@ fn index_ranks(
         ids.into_iter().enumerate().map(|(rank, row)| (row, rank)).collect();
     ranks.sort_unstable();
     Ok(Ranks::Sparse(ranks))
+}
+
+/// True when the row `row` of the relation of the index scan `scanned` passes the tests of the bounding boxes of [`Scanned::fuzzy`], as `gist_point_consistent` makes them before it tests a point in a polygon or a circle. A null row of an outer join passes.
+fn in_fuzzy_boxes(tables: &Tables, scanned: &Scanned, row: usize) -> bool {
+    let r = scanned.relation;
+    let Some(values) = tables.rows[r].get(row) else { return true };
+    scanned.fuzzy.iter().all(|(column, query)| {
+        match tables.place(r, *column).and_then(|p| values.get(p)) {
+            Some(Value::Bytea(bytes)) if bytes.len() == 16 => {
+                let (chunks, _) = bytes.as_chunks::<8>();
+                let (x, y) = (f64::from_be_bytes(chunks[0]), f64::from_be_bytes(chunks[1]));
+                rupg_index::gist::box_overlap([x, y, x, y], *query)
+            }
+            _ => true,
+        }
+    })
+}
+
+/// The place of each row of the relation `r` in the tuples `acc` for a scan of a `gist` index of `point_ops` on the column `column`: the order of the leaf keys of the sorted build, by `gist_bbox_zorder_cmp` and then by the heap TID, with the nulls last.
+fn zorder_ranks(tables: &Tables, r: usize, column: usize, acc: &[Vec<usize>]) -> Ranks {
+    let rows = &tables.rows[r];
+    let mut ids: Vec<usize> = acc.iter().map(|t| t[r]).filter(|&row| row < rows.len()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let place = tables.place(r, column);
+    let key = |row: usize| match place.and_then(|p| rows[row].get(p)) {
+        Some(Value::Bytea(bytes)) if bytes.len() == 16 => {
+            let (chunks, _) = bytes.as_chunks::<8>();
+            let (x, y) = (f64::from_be_bytes(chunks[0]), f64::from_be_bytes(chunks[1]));
+            (false, rupg_index::gist::point_zorder(x, y))
+        }
+        _ => (true, 0),
+    };
+    ids.sort_by_cached_key(|&row| (key(row), row));
+    let mut ranks = vec![usize::MAX; rows.len()];
+    for (rank, row) in ids.into_iter().enumerate() {
+        ranks[row] = rank;
+    }
+    Ranks::Dense(ranks)
 }
 
 /// The places of the rows of an index scan from [`index_ranks`]: one place for each row of the table when the tuples have many of its rows, or else the rows of the tuples with their places, in the order of the rows, so that a scan of a few rows of a long table does not make a place for each row of the table.
