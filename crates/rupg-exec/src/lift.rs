@@ -66,7 +66,78 @@ impl Cmp {
 type Ran = (Buckets, Option<KeySet>, Option<Bounds>, Rc<Rows>);
 
 /// The least and the greatest value of the column of the test of [`Bound`] for each key, with no null.
-type Bounds = rupg_kernels::hash::HashMap<i64, (i64, i64)>;
+enum Bounds {
+    /// The bounds of each key in a hash table.
+    Hash(rupg_kernels::hash::HashMap<i64, (i64, i64)>),
+    /// The bounds of the key `base + i` in the slot `i`, for keys in a range that is not much larger than the number of rows, as the keys of a table that come from a sequence. A slot whose least value is greater than its greatest value has no row. A lookup reads one slot with no hash, and the rows of a table in the order of its key read the slots one after another.
+    Dense { base: i64, slots: Vec<(i64, i64)> },
+}
+
+impl Bounds {
+    /// The bounds of `key`, or `None` when no row has the key.
+    fn get(&self, key: i64) -> Option<(i64, i64)> {
+        match self {
+            Bounds::Hash(map) => map.get(&key).copied(),
+            Bounds::Dense { base, slots } => {
+                let at = usize::try_from(key.checked_sub(*base)?).ok()?;
+                slots.get(at).copied().filter(|(min, max)| min <= max)
+            }
+        }
+    }
+
+    /// The bounds of the keys `keys` with the values `values` of the same rows, where a row with a null key or value is not in a set. The bounds are [`Bounds::Dense`] when the range of the keys is at most twice the number of rows and 1024 more.
+    fn of(keys: &[Option<i64>], values: &[Option<i64>]) -> Self {
+        let mut low = i64::MAX;
+        let mut high = i64::MIN;
+        let mut count = 0usize;
+        for (&key, &value) in keys.iter().zip(values) {
+            if let (Some(key), Some(_)) = (key, value) {
+                low = low.min(key);
+                high = high.max(key);
+                count += 1;
+            }
+        }
+        let range = i128::from(high) - i128::from(low) + 1;
+        let limit = i128::try_from(count).unwrap_or(i128::MAX).saturating_mul(2) + 1024;
+        if count > 0
+            && range <= limit
+            && let Ok(range) = usize::try_from(range)
+        {
+            let mut slots = vec![(i64::MAX, i64::MIN); range];
+            for (&key, &value) in keys.iter().zip(values) {
+                if let (Some(key), Some(value)) = (key, value)
+                    && let Ok(at) = usize::try_from(key - low)
+                {
+                    let slot = &mut slots[at];
+                    slot.0 = slot.0.min(value);
+                    slot.1 = slot.1.max(value);
+                }
+            }
+            return Bounds::Dense { base: low, slots };
+        }
+        let mut bounds = Bounds::Hash(rupg_kernels::hash::HashMap::default());
+        // The rows of a key often come one after another, as the rows of a table in the order of its key, so a run of the same key widens the bounds once.
+        let mut run: Option<(i64, (i64, i64))> = None;
+        for (&key, &value) in keys.iter().zip(values) {
+            let (Some(key), Some(value)) = (key, value) else { continue };
+            match &mut run {
+                Some((k, (min, max))) if *k == key => {
+                    *min = (*min).min(value);
+                    *max = (*max).max(value);
+                }
+                _ => {
+                    if let Some((k, found)) = run.replace((key, (value, value))) {
+                        widen(&mut bounds, k, found);
+                    }
+                }
+            }
+        }
+        if let Some((k, found)) = run {
+            widen(&mut bounds, k, found);
+        }
+        bounds
+    }
+}
 
 /// For an `EXISTS` with one integer key whose test is `column op outer`, where `column` is an integer column of the subquery and `outer` a column of the query outside it: `op`, `outer`, and the [`Bounds`]. A null `column` or `outer` makes the comparison not true, so the bounds do not keep the nulls, and a row whose `outer` is null gets false.
 pub(crate) struct Bound {
@@ -148,8 +219,8 @@ pub(crate) fn rows(
         return Ok(Some(Rc::clone(found)));
     }
     if let (Some(bound), [Key::Int(key)]) = (&lifted.bound, keys.as_slice()) {
-        let found = match bound.keys.get(key) {
-            Some(&bounds) => match scan::key(eval(&bound.outer, None)?) {
+        let found = match bound.keys.get(*key) {
+            Some(bounds) => match scan::key(eval(&bound.outer, None)?) {
                 Some(Key::Int(value)) => bound.cmp.any(bounds, value),
                 _ => false,
             },
@@ -210,7 +281,7 @@ impl Probe {
                 let bounds = match last {
                     Some((l, bounds)) if l == k => bounds,
                     _ => {
-                        let bounds = bound.keys.get(&k).copied();
+                        let bounds = bound.keys.get(k);
                         last = Some((k, bounds));
                         bounds
                     }
@@ -372,29 +443,9 @@ fn lift(
             false => None,
         };
         if compare.is_some() {
-            let mut bounds = Bounds::default();
+            let mut bounds = Bounds::Hash(rupg_kernels::hash::HashMap::default());
             match columns.as_deref() {
-                Some([values, keys]) => {
-                    // The rows of a key often come one after another, as the rows of a table in the order of its key, so a run of the same key widens the bounds once.
-                    let mut run: Option<(i64, (i64, i64))> = None;
-                    for (&key, &value) in keys.iter().zip(values) {
-                        let (Some(key), Some(value)) = (key, value) else { continue };
-                        match &mut run {
-                            Some((k, (min, max))) if *k == key => {
-                                *min = (*min).min(value);
-                                *max = (*max).max(value);
-                            }
-                            _ => {
-                                if let Some((k, found)) = run.replace((key, (value, value))) {
-                                    widen(&mut bounds, k, found);
-                                }
-                            }
-                        }
-                    }
-                    if let Some((k, found)) = run {
-                        widen(&mut bounds, k, found);
-                    }
-                }
+                Some([values, keys]) => bounds = Bounds::of(keys, values),
                 Some(_) => return Err(rupg_common::Error::internal("a lifted row has no key")),
                 None => {
                     for row in run_query(&queries[0], params, session, cache, &[], false)? {
@@ -507,8 +558,8 @@ fn comparison(test: &Expr) -> Option<(Cmp, Expr)> {
 
 /// Adds the least and the greatest of some values of the column of the test of a [`Bound`] to the bounds of their key.
 fn widen(bounds: &mut Bounds, key: i64, (low, high): (i64, i64)) {
-    bounds
-        .entry(key)
+    let Bounds::Hash(map) = bounds else { return };
+    map.entry(key)
         .and_modify(|(min, max)| {
             *min = (*min).min(low);
             *max = (*max).max(high);
