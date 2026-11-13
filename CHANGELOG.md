@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- rupg-jit: the runtime of the compiled pipelines lifted from rudb-qc-rt at cd9f9676: the morsel and state ABI, `str16` strings and their heap, `LIKE` patterns, the aggregation and distinct hash tables, and the executable memory that the native tiers load their code into (#1541)
 - `rupg.rupg_link_check(regclass)` of spec/13 section 13.2.5 in the new schema `rupg` of spec/05 section 5.10: for a link index or each link index of a table, it sets the forward value of each child row that the snapshot sees by a probe of its parent key, takes out the pairs of rows with no parent, and returns the number of pairs that it wrote or took out (#1540)
 - `LIKE` and `ILIKE` of a `varchar` column run on the vectors as for a `text` column, and the search of the dictionary takes a pattern with more than one literal between percent signs, as `%special%requests%` of TPC-H Q13 (#1538).
 - rupg-jit: the query IR (QIR) and its interpreter, lifted from rudb-qc-ir and rudb-qc-interp at cd9f9676, with the text form round trips of document 21 section 21.6 and `types::data_type`, the QIR type of each PostgreSQL type that is one machine value (#1539)

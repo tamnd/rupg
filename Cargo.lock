@@ -753,6 +753,7 @@ version = "0.4.20"
 name = "rupg-jit"
 version = "0.4.20"
 dependencies = [
+ "memchr",
  "rupg-types",
 ]
 

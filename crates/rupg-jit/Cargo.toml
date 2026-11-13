@@ -13,6 +13,7 @@ categories.workspace = true
 readme.workspace = true
 
 [dependencies]
+memchr.workspace = true
 rupg-types.workspace = true
 
 [lints]
