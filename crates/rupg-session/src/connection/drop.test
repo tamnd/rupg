@@ -282,7 +282,7 @@ DROP SCHEMA
 CREATE SCHEMA
 > DROP SCHEMA r, r2
 ERROR 3F000 schema "r" does not exist
-> SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'r%'
+> SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'r%' AND nspname <> 'rupg'
 fields count:20:8:-1
 row 1
 SELECT 1

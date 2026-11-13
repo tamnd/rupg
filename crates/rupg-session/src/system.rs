@@ -57,6 +57,12 @@ const NO_DICTIONARY: [&str; 2] = ["dutch_porter", "porter"];
 /// `ClanguageId`, the OID of the language `c`.
 const C_LANGUAGE: u32 = 13;
 
+/// `INTERNALlanguageId`, the language of the functions whose kernels are in `rupg-func`.
+const INTERNAL_LANGUAGE: u32 = 12;
+
+/// The OID of the schema `rupg` of spec/05 section 5.10, after the objects of `plpgsql`. Its functions take the OIDs after it.
+const RUPG: u32 = 13680;
+
 /// The OID of the type `internal`.
 const INTERNAL: u32 = 2281;
 
@@ -361,6 +367,9 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
     information_schema(&mut catalog, &mut failed, &clock, &user);
     if let Err(error) = plpgsql(&mut catalog) {
         failed.push(("CREATE EXTENSION plpgsql".to_string(), error));
+    }
+    if let Err(error) = rupg(&mut catalog, &user) {
+        failed.push(("CREATE SCHEMA rupg".to_string(), error));
     }
     collations(&mut catalog);
     catalog.set_next_oid(FIRST_NORMAL_OID);
@@ -714,6 +723,55 @@ fn plpgsql(catalog: &mut Catalog) -> Result<()> {
     Ok(())
 }
 
+/// The schema `rupg` of spec/05 section 5.10, with the functions of rupg that PostgreSQL does not have. It is not in the default search path, so a query names its functions with the schema. Each role can use it, as each role can use `information_schema`.
+fn rupg(catalog: &mut Catalog, user: &str) -> Result<()> {
+    catalog.set_next_oid(RUPG);
+    let schema = catalog.create_schema("rupg", BOOTSTRAP_SUPERUSER)?;
+    catalog
+        .set_schema_acl(schema, Some(vec![format!("{user}=UC/{user}"), format!("=U/{user}")]))?;
+    // `rupg_link_check(regclass) returns bigint`: the full check of the links of spec/13 section 13.2.5.
+    let functions = [(
+        "rupg_link_check",
+        20,
+        vec![2205],
+        "check and repair the forward links of a link index or of the link indexes of a table",
+    )];
+    for (name, rettype, argtypes, comment) in functions {
+        let function = Function {
+            oid: 0,
+            name: name.to_string(),
+            namespace: schema,
+            owner: BOOTSTRAP_SUPERUSER,
+            lang: INTERNAL_LANGUAGE,
+            cost: 1.0,
+            rows: 0,
+            support: 0,
+            kind: b'f',
+            strict: true,
+            leakproof: false,
+            volatile: b'v',
+            parallel: b'u',
+            rettype,
+            retset: false,
+            argtypes,
+            allargtypes: Vec::new(),
+            argmodes: Vec::new(),
+            argnames: Vec::new(),
+            argdefaults: None,
+            nargdefaults: 0,
+            src: name.to_string(),
+            bin: String::new(),
+            body: None,
+            config: Vec::new(),
+            secdef: false,
+        };
+        let oid = catalog.create_function(function, &[])?;
+        catalog.set_description(ObjRef::new(PG_PROC, oid), Some(comment.to_string()));
+        add_system_proc(catalog, oid)?;
+    }
+    Ok(())
+}
+
 /// Runs a statement of the script that defines an object, as the bootstrap superuser. The catalog changes only when the statement succeeds.
 fn define(
     catalog: &mut Catalog,
@@ -730,7 +788,7 @@ fn define(
     Ok(())
 }
 
-/// Adds the row of a function of `information_schema` or of `plpgsql` to the rows of `rupg-pgcatalog`, so that the analyzer and the casts to `regproc` find the function.
+/// Adds the row of a function of `information_schema`, of `plpgsql` or of `rupg` to the rows of `rupg-pgcatalog`, so that the analyzer and the casts to `regproc` find the function.
 fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
     let f = catalog.function(oid).ok_or_else(|| Error::internal(format!("no function {oid}")))?;
     if builtin::proc_by_oid(oid).is_some() {
@@ -766,7 +824,8 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         argmodes,
         argnames,
         argdefaults: f.argdefaults.clone().map(|text| &*text.leak()),
-        src: "",
+        // The kernel of an internal function is the kernel of its `prosrc`.
+        src: if f.lang == INTERNAL_LANGUAGE { f.src.clone().leak() } else { "" },
         bin: "",
         sqlbody: None,
         support: f.support,

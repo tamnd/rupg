@@ -75,7 +75,7 @@ SELECT 1
 fields count:20:8:-1
 row 0
 SELECT 1
-> SELECT n.nspname, has_schema_privilege('pg_monitor', n.oid, 'usage'), has_schema_privilege('pg_write_all_data', n.oid, 'usage'), has_schema_privilege('pg_database_owner', n.oid, 'create') FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%' ORDER BY 1
+> SELECT n.nspname, has_schema_privilege('pg_monitor', n.oid, 'usage'), has_schema_privilege('pg_write_all_data', n.oid, 'usage'), has_schema_privilege('pg_database_owner', n.oid, 'create') FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%' AND n.nspname <> 'rupg' ORDER BY 1
 fields nspname@pg_namespace.2:19:64:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
 row information_schema,t,t,f
 row oacl_s,f,t,f

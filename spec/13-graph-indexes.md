@@ -71,7 +71,7 @@ Each part has a state in the table's section directory: complete, partial or sta
 
 **A partial backward adjacency still works.** It covers the cold child segments up to a generation. The executor uses it for those and reads the forward links of the hot rows and newer segments for the rest. When the uncovered tail passes 5 percent of the child rows, which is rudb's threshold, the maintenance task rebuilds it in queue 3.
 
-**A full check rebuilds trust.** `rupg_link_check(regclass)` recomputes every forward value by a probe of the parent key, compares, repairs, and marks the link trusted if its constraint is enforced. It runs as maintenance and after a restore. The checkpoint writes the parts in rudb's order: columns, key maps, links, adjacency, the section table, the directory, and then the header slot (document 08 section 8.6).
+**A full check rebuilds trust.** `rupg_link_check(regclass)` recomputes every forward value by a probe of the parent key, compares, repairs, and marks the link trusted if its constraint is enforced. Its argument is a link index or a table, whose link indexes it then checks, and it returns the number of forward values that it wrote or took out. It is in the schema `rupg` of document 05 section 5.10, so a call names it `rupg.rupg_link_check`. It runs as maintenance and after a restore. The checkpoint writes the parts in rudb's order: columns, key maps, links, adjacency, the section table, the directory, and then the header slot (document 08 section 8.6).
 
 ### 13.2.6 The budget
 

@@ -154,7 +154,7 @@ SELECT 1
 fields count:20:8:-1,md5:25:-1:-1
 row 65,a96a1ced9a5f9794c70fa9e155297127
 SELECT 1
-> SELECT count(*), md5(string_agg(concat_ws(' ', classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype), ',' ORDER BY classid, objid, objsubid, refclassid, refobjid, refobjsubid)) FROM pg_depend WHERE objid BETWEEN 13350 AND 13703
+> SELECT count(*), md5(string_agg(concat_ws(' ', classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype), ',' ORDER BY classid, objid, objsubid, refclassid, refobjid, refobjsubid)) FROM pg_depend WHERE objid BETWEEN 13350 AND 13703 AND NOT (refclassid = 'pg_namespace'::regclass AND refobjid = 'rupg'::regnamespace)
 fields count:20:8:-1,md5:25:-1:-1
 row 1219,ea2b37707b15ce9c9c96f82074845e5c
 SELECT 1

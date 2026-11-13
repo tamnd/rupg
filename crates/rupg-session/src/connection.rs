@@ -7746,6 +7746,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/link_join.test")));
     }
 
+    /// `rupg.rupg_link_check(regclass)` of spec/13 section 13.2.5 in the schema `rupg` of spec/05 section 5.10: it sets the forward value of each child row that the snapshot sees by a probe of its parent key, and gives the number of the pairs that it wrote or took out. `connection/link_check.test` gives the behavior of the specs.
+    #[test]
+    fn link_check() {
+        big_stack(|| script(include_str!("connection/link_check.test")));
+    }
+
     /// The planner scans `brin`, `spgist` and `gist` indexes, with the costs of `brincostestimate`, `spgcostestimate` and `gistcostestimate`. A `brin` index gives only a bitmap, and `ANY` is not a clause of these indexes. `connection/index_am_paths.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_am_paths() {
