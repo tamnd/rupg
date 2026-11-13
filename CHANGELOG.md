@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - CI: seven public docs no longer link to private items (in rupg-contrib, rupg-func, rupg-graph and rupg-jit), so `cargo doc --workspace --all-features --no-deps` with `-D warnings` passes (#1558)
+- A correlated subquery whose key in the outer query is an expression of its columns, such as `ks.k = ko.j * 1000`, runs once for all rows, as a subquery with a column as its key does. When the subquery gives no row, the rows of the outer query do not evaluate their keys (#1557).
 - CI: `prepared_row_constant_altered` runs on the 8 MiB stack of `big_stack`, as the test next to it does, since it overflowed the default stack of a test thread on linux and aborted the rupg-session tests. The documentation of `rupg_ext::script::prepare` no longer links to the private `QUOTING_RELEVANT`, which failed `cargo doc` (#1556)
 - CI: the fuzz crate passes the session to `rupg_func::send`, whose signature changed in #1522, and `_typos.toml` allows the identifiers `fand`, `lits`, `fo`, `hel` and `lok`. These were the remaining failing steps of the lint job on main, which had been skipping the test jobs (#1555)
 - fuzz: update `fuzz/Cargo.lock` for rupg-index, rupg-ann and memchr, which earlier PRs added. Without it, the `fuzz crate` step of CI failed with `--locked` and skipped the test jobs (#1554)

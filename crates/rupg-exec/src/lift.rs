@@ -1,10 +1,10 @@
-//! The run of a correlated subquery once for all the rows of the query outside it, as the dependent join elimination of Neumann and Kemper (BTW 2015) unnests it (spec/15). The subquery must read the query outside it only through conditions of `WHERE` that are an `=` of an integer of the subquery and an integer column of the query just outside it. The run without these conditions gives the rows of the subquery with their keys, and each row of the query outside then reads the rows of its key from a hash table. A subquery with an aggregate and no `GROUP BY` runs with a `GROUP BY` of the keys, and a key with no group gets the row that the subquery gives for no input, so that `count(*)` gives 0 and not null.
+//! The run of a correlated subquery once for all the rows of the query outside it, as the dependent join elimination of Neumann and Kemper (BTW 2015) unnests it (spec/15). The subquery must read the query outside it only through conditions of `WHERE` that are an `=` of an integer of the subquery and an integer of the query just outside it: a column of that query, or an expression of its columns such as `ks.k = ko.j * 1000`. The run without these conditions gives the rows of the subquery with their keys, and each row of the query outside then reads the rows of its key from a hash table. A subquery with an aggregate and no `GROUP BY` runs with a `GROUP BY` of the keys, and a key with no group gets the row that the subquery gives for no input, so that `count(*)` gives 0 and not null.
 //!
 //! The vector scan of one table also tests an `EXISTS` of its `WHERE` with one key as a probe ([`Probe`]): of the set of the keys that have a row when the subquery has no other condition on the table, or of the bounds of [`Bound`]. The two scans keep the same state of the subquery, so it runs once also when the vector scan cannot run and the row engine scans the table.
 //!
 //! An `EXISTS` with one key whose other condition is one comparison of an integer column of the subquery with a column of the query outside it, such as `l2.l_suppkey <> l1.l_suppkey` in TPC-H Q21, keeps only the least and the greatest value of the column for each key ([`Bound`]). A row of the query outside it tests the comparison on these two values, and not on each row of its key.
 //!
-//! The subquery runs once at its first evaluation. The run for each row also reads all the rows of the tables of the subquery at the first row, into the cache of the tables, so the run once costs approximately the same for a query that reads only one row outside the subquery. The run of the subquery tests its conditions on rows that the old run did not test, so no expression of it can be volatile, and an error of the run makes the subquery run as before for each row, which then gives the same errors as before.
+//! The subquery runs once at its first evaluation. The run for each row also reads all the rows of the tables of the subquery at the first row, into the cache of the tables, so the run once costs approximately the same for a query that reads only one row outside the subquery. The run of the subquery tests its conditions on rows that the old run did not test, so no expression of it can be volatile, and an error of the run makes the subquery run as before for each row, which then gives the same errors as before. When the subquery gives no row for all keys, a row of the query outside it does not evaluate its keys, as the run for each row does not evaluate the condition of a key on no row, and as a hash join of PostgreSQL with no inner row does not. So a key that overflows gives no error then.
 
 use std::rc::Rc;
 
@@ -74,6 +74,14 @@ enum Bounds {
 }
 
 impl Bounds {
+    /// True when no key has bounds.
+    fn is_empty(&self) -> bool {
+        match self {
+            Bounds::Hash(map) => map.is_empty(),
+            Bounds::Dense { slots, .. } => slots.iter().all(|&(min, max)| min > max),
+        }
+    }
+
     /// The bounds of `key`, or `None` when no row has the key.
     fn get(&self, key: i64) -> Option<(i64, i64)> {
         match self {
@@ -157,8 +165,10 @@ pub(crate) enum State {
 
 /// The rows of a correlated subquery for each key.
 pub(crate) struct Lifted {
-    /// The value of each key in the query outside the subquery: a column of that query.
+    /// The value of each key in the query outside the subquery: a column of that query or an expression of its columns.
     outer: Vec<Expr>,
+    /// True when the subquery gives no row for all keys, so that a row of the query outside it does not evaluate its keys.
+    none: bool,
     rows: Buckets,
     /// For an `EXISTS` with one integer key and no test, the keys that have a row, and `rows` is empty.
     set: Option<Rc<Keys>>,
@@ -192,6 +202,14 @@ pub(crate) enum Keys {
 }
 
 impl Keys {
+    /// True when the set has no key.
+    fn is_empty(&self) -> bool {
+        match self {
+            Keys::Hash(set) => set.is_empty(),
+            Keys::Dense { bits, .. } => bits.iter().all(|word| *word == 0),
+        }
+    }
+
     /// True when the set has `key`.
     fn contains(&self, key: i64) -> bool {
         match self {
@@ -251,6 +269,9 @@ pub(crate) fn rows(
     eval: &mut Evaluate<'_>,
 ) -> Result<Option<Rc<Rows>>> {
     let Some(lifted) = state(query, kind, params, session, cache) else { return Ok(None) };
+    if lifted.none {
+        return Ok(Some(Rc::clone(&lifted.empty)));
+    }
     let mut keys = Vec::with_capacity(lifted.outer.len());
     for expr in &lifted.outer {
         let value = eval(expr, None)?;
@@ -288,7 +309,7 @@ pub(crate) fn rows(
 
 /// For the vector scan, a correlated `EXISTS` with one integer key, as [`probe`] gives it.
 pub(crate) struct Probe {
-    /// The column of the key in the query outside the subquery.
+    /// The key in the query outside the subquery: a column of that query or an expression of its columns.
     pub(crate) outer: Expr,
     /// For the bounds of [`Bound`], the column of the query outside the subquery that the test compares.
     pub(crate) other: Option<Expr>,
@@ -304,6 +325,10 @@ impl Probe {
         value: impl Fn(usize) -> Option<i64>,
     ) -> Vec<Option<bool>> {
         let mut out = Vec::with_capacity(rows);
+        if self.lifted.none {
+            out.resize(rows, Some(false));
+            return out;
+        }
         if let Some(set) = &self.lifted.set {
             let mut last: Option<(i64, bool)> = None;
             for i in 0..rows {
@@ -359,9 +384,16 @@ pub(crate) fn probe(
     Some(Probe { outer: outer.clone(), other, lifted: Rc::clone(&lifted) })
 }
 
+impl Probe {
+    /// True when the subquery gave no row for all keys, so that each row gets false and does not evaluate its key.
+    pub(crate) fn none(&self) -> bool {
+        self.lifted.none
+    }
+}
+
 /// For the vector scan, a correlated subquery of one value with an aggregate and no `GROUP BY`, as [`scalar`] gives it.
 pub(crate) struct Scalar {
-    /// The columns of the keys in the query outside the subquery.
+    /// The keys in the query outside the subquery: columns of that query or expressions of its columns.
     pub(crate) outer: Vec<Expr>,
     /// The state of the subquery, which [`Scalar::run`] makes before the scan reads the link.
     lifted: Option<Rc<Lifted>>,
@@ -371,6 +403,11 @@ impl Scalar {
     /// True when the subquery ran.
     pub(crate) fn ready(&self) -> bool {
         self.lifted.is_some()
+    }
+
+    /// True when the subquery ran and gave no row for all keys, so that each row gets the value of the subquery with no input row and does not evaluate its keys.
+    pub(crate) fn none(&self) -> bool {
+        self.lifted.as_ref().is_some_and(|lifted| lifted.none)
     }
 
     /// Runs the subquery `query` once with a `GROUP BY` of its keys. With `domain`, the values of each key in the rows of the query outside the subquery that read the link, the subquery reads only the rows of these keys, as the domain of the unnesting of Neumann and Kemper. The cache then keeps the state with no address of a subquery, so that no other run reads it. With no `domain`, the state is the one that [`rows`] reads. False when the subquery must run for each row.
@@ -575,10 +612,14 @@ fn lift(
     let result = run();
     match result {
         Ok((rows, set, bounds, empty)) => {
+            let none = rows.is_empty()
+                && set.as_ref().is_none_or(Keys::is_empty)
+                && bounds.as_ref().is_none_or(Bounds::is_empty);
             let set = set.map(Rc::new);
             let bound = compare.zip(bounds).map(|((cmp, outer), keys)| Bound { cmp, outer, keys });
             State::Lifted(Rc::new(Lifted {
                 outer,
+                none,
                 rows,
                 set,
                 bound,
@@ -646,6 +687,39 @@ fn outer_column(expr: &Expr) -> Option<Expr> {
         ExprKind::Relabel(arg, _) => outer_column(arg),
         _ => None,
     }
+}
+
+/// The value of the query just outside a subquery that an expression of the subquery is: a column of that query, or an expression that reads at least one column of that query and else only constants and parameters, with the columns as columns of that query. `None` for another expression, or for a volatile one.
+fn outer_value(expr: &Expr) -> Option<Expr> {
+    if let Some(column) = outer_column(expr) {
+        return Some(column);
+    }
+    if volatile(expr) {
+        return None;
+    }
+    let mut value = expr.clone();
+    let (mut ok, mut reads) = (true, false);
+    value.each_mut(0, &mut |e, _| {
+        if matches!(
+            e.kind,
+            ExprKind::SubLink(_)
+                | ExprKind::Agg(_)
+                | ExprKind::PlaceHolder(_)
+                | ExprKind::SubColumn(_)
+        ) {
+            ok = false;
+            return true;
+        }
+        let ExprKind::Var(var) = e.kind else { return false };
+        if var.levels_up == 1 {
+            e.kind = ExprKind::Var(rupg_analyze::Var { levels_up: 0, ..var });
+            reads = true;
+        } else {
+            ok = false;
+        }
+        true
+    });
+    (ok && reads).then_some(value)
 }
 
 /// Adds to the subquery `all` of a lift the condition that its key with the fewest values in `domain` is one of these values. `domain` has the values of each key in the rows of the query outside the subquery. So the subquery makes no group for other keys, and a row of these keys gets the same value as before. The condition `x = ANY (array)` is a test of the zones of the column.
@@ -831,14 +905,14 @@ fn split(query: &Query, kind: &SubLinkKind) -> Option<Split> {
     Some(Split { all, empty, outer, test })
 }
 
-/// The column of the subquery and the column of the query outside it that a condition of the subquery tests for `=`, when the condition can be a key.
+/// The value of the subquery and the value of the query outside it that a condition of the subquery tests for `=`, when the condition can be a key. The value outside is a column of that query or an expression of its columns, as [`outer_value`] gives it.
 fn key(cond: &Expr) -> Option<(Expr, Expr)> {
     let ExprKind::Func(f) = &cond.kind else { return None };
     let [a, b] = f.args.as_slice() else { return None };
     if !EQUALS.contains(&f.oid) {
         return None;
     }
-    let (side, column) = match (outer_column(a), outer_column(b)) {
+    let (side, column) = match (outer_value(a), outer_value(b)) {
         (None, Some(column)) => (a, column),
         (Some(column), None) => (b, column),
         _ => return None,
