@@ -235,6 +235,35 @@ fn null_test(value: &Value, is_null: bool) -> bool {
     }
 }
 
+/// For the `=` and the `<>` functions of two integers, true for `=` and false for `<>`: `int2eq`, `int4eq`, `int8eq`, `int24eq`, `int42eq`, `int48eq`, `int84eq`, `int28eq`, `int82eq` and the `<>` functions of the same types.
+pub(crate) fn int_equality(func: u32) -> Option<bool> {
+    const EQUAL: [u32; 9] = [63, 65, 467, 158, 159, 852, 474, 1850, 1856];
+    const NOT_EQUAL: [u32; 9] = [145, 144, 468, 164, 165, 853, 475, 1851, 1857];
+    if EQUAL.contains(&func) {
+        Some(true)
+    } else if NOT_EQUAL.contains(&func) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// `x op ANY (values)` or `x op ALL (values)` for the integer `x` with no call of a function, where `op` is `=` when `equal` is true and `<>` when it is false. A null element makes the result null when no other element gives the result, as `ExecEvalScalarArrayOp` does. `None` when an element is not an integer.
+fn int_any(x: i64, equal: bool, any: bool, values: &[Option<Value>]) -> Option<Value> {
+    let mut unknown = false;
+    for item in values {
+        match item {
+            None | Some(Value::Null) => unknown = true,
+            Some(item) => {
+                if ((x == columnar::int_of(item)?) == equal) == any {
+                    return Some(Value::Bool(any));
+                }
+            }
+        }
+    }
+    Some(if unknown { Value::Null } else { Value::Bool(!any) })
+}
+
 /// True when the function gives null for a null argument without a call.
 fn strict(func: u32) -> bool {
     builtin::proc_by_oid(func).is_none_or(|p| p.strict)
@@ -4462,10 +4491,18 @@ impl<'a> Eval<'a> {
             return Err(Error::internal("ANY and ALL need two arguments"));
         };
         let scalar = self.eval(left)?;
-        let array = match self.eval(right)? {
-            Value::Null => return Ok(Value::Null),
-            Value::Array(array) => array,
-            _ => return Err(Error::internal("ANY and ALL need an array")),
+        // A constant array, as an `IN` list, is read in place and not cloned for each row.
+        let owned;
+        let array = match &right.kind {
+            ExprKind::Const(Value::Array(array)) => &**array,
+            _ => match self.eval(right)? {
+                Value::Null => return Ok(Value::Null),
+                Value::Array(array) => {
+                    owned = array;
+                    &*owned
+                }
+                _ => return Err(Error::internal("ANY and ALL need an array")),
+            },
         };
         if array.values.is_empty() {
             return Ok(Value::Bool(!any));
@@ -4473,6 +4510,12 @@ impl<'a> Eval<'a> {
         let is_strict = strict(func);
         if scalar.is_null() && is_strict {
             return Ok(Value::Null);
+        }
+        if let Some(equal) = int_equality(func)
+            && let Some(x) = columnar::int_of(&scalar)
+            && let Some(found) = int_any(x, equal, any, &array.values)
+        {
+            return Ok(found);
         }
         let element = builtin::type_by_oid(base_type(right.ty)).map_or(0, |row| row.elem);
         let types = [left.ty, element];

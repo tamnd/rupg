@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `x IN (c, ...)` and `x NOT IN (c, ...)` of integers with a constant list test a set of the list elements. The vector scan makes the set once for each statement, and the row engine reads the constant array in place, with no copy for each row (#1561).
 - Fuzzing: the `jit_verify` target of spec/21 section 21.7 runs a random function of QIR on the interpreter and on each tier of machine code in the build, and fails on another status, other bytes of the state, or a code generator that panics. It joins the nightly fuzz runs. Its first runs found that the aarch64 backend of Cranelift panicked on a `select` of 128 bits on a compare of 128 bits, so the function ran on the interpreter. The Cranelift tier now selects each half (#1560)
 - rupg-jit: `fneg` and `fabs` change only the sign bit, in the interpreter and in the Cranelift tier, so a signaling NaN keeps its bits. The interpreter went through `f64`, so the result depended on whether the build optimized, and the tier equivalence test failed on the x86-64 release job (#1559)
 - CI: seven public docs no longer link to private items (in rupg-contrib, rupg-func, rupg-graph and rupg-jit), so `cargo doc --workspace --all-features --no-deps` with `-D warnings` passes (#1558)
