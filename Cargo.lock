@@ -977,7 +977,9 @@ dependencies = [
  "cranelift-frontend",
  "iced-x86",
  "memchr",
+ "rupg-analyze",
  "rupg-common",
+ "rupg-pgcatalog",
  "rupg-platform",
  "rupg-types",
 ]

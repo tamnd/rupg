@@ -20,7 +20,9 @@ jit = ["dep:cranelift-codegen", "dep:cranelift-frontend"]
 cranelift-codegen = { workspace = true, optional = true }
 cranelift-frontend = { workspace = true, optional = true }
 memchr.workspace = true
+rupg-analyze.workspace = true
 rupg-common.workspace = true
+rupg-pgcatalog.workspace = true
 rupg-platform.workspace = true
 rupg-types.workspace = true
 
