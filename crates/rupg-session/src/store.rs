@@ -762,6 +762,11 @@ impl Store {
         self.tasks.as_deref()
     }
 
+    /// The tasks of the server, shared, for the background compiles of the compile tiers.
+    pub(crate) fn shared_tasks(&self) -> Option<Arc<dyn Tasks>> {
+        self.tasks.clone()
+    }
+
     fn backends_mut(&self) -> MutexGuard<'_, Vec<Option<Slot>>> {
         self.backends.lock().unwrap_or_else(PoisonError::into_inner)
     }

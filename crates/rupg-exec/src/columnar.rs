@@ -20,6 +20,7 @@ use rupg_types::{DateUnit, Numeric, POSTGRES_EPOCH_JDATE, Value, date2j, j2date,
 use crate::agg;
 use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
 
+mod compiled;
 mod groups;
 mod linked;
 mod top;
@@ -2750,10 +2751,26 @@ pub(crate) fn run_on(
     let mut scan =
         Scan { exec: &mut exec, conds: &conds, segments, rows, open, answered: Vec::new() };
     let (rows, tables, ordered) = if query.grouped {
-        let Some(out) = grouped(&mut scan, query, &calls, &kept_columns, offset, count)? else {
-            return Ok(None);
+        // With no sort, the limit of the query takes the first groups, as `LIMIT` over `HashAggregate` does.
+        let needed = match count {
+            Some(count) if query.sort.is_empty() && query.distinct.is_empty() => {
+                offset.saturating_add(count)
+            }
+            _ => usize::MAX,
         };
-        out
+        let compiled = if open {
+            compiled::grouped(scan.exec, query, &conds, &calls, &kept, rows, needed)?
+        } else {
+            None
+        };
+        if let Some(out) = compiled {
+            out
+        } else {
+            let Some(out) = grouped(&mut scan, query, &calls, &kept_columns, offset, count)? else {
+                return Ok(None);
+            };
+            out
+        }
     } else if let Some((columns, bound)) = top_columns(query, offset, count) {
         let rows = top(&mut scan, query, session, &columns, bound, offset, count)?;
         (rows, scan::kept_tables(query, Vec::new(), &kept), true)
