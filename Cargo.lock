@@ -725,6 +725,10 @@ dependencies = [
 [[package]]
 name = "rupg-graph"
 version = "0.4.20"
+dependencies = [
+ "rupg-common",
+ "rupg-encode",
+]
 
 [[package]]
 name = "rupg-hot"
