@@ -23,7 +23,7 @@ pub struct Macros<'a> {
 ///
 /// # Errors
 ///
-/// `22P02` when a name that replaces a macro has a character of [`QUOTING_RELEVANT`].
+/// `22P02` when a name that replaces a macro has one of the characters `"`, `$`, `'` and `\`, which matter to quoting.
 pub fn prepare(text: &str, control: &Control, macros: &Macros<'_>) -> Result<String> {
     let invalid = |what: String| {
         Error::new(
