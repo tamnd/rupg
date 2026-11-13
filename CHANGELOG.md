@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- rupg-jit: `rt::Rt`, the runtime that implements each function of the QIR catalogue for every tier, lifted from rudb-qc-rt's `rt.rs` and `ablate.rs` at cd9f9676. A regular expression is a `Pattern` that the driver makes from rupg-func's, a date is PostgreSQL's day number with its infinities, a decimal division fails with PostgreSQL's SQLSTATEs, and the cancel flag is the session's (#1545)
 - rupg-jit: the join hash table and the `extern "C"` entries that native code calls through the runtime, lifted from rudb-qc-rt at cd9f9676 as `rt::join` and `rt::native` (#1544)
 - rupg-jit: the Cranelift compile tier, which lowers a QIR function to machine code through `cranelift-codegen`, lifted from rudb-qc-clif at cd9f9676 as the module `clif` behind the new feature `jit`, with `cranelift-codegen` and `cranelift-frontend` pinned at `=0.125.0` (#1543)
 - rupg-jit: the direct tier, the single pass x86-64 backend that compiles a QIR pipeline function to machine code with no dependencies, lifted from rudb-qc-direct at cd9f9676 with its assembler and register analysis, and `iced-x86` as the disassembler of its tests (#1542)
