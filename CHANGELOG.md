@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- rupg-jit: `plan`, the relational tree that the generator compiles, on PostgreSQL types and lifted from rudb-qc-plan at cd9f9676. It lowers the expressions and aggregates of `rupg-analyze` for a query of one table: functions by `pg_proc` OID and `prosrc`, widening for comparisons of two widths, and PostgreSQL's result types for `sum` and `avg`. It refuses by name what the generator cannot hold (#1548)
 - An `EXISTS` with one integer key and one comparison of integers keeps the bounds of each key in an array when the keys are dense, as the keys of `lineitem` in TPC-H Q21, and the vectors of the keys of a lifted subquery have room for each row of the table (#1546).
 - rupg-jit: the tier driver of rudb-qc as the module `tier`, which puts a module on the interpreter and a native tier, moves a long-running function from `direct` up to `clif` in the background, and caches the code, with the tier equivalence tests. The morsels are timed on the platform `Clock` and the background compiles run on its `Tasks`. (#1547)
 - rupg-jit: `rt::Rt`, the runtime that implements each function of the QIR catalogue for every tier, lifted from rudb-qc-rt's `rt.rs` and `ablate.rs` at cd9f9676. A regular expression is a `Pattern` that the driver makes from rupg-func's, a date is PostgreSQL's day number with its infinities, a decimal division fails with PostgreSQL's SQLSTATEs, and the cancel flag is the session's (#1545)
