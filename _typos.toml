@@ -45,6 +45,13 @@ pn = "pn"
 identic = "identic"
 ue = "ue"
 emal = "emal"
+# The instruction `fand` (the `andps` and `andpd` of the floats) and the literal pool `lits` of the direct tier of rupg-jit, lifted from rudb.
+fand = "fand"
+lits = "lits"
+# The table `fo` of `function_stats.test`, the trigram `hel` of `create_extension.test`, and the column `lok` of the tables of `vector_exists.test` and `vector_semi_join.test`.
+fo = "fo"
+hel = "hel"
+lok = "lok"
 
 # Test inputs that are wrong on purpose.
 [default]

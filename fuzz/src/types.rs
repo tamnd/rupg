@@ -249,9 +249,9 @@ fn output(ty: &Type, value: &rupg_types::Value, session: &dyn Session) -> Result
     Ok(String::from_utf8(out).expect("an output function gave bytes that are not UTF-8"))
 }
 
-fn send(ty: &Type, value: &rupg_types::Value) -> Result<Vec<u8>> {
+fn send(ty: &Type, value: &rupg_types::Value, session: &dyn Session) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    rupg_func::send(ty.oid, value, &mut out)?;
+    rupg_func::send(ty.oid, value, session, &mut out)?;
     Ok(out)
 }
 
@@ -291,7 +291,7 @@ pub fn type_input(case: &InputCase) {
         };
         assert_eq!(output(ty, &again, &session).expect("the output"), text, "the text round trip");
     }
-    let bytes = send(ty, &value).expect("the send of an accepted value");
+    let bytes = send(ty, &value, &session).expect("the send of an accepted value");
     match rupg_func::receive(ty.oid, &bytes, ty.typmod, 1, &session) {
         Ok(back) => {
             let back = output(ty, &back, &session).expect("the output");
@@ -326,10 +326,10 @@ pub fn type_recv(case: &RecvCase) {
         Ok(value) => value,
         Err(error) => return not_internal(&error, "the receive"),
     };
-    let bytes = send(ty, &value).expect("the send of a received value");
+    let bytes = send(ty, &value, &session).expect("the send of a received value");
     let back = rupg_func::receive(ty.oid, &bytes, ty.typmod, 1, &session)
         .unwrap_or_else(|e| panic!("the receive of the send failed: {e:?}"));
-    assert_eq!(send(ty, &back).expect("the send"), bytes, "the binary round trip");
+    assert_eq!(send(ty, &back, &session).expect("the send"), bytes, "the binary round trip");
     let text = output(ty, &value, &session).expect("the output of a received value");
     if smallest_time(ty, &text) {
         return;
@@ -370,7 +370,7 @@ pub fn input_line(case: &InputCase) -> String {
     let session = case.settings.session();
     line(
         rupg_func::input(ty.oid, case.text(), ty.typmod, &session)
-            .and_then(|value| Ok((output(ty, &value, &session)?, send(ty, &value)?))),
+            .and_then(|value| Ok((output(ty, &value, &session)?, send(ty, &value, &session)?))),
     )
 }
 
@@ -380,7 +380,7 @@ pub fn recv_line(case: &RecvCase) -> String {
     let session = Settings::default().session();
     let line = line(
         rupg_func::receive(ty.oid, &case.data, ty.typmod, 1, &session)
-            .and_then(|value| Ok((output(ty, &value, &session)?, send(ty, &value)?))),
+            .and_then(|value| Ok((output(ty, &value, &session)?, send(ty, &value, &session)?))),
     );
     line.replace("incorrect binary data format in bind parameter 1", "incorrect binary data format")
 }
