@@ -1620,7 +1620,7 @@ fn run_query(
             eval.at(tuple).eval(expr)
         };
         let planned = planned.as_deref().map(|p| (p, session));
-        let tuples = scan::tuples(query, tables, test, &mut source, planned)?;
+        let tuples = scan::tuples(query, tables, test, &mut source, planned, session)?;
         // `hnswgettuple` and `ivfflatgettuple`: a scan by an index of pgvector gives only the rows that its search reaches.
         let ann = (!query.sort.is_empty()
             && query.relations.iter().any(|r| ann::indexed(session, r.oid)))

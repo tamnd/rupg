@@ -1522,6 +1522,14 @@ impl rupg_func::Session for Reader<'_> {
         Some(store.heap().vector_index((database, table), (index, relation.file), kind, metric))
     }
 
+    fn link_forward(&self, index: u32) -> Option<Arc<std::sync::Mutex<rupg_func::Forward>>> {
+        let (_, store) = self.activity?;
+        let relation = self.catalog.relation(index)?;
+        let table = relation.index.as_ref().filter(|i| i.ready)?.table;
+        let database = database_oid(store, self.database);
+        Some(store.heap().link_forward((database, table), (index, relation.file)))
+    }
+
     fn system_catalog(&self) -> Option<&Catalog> {
         Some(self.system.as_deref().unwrap_or(&self.catalog))
     }

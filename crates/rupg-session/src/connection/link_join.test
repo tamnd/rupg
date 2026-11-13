@@ -1,0 +1,272 @@
+!details
+> create table orders (o_id int primary key, o_alt int unique, note text)
+CREATE TABLE
+> create table lineitem (l_id int, l_order int, l_alt int, l_text text)
+CREATE TABLE
+> create index li_ord on lineitem using link (l_order) with (parent = 'orders')
+CREATE INDEX
+> insert into orders values (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c')
+INSERT 0 3
+> insert into lineitem values (1, 1, 10, 'x'), (2, 2, 20, 'y'), (3, 1, 20, 'z'), (4, null, 30, 'n'), (5, 9, 30, 'm')
+INSERT 0 5
+> explain (costs off) select l_id, note from lineitem join orders on l_order = o_id
+fields QUERY PLAN:25:-1:-1
+row Link Join
+row   Link Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem
+row   ->  Seq Scan on orders
+EXPLAIN
+> explain (costs off, verbose) select l_id, note from lineitem join orders on l_order = o_id
+fields QUERY PLAN:25:-1:-1
+row Link Join
+row   Output: lineitem.l_id, orders.note
+row   Inner Unique: true
+row   Link: li_ord (validated)
+row   Link Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on public.lineitem
+row         Output: lineitem.l_id, lineitem.l_order, lineitem.l_alt, lineitem.l_text
+row   ->  Seq Scan on public.orders
+row         Output: orders.o_id, orders.o_alt, orders.note
+EXPLAIN
+> explain (costs off) select l_id, note from lineitem left join orders on l_order = o_id and note <> 'b'
+fields QUERY PLAN:25:-1:-1
+row Link Left Join
+row   Link Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem
+row   ->  Seq Scan on orders
+row         Filter: (note <> 'b'::text)
+EXPLAIN
+> explain (costs off) select l_id, note from orders join lineitem on o_id = l_order where note <> 'a'
+fields QUERY PLAN:25:-1:-1
+row Link Join
+row   Link Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem
+row   ->  Seq Scan on orders
+row         Filter: (note <> 'a'::text)
+EXPLAIN
+> explain (costs off) select l_id, note from lineitem join orders on l_alt = o_alt
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (lineitem.l_alt = orders.o_alt)
+row   ->  Seq Scan on lineitem
+row   ->  Hash
+row         ->  Seq Scan on orders
+EXPLAIN
+> explain (costs off, analyze, timing off, summary off, buffers off) select l_id, note from lineitem left join orders on l_order = o_id and note <> 'b'
+fields QUERY PLAN:25:-1:-1
+row Link Left Join (actual rows=5.00 loops=1)
+row   Link Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem (actual rows=5.00 loops=1)
+row   ->  Seq Scan on orders (actual rows=2.00 loops=1)
+row         Filter: (note <> 'b'::text)
+row         Rows Removed by Filter: 1
+EXPLAIN
+> create table parts (p_id int primary key, p_name text)
+CREATE TABLE
+> create table supply (s_line int, s_part int)
+CREATE TABLE
+> create index su_part on supply using link (s_part) with (parent = 'parts')
+CREATE INDEX
+> insert into parts values (7, 'bolt'), (8, 'nut')
+INSERT 0 2
+> insert into supply values (1, 7), (1, 8), (3, 8), (5, 7)
+INSERT 0 4
+> explain (costs off) select l_id, note, p_name from lineitem join orders on l_order = o_id join supply on s_line = l_id join parts on s_part = p_id
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (lineitem.l_id = supply.s_line)
+row   ->  Sort
+row         Sort Key: lineitem.l_id
+row         ->  Link Join
+row               Link Cond: (lineitem.l_order = orders.o_id)
+row               ->  Seq Scan on lineitem
+row               ->  Seq Scan on orders
+row   ->  Sort
+row         Sort Key: supply.s_line
+row         ->  Link Join
+row               Link Cond: (supply.s_part = parts.p_id)
+row               ->  Seq Scan on supply
+row               ->  Seq Scan on parts
+EXPLAIN
+> select l_id, note, p_name from lineitem join orders on l_order = o_id join supply on s_line = l_id join parts on s_part = p_id order by l_id, p_name
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1,p_name@parts.2:25:-1:-1
+row 1,a,bolt
+row 1,a,nut
+row 3,a,nut
+SELECT 3
+> select l_id, note from lineitem join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,a
+row 2,b
+row 3,a
+SELECT 3
+> select l_id, note from lineitem left join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,a
+row 2,b
+row 3,a
+row 4,NULL
+row 5,NULL
+SELECT 5
+> select l_id, note from lineitem left join orders on l_order = o_id and note <> 'b'
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,a
+row 2,NULL
+row 3,a
+row 4,NULL
+row 5,NULL
+SELECT 5
+> select l_id, note from orders join lineitem on o_id = l_order where note <> 'a'
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 2,b
+SELECT 1
+> update orders set note = 'aa' where o_id = 1
+UPDATE 1
+> select l_id, note from lineitem join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,aa
+row 2,b
+row 3,aa
+SELECT 3
+> delete from orders where o_id = 2
+DELETE 1
+> select l_id, note from lineitem left join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,aa
+row 2,NULL
+row 3,aa
+row 4,NULL
+row 5,NULL
+SELECT 5
+> update orders set o_id = 2 where o_id = 3
+UPDATE 1
+> select l_id, note from lineitem left join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,aa
+row 2,c
+row 3,aa
+row 4,NULL
+row 5,NULL
+SELECT 5
+> update lineitem set l_order = 2 where l_id = 5
+UPDATE 1
+> select l_id, note from lineitem left join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,aa
+row 2,c
+row 3,aa
+row 4,NULL
+row 5,c
+SELECT 5
+> set rupg.use_links = off
+SET
+> explain (costs off) select l_id, note from lineitem join orders on l_order = o_id
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem
+row   ->  Hash
+row         ->  Seq Scan on orders
+EXPLAIN
+> select l_id, note from lineitem left join orders on l_order = o_id
+fields l_id@lineitem.1:23:4:-1,note@orders.3:25:-1:-1
+row 1,aa
+row 2,c
+row 3,aa
+row 4,NULL
+row 5,c
+SELECT 5
+> explain (costs off, format json) select l_id from lineitem join orders on l_order = o_id
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Hash Join",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Join Type": "Inner",
+      "Disabled": false,
+      "Inner Unique": true,
+      "Hash Cond": "(lineitem.l_order = orders.o_id)",
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "lineitem",
+          "Alias": "lineitem",
+          "Disabled": false
+        },
+        {
+          "Node Type": "Hash",
+          "Parent Relationship": "Inner",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Disabled": false,
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "orders",
+              "Alias": "orders",
+              "Disabled": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> reset rupg.use_links
+RESET
+> explain (costs off, format json) select l_id from lineitem join orders on l_order = o_id
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Link Join",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Join Type": "Inner",
+      "Disabled": false,
+      "Inner Unique": true,
+      "Link": "li_ord (validated)",
+      "Link Cond": "(lineitem.l_order = orders.o_id)",
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "lineitem",
+          "Alias": "lineitem",
+          "Disabled": false
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Inner",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "orders",
+          "Alias": "orders",
+          "Disabled": false
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> drop index li_ord
+DROP INDEX
+> explain (costs off) select l_id, note from lineitem join orders on l_order = o_id
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (lineitem.l_order = orders.o_id)
+row   ->  Seq Scan on lineitem
+row   ->  Hash
+row         ->  Seq Scan on orders
+EXPLAIN

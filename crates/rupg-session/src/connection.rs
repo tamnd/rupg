@@ -7740,6 +7740,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/link_index.test")));
     }
 
+    /// `Link Join` of spec/15 section 15.9 over a link of spec/13: with `rupg.use_links` on, a join of a child table to its parent on the key columns of a link reads the parent of each child row through the link, and the results are those of a hash join, also after the parent rows change. rupg has no PostgreSQL namesake, so `connection/link_join.test` gives the behavior of the specs.
+    #[test]
+    fn link_join() {
+        big_stack(|| script(include_str!("connection/link_join.test")));
+    }
+
     /// The planner scans `brin`, `spgist` and `gist` indexes, with the costs of `brincostestimate`, `spgcostestimate` and `gistcostestimate`. A `brin` index gives only a bitmap, and `ANY` is not a clause of these indexes. `connection/index_am_paths.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn index_am_paths() {

@@ -44,6 +44,7 @@ mod ann;
 mod btree;
 mod cells;
 mod fsm;
+mod link;
 mod pages;
 pub(crate) mod ssi;
 
@@ -154,6 +155,8 @@ pub(crate) struct Heap {
     ssi: Mutex<ssi::Ssi>,
     /// The indexes of `rupg-ann` that the scans by the indexes of `hnsw` and `ivfflat` share. A lock of it comes after a lock of the state.
     ann: Mutex<ann::Shared>,
+    /// The forward links of the link indexes that the joins share. A lock of it comes after a lock of the state.
+    links: Mutex<link::Shared>,
 }
 
 #[derive(Debug, Default)]
@@ -4146,6 +4149,7 @@ impl Heap {
         table.purge(&gone);
         // A new version can have the ID of a removed version once the prune frees its slot, so the indexes lose the removed versions under the lock of the state.
         self.purge_vector_indexes(database, relation, &gone);
+        self.purge_links(database, relation, &gone);
         let mut pruned: Vec<Pruned> = scanned
             .iter()
             .map(|_| Pruned { kept: Vec::new(), visible: true, frozen: true })
@@ -4628,6 +4632,7 @@ impl Heap {
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
     pub(crate) fn drop_tables(&self, database: u32, keep: impl Fn(u32) -> bool) {
         self.state().tables.retain(|&(db, relation)| db != database || keep(relation));
+        self.drop_links(database, &keep);
         self.drop_vector_indexes(database, keep);
     }
 }
@@ -4984,6 +4989,7 @@ impl Heap {
             tasks: None,
             ssi: Mutex::default(),
             ann: Mutex::default(),
+            links: Mutex::default(),
         })
     }
 

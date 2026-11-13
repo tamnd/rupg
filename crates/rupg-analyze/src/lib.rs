@@ -70,15 +70,15 @@ pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, Collected, CopyRelation, CopyTarget, Defined, DomainCheck, Dropped, Fill,
-    Libraries, Message, Order, PartitionCheck, REGRESS_SYMBOLS, ReindexOptions, Repack, Rewrite,
-    RuleTree, SchemaElements, Script, SqlBody, Take, TopLevel, Transform, VacuumRel,
-    acl_allows_create, acl_dependents, acl_roles, apply_database_change, apply_tablespace_change,
-    attnums, copy_filter, copy_insert, copy_relation, copy_target, database_change, define,
-    find_library, function_body, function_body_for, function_script, function_sqlbody,
-    has_refresh_index, inline_body, is_definition, lock_not_available, lock_table, object_address,
-    owned_objects, policy_targets, policy_tree, reindex_options, rewrite_insert, rule_tree,
-    set_libraries, tablespace_change, tablespace_options, trigger_when, vacuum_denied,
-    vacuum_relations,
+    Libraries, LinkDefinition, Message, Order, PartitionCheck, REGRESS_SYMBOLS, ReindexOptions,
+    Repack, Rewrite, RuleTree, SchemaElements, Script, SqlBody, Take, TopLevel, Transform,
+    VacuumRel, acl_allows_create, acl_dependents, acl_roles, apply_database_change,
+    apply_tablespace_change, attnums, copy_filter, copy_insert, copy_relation, copy_target,
+    database_change, define, find_library, function_body, function_body_for, function_script,
+    function_sqlbody, has_refresh_index, inline_body, is_definition, link_definition, links_of,
+    lock_not_available, lock_table, object_address, owned_objects, policy_targets, policy_tree,
+    reindex_options, rewrite_insert, rule_tree, set_libraries, tablespace_change,
+    tablespace_options, trigger_when, vacuum_denied, vacuum_relations,
 };
 pub use exclusion::{Exclusion, exclusions};
 pub use expr::{

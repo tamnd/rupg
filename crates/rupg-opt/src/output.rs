@@ -428,7 +428,9 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             join(level, node, want, &parts);
         }
-        Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
+        Kind::MergeJoin { cond, join_filter, .. }
+        | Kind::HashJoin { cond, join_filter, .. }
+        | Kind::LinkJoin { cond, join_filter, .. } => {
             let mut parts: Vec<Expr> =
                 cond.iter().chain(join_filter).map(|i| i.expr.as_ref().clone()).collect();
             // `deconstruct_distribute` adds the columns of the conditions to the relations in the order of the join tree, the conditions of each join after the joins below it.
@@ -1087,7 +1089,9 @@ fn items_mut<'n, 'q>(node: &'n mut Node<'q>) -> Vec<&'n mut Item<'q>> {
         | Kind::BitmapHeapScan { recheck: items, .. }
         | Kind::BitmapIndexScan { cond: items, .. }
         | Kind::NestedLoop { join_filter: items, .. } => out.extend(items),
-        Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
+        Kind::MergeJoin { cond, join_filter, .. }
+        | Kind::HashJoin { cond, join_filter, .. }
+        | Kind::LinkJoin { cond, join_filter, .. } => {
             out.extend(cond.iter_mut().chain(join_filter));
         }
         Kind::Aggregate { keys, sets, .. } => {

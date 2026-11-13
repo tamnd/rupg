@@ -283,6 +283,8 @@ pub enum Kind<'q> {
     MergeJoin { join: JoinKind, cond: Vec<Item<'q>>, join_filter: Vec<Item<'q>> },
     /// `HashJoin`, with the `=` conditions that the hash table tests, `hashclauses`, and the other conditions of the join.
     HashJoin { join: JoinKind, cond: Vec<Item<'q>>, join_filter: Vec<Item<'q>> },
+    /// `Link Join` of spec/15 section 15.9.1: the join of spec/14 section 14.8.3 of a child side to its parent through the link index `link`, with the `=` conditions of the link columns and the other conditions of the join. Each outer row joins the parent row that its forward link gives, after the check of a validated link.
+    LinkJoin { join: JoinKind, link: u32, cond: Vec<Item<'q>>, join_filter: Vec<Item<'q>> },
     /// `Hash`: the hash table of the inner side of a hash join.
     Hash,
     /// `Material`: the rows of the node below, which the node keeps for the next scans.

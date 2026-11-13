@@ -289,6 +289,7 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::NestedLoop { .. } => simple("Nested Loop"),
         Kind::MergeJoin { .. } => Names { pname: "Merge".to_string(), ..simple("Merge Join") },
         Kind::HashJoin { .. } => Names { pname: "Hash".to_string(), ..simple("Hash Join") },
+        Kind::LinkJoin { .. } => Names { pname: "Link".to_string(), ..simple("Link Join") },
         Kind::Hash => simple("Hash"),
         Kind::Materialize => simple("Materialize"),
         Kind::Memoize(_) => simple("Memoize"),
@@ -440,12 +441,16 @@ impl Explainer<'_, '_> {
         match &node.kind {
             Kind::NestedLoop { join, .. }
             | Kind::MergeJoin { join, .. }
-            | Kind::HashJoin { join, .. } => {
+            | Kind::HashJoin { join, .. }
+            | Kind::LinkJoin { join, .. } => {
                 if !text {
                     self.w.text("Join Type", join_type(*join));
                 } else if *join != JoinKind::Inner {
                     self.w.buf.push_str(&format!(" {} Join", join_type(*join)));
-                } else if matches!(node.kind, Kind::HashJoin { .. } | Kind::MergeJoin { .. }) {
+                } else if matches!(
+                    node.kind,
+                    Kind::HashJoin { .. } | Kind::MergeJoin { .. } | Kind::LinkJoin { .. }
+                ) {
                     self.w.buf.push_str(" Join");
                 }
             }
@@ -503,7 +508,10 @@ impl Explainer<'_, '_> {
         }
         if matches!(
             node.kind,
-            Kind::NestedLoop { .. } | Kind::MergeJoin { .. } | Kind::HashJoin { .. }
+            Kind::NestedLoop { .. }
+                | Kind::MergeJoin { .. }
+                | Kind::HashJoin { .. }
+                | Kind::LinkJoin { .. }
         ) && (!text || self.options.verbose && node.inner_unique)
         {
             // The text form shows only a true value, and only with `VERBOSE`.
@@ -777,6 +785,17 @@ impl Explainer<'_, '_> {
                 self.texts.below(Vec::new());
                 done?;
             }
+            Kind::LinkJoin { link, cond, join_filter, .. } => {
+                // `Link` of spec/15 section 15.9.2, a field of rupg that the text form shows only with `VERBOSE`. A link with no foreign key is validated.
+                if self.w.format != Format::Text || self.options.verbose {
+                    let name = self.texts.object(*link, false).0;
+                    self.w.text("Link", &format!("{name} (validated)"));
+                }
+                self.texts.below(computed(node));
+                let done = self.join_quals(node, Some(("Link Cond", cond)), join_filter, upper);
+                self.texts.below(Vec::new());
+                done?;
+            }
             Kind::HashJoin { cond, join_filter, .. } => {
                 self.texts.below(computed(node));
                 let done = self.join_quals(node, Some(("Hash Cond", cond)), join_filter, upper);
@@ -969,6 +988,7 @@ impl Explainer<'_, '_> {
             Kind::NestedLoop { join_filter, .. }
             | Kind::MergeJoin { join_filter, .. }
             | Kind::HashJoin { join_filter, .. }
+            | Kind::LinkJoin { join_filter, .. }
                 if which == 0 =>
             {
                 !join_filter.is_empty()
