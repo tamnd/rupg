@@ -440,19 +440,30 @@ fn first_len(t: &[u8], utf8: bool) -> usize {
     if utf8 { char_len(t[0]).min(t.len()) } else { 1 }
 }
 
-/// The result of the rest `p` of a pattern after `%` for the text `t`, when `p` is a literal with no `%` after it or with one `%` at the end. The literal is either at the end of the text or anywhere in it, and no later start of the match can give another result, so the result is `True` or `Abort`. A pattern of another form gives `None`.
+/// The result of the rest `p` of a pattern after `%` for the text `t`, when `p` has literals with `%` between them and no `_` or `\\`, as `special%requests%` of TPC-H Q13. Each literal is found at its first place after the literal before it, and a pattern that does not end with `%` has its last literal at the end of the text. The first places leave the most text for the literals after them, so no later start of the match can give another result, and the result is `True` or `Abort`. A pattern of another form gives `None`.
 fn literal_tail(t: &[u8], p: &[u8]) -> Option<Like> {
-    let end = p.iter().position(|&c| matches!(c, b'%' | b'_' | b'\\')).unwrap_or(p.len());
-    let (literal, rest) = p.split_at(end);
-    if literal.is_empty() {
+    if p.first().is_none_or(|&c| c == b'%') || p.iter().any(|&c| matches!(c, b'_' | b'\\')) {
         return None;
     }
-    let found = match rest {
-        [] => t.ends_with(literal),
-        [b'%'] => memchr::memmem::find(t, literal).is_some(),
-        _ => return None,
+    let mut literals = p.split(|&c| c == b'%').filter(|l| !l.is_empty());
+    let (mut t, last) = if p.last() == Some(&b'%') {
+        (t, None)
+    } else {
+        let last = p.rsplit(|&c| c == b'%').next()?;
+        if !t.ends_with(last) {
+            return Some(Like::Abort);
+        }
+        (&t[..t.len() - last.len()], Some(last))
     };
-    Some(if found { Like::True } else { Like::Abort })
+    let count =
+        p.split(|&c| c == b'%').filter(|l| !l.is_empty()).count() - usize::from(last.is_some());
+    for literal in literals.by_ref().take(count) {
+        match memchr::memmem::find(t, literal) {
+            Some(at) => t = &t[at + literal.len()..],
+            None => return Some(Like::Abort),
+        }
+    }
+    Some(Like::True)
 }
 
 /// `MatchText` of `like_match.c` with `\` as the escape character, byte by byte as PostgreSQL does it for a deterministic collation. `_` matches one UTF8 character when `utf8` is true, else one byte, as `SB_MatchText` does it for `bytea`.
@@ -522,11 +533,13 @@ fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
     Ok(if p.is_empty() { Like::True } else { Like::Abort })
 }
 
-/// The search of `LIKE` for a pattern `%literal%`, where the literal has no `%`, `_` or `\\`, in many texts of a dictionary at one time. A text matches such a pattern when its bytes hold the bytes of the literal, as [`match_text`] finds it. The bytes of the texts of a dictionary are one after the other, so one search of the bytes of many codes finds the matches of all of them, with a vector search for the literal and no call for each text.
+/// The search of `LIKE` for a pattern `%literal%` or `%first%second%...%`, where the literals have no `%`, `_` or `\\`, in many texts of a dictionary at one time. A text matches such a pattern when its bytes hold the bytes of the literals in their order with no overlap, as [`match_text`] finds it. The bytes of the texts of a dictionary are one after the other, so one search of the bytes of many codes finds the first literal in all of them, with a vector search and no call for each text. Only the texts that hold the first literal search for the others.
 #[derive(Debug)]
 pub struct Infix {
-    /// The search for the literal.
+    /// The search for the first literal.
     finder: memchr::memmem::Finder<'static>,
+    /// The searches for the other literals, in their order.
+    rest: Vec<memchr::memmem::Finder<'static>>,
     /// True when the search is in the texts in ASCII lower case, for `ILIKE`. The pattern is then in lower case.
     fold: bool,
 }
@@ -537,14 +550,16 @@ impl Infix {
     pub fn new(pattern: &[u8], fold: bool) -> Option<Self> {
         let start = pattern.iter().position(|&c| c != b'%')?;
         let end = pattern.iter().rposition(|&c| c != b'%')? + 1;
-        let literal = &pattern[start..end];
-        if start == 0
-            || end == pattern.len()
-            || literal.iter().any(|&c| matches!(c, b'%' | b'_' | b'\\'))
-        {
+        let inner = &pattern[start..end];
+        if start == 0 || end == pattern.len() || inner.iter().any(|&c| matches!(c, b'_' | b'\\')) {
             return None;
         }
-        Some(Self { finder: memchr::memmem::Finder::new(literal).into_owned(), fold })
+        let mut literals = inner
+            .split(|&c| c == b'%')
+            .filter(|l| !l.is_empty())
+            .map(|l| memchr::memmem::Finder::new(l).into_owned());
+        let finder = literals.next()?;
+        Some(Self { finder, rest: literals.collect(), fold })
     }
 
     /// Calls `found` for each code from `first` to `last` whose text matches, in the order of the codes. `first` is 1 or more, and `last` is a code of `strings`.
@@ -572,7 +587,18 @@ impl Infix {
             }
             let end = strings.end(code);
             if hit + n <= end {
-                found(code);
+                // The first place of the first literal leaves the most text for the others.
+                let mut tail = &bytes[hit + n - start..end - start];
+                let all = self.rest.iter().all(|finder| match finder.find(tail) {
+                    Some(at) => {
+                        tail = &tail[at + finder.needle().len()..];
+                        true
+                    }
+                    None => false,
+                });
+                if all {
+                    found(code);
+                }
                 // The rest of the text of the code cannot change the result.
                 at = end - start;
                 code += 1;
@@ -1208,7 +1234,22 @@ mod tests {
         let dict = rupg_column::dict::Dictionary::from_parts(bytes, ends, 0).unwrap();
         let strings = dict.strings();
         let last = u32::try_from(texts.len()).unwrap();
-        for pattern in ["%a%", "%ab%", "%%ba%%", "%aa%", "%bGa%", "%aaaa%", "%Ga%", "%g%"] {
+        for pattern in [
+            "%a%",
+            "%ab%",
+            "%%ba%%",
+            "%aa%",
+            "%bGa%",
+            "%aaaa%",
+            "%Ga%",
+            "%g%",
+            "%a%b%",
+            "%a%a%",
+            "%ab%ba%",
+            "%a%%b%G%",
+            "%b%b%b%b%",
+            "%aa%a%",
+        ] {
             for fold in [false, true] {
                 let infix = Infix::new(pattern.as_bytes(), fold).unwrap();
                 for (first, end) in [(1, last), (2, last - 1), (40, 41), (7, 7), (9, 8)] {
@@ -1225,8 +1266,60 @@ mod tests {
                 }
             }
         }
-        for pattern in ["%", "%%", "a%", "%a", "%a_b%", "%a%b%", "%a\\%%", "ab"] {
+        for pattern in ["%", "%%", "a%", "%a", "%a_b%", "%a%_%", "%a\\%%", "ab", "%a%b"] {
             assert!(Infix::new(pattern.as_bytes(), false).is_none(), "{pattern}");
+        }
+    }
+
+    /// The match of `LIKE` with `%`, `_` and literal bytes, from the definition: `%` takes any number of bytes and `_` takes one.
+    fn naive_like(t: &[u8], p: &[u8]) -> bool {
+        match p.split_first() {
+            None => t.is_empty(),
+            Some((b'%', rest)) => (0..=t.len()).any(|i| naive_like(&t[i..], rest)),
+            Some((b'_', rest)) => !t.is_empty() && naive_like(&t[1..], rest),
+            Some((&c, rest)) => t.first() == Some(&c) && naive_like(&t[1..], rest),
+        }
+    }
+
+    #[test]
+    fn like_of_many_literals_after_a_percent_sign_matches_the_definition() {
+        let mut texts: Vec<Vec<u8>> = vec![Vec::new()];
+        for len in 1..=6 {
+            let mut next = Vec::new();
+            for t in texts.iter().filter(|t| t.len() == len - 1) {
+                for c in *b"ab" {
+                    let mut t = t.clone();
+                    t.push(c);
+                    next.push(t);
+                }
+            }
+            texts.extend(next);
+        }
+        let patterns = [
+            "%a%b%",
+            "%a%b",
+            "%ab%ab",
+            "%ab%ab%",
+            "%a%a%a",
+            "%ba%%ab",
+            "a%b%a",
+            "ab%ba%",
+            "%aa%aa%",
+            "%b%a%b%a%",
+            "%aba%ab",
+            "a%a",
+            "%a_b%a",
+            "_%ab%b",
+            "%bb%",
+        ];
+        for t in &texts {
+            for p in patterns {
+                assert_eq!(
+                    like_text(t, p.as_bytes()).unwrap(),
+                    naive_like(t, p.as_bytes()),
+                    "{t:?} {p}"
+                );
+            }
         }
     }
 }
