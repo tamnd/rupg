@@ -63,7 +63,7 @@ impl Cmp {
 }
 
 /// The result of the run of a lifted subquery: the rows of each key, or the set of the keys, or the bounds of each key, and the rows for a key that has no row.
-type Ran = (Buckets, Option<KeySet>, Option<Bounds>, Rc<Rows>);
+type Ran = (Buckets, Option<Keys>, Option<Bounds>, Rc<Rows>);
 
 /// The least and the greatest value of the column of the test of [`Bound`] for each key, with no null.
 enum Bounds {
@@ -161,7 +161,7 @@ pub(crate) struct Lifted {
     outer: Vec<Expr>,
     rows: Buckets,
     /// For an `EXISTS` with one integer key and no test, the keys that have a row, and `rows` is empty.
-    set: Option<Rc<KeySet>>,
+    set: Option<Rc<Keys>>,
     /// For an `EXISTS` with one integer key whose test is one comparison of integers, the bounds of each key, and `rows` is empty.
     bound: Option<Bound>,
     /// The rows for a key that has no row.
@@ -180,8 +180,56 @@ pub(crate) type Evaluate<'a> = dyn FnMut(&Expr, Option<&[Value]>) -> Result<Valu
 /// The rows of a lifted subquery for each key.
 type Buckets = rupg_kernels::hash::HashMap<Vec<Key>, Rc<Rows>>;
 
-/// The keys of an `EXISTS` that have a row, for [`Probe`].
+/// A set of integer keys, as the domain of a subquery has it.
 pub(crate) type KeySet = rupg_kernels::hash::HashSet<i64>;
+
+/// The keys of an `EXISTS` that have a row, for [`Probe`].
+pub(crate) enum Keys {
+    /// The keys in a hash set.
+    Hash(KeySet),
+    /// The bit `i % 64` of the word `i / 64` for the key `base + i`, for keys in a range of at most 64 times the number of keys and 65536 more, as the keys of a table that come from a sequence. The bits use at most 8 bytes for each key, which is less than a hash set uses, and a lookup reads one word with no hash.
+    Dense { base: i64, bits: Vec<u64> },
+}
+
+impl Keys {
+    /// True when the set has `key`.
+    fn contains(&self, key: i64) -> bool {
+        match self {
+            Keys::Hash(set) => set.contains(&key),
+            Keys::Dense { base, bits } => key
+                .checked_sub(*base)
+                .and_then(|at| usize::try_from(at).ok())
+                .is_some_and(|at| bits.get(at / 64).is_some_and(|word| word >> (at % 64) & 1 == 1)),
+        }
+    }
+
+    /// The set of `keys`, which may have a key more than once.
+    fn of(keys: impl Iterator<Item = i64> + Clone) -> Self {
+        let mut low = i64::MAX;
+        let mut high = i64::MIN;
+        let mut count = 0usize;
+        for key in keys.clone() {
+            low = low.min(key);
+            high = high.max(key);
+            count += 1;
+        }
+        let range = i128::from(high) - i128::from(low) + 1;
+        let limit = i128::try_from(count).unwrap_or(i128::MAX).saturating_mul(64) + 65536;
+        if count > 0
+            && range <= limit
+            && let Ok(range) = usize::try_from(range)
+        {
+            let mut bits = vec![0u64; range.div_ceil(64)];
+            for key in keys {
+                if let Ok(at) = usize::try_from(key - low) {
+                    bits[at / 64] |= 1 << (at % 64);
+                }
+            }
+            return Keys::Dense { base: low, bits };
+        }
+        Keys::Hash(keys.collect())
+    }
+}
 
 /// The two queries of a lifted subquery and the value of each key outside it.
 struct Split {
@@ -215,7 +263,7 @@ pub(crate) fn rows(
         }
     }
     if let (Some(set), [Key::Int(key)]) = (&lifted.set, keys.as_slice()) {
-        let found = if set.contains(key) { &lifted.one } else { &lifted.empty };
+        let found = if set.contains(*key) { &lifted.one } else { &lifted.empty };
         return Ok(Some(Rc::clone(found)));
     }
     if let (Some(bound), [Key::Int(key)]) = (&lifted.bound, keys.as_slice()) {
@@ -262,7 +310,7 @@ impl Probe {
                 let found = key(i).is_some_and(|k| match last {
                     Some((l, found)) if l == k => found,
                     _ => {
-                        let found = set.contains(&k);
+                        let found = set.contains(k);
                         last = Some((k, found));
                         found
                     }
@@ -463,7 +511,7 @@ fn lift(
         if single && let Some(keys) = columns.and_then(|mut columns| columns.pop()) {
             return Ok((
                 Buckets::default(),
-                Some(keys.into_iter().flatten().collect()),
+                Some(Keys::of(keys.iter().flatten().copied())),
                 None,
                 empty_rows,
             ));
@@ -513,7 +561,7 @@ fn lift(
             }
         }
         let set = if single && grouped.is_empty() {
-            Some(ints)
+            Some(Keys::of(ints.iter().copied()))
         } else {
             grouped.extend(ints.into_iter().map(|key| (vec![Key::Int(key)], Vec::new())));
             None
