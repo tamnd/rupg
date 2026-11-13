@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - An `EXISTS` with one integer key and one comparison of integers keeps the bounds of each key in an array when the keys are dense, as the keys of `lineitem` in TPC-H Q21, and the vectors of the keys of a lifted subquery have room for each row of the table (#1546).
+- rupg-jit: the tier driver of rudb-qc as the module `tier`, which puts a module on the interpreter and a native tier, moves a long-running function from `direct` up to `clif` in the background, and caches the code, with the tier equivalence tests. The morsels are timed on the platform `Clock` and the background compiles run on its `Tasks`. (#1547)
 - rupg-jit: `rt::Rt`, the runtime that implements each function of the QIR catalogue for every tier, lifted from rudb-qc-rt's `rt.rs` and `ablate.rs` at cd9f9676. A regular expression is a `Pattern` that the driver makes from rupg-func's, a date is PostgreSQL's day number with its infinities, a decimal division fails with PostgreSQL's SQLSTATEs, and the cancel flag is the session's (#1545)
 - rupg-jit: the join hash table and the `extern "C"` entries that native code calls through the runtime, lifted from rudb-qc-rt at cd9f9676 as `rt::join` and `rt::native` (#1544)
 - rupg-jit: the Cranelift compile tier, which lowers a QIR function to machine code through `cranelift-codegen`, lifted from rudb-qc-clif at cd9f9676 as the module `clif` behind the new feature `jit`, with `cranelift-codegen` and `cranelift-frontend` pinned at `=0.125.0` (#1543)
