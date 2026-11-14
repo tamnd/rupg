@@ -629,6 +629,11 @@ enum Index {
 impl Index {
     /// The index of the key `keys`, one vector of the rows for each column of the key, or `None` when two rows have the same key or the key has more than two columns. A row with a null in its key is not in the index, because it joins no row.
     fn of(keys: &[&[Option<i64>]]) -> Option<Index> {
+        Index::probed(keys, 0)
+    }
+
+    /// [`Index::of`] for a join that looks up the keys of `probes` rows. A key of one column whose values span no more than two slots for each lookup gets an array, as the cost to fill the array is less than the cost of the lookups in a hash table, as the `l_orderkey` of the orders of a year in TPC-H Q5. The array then has at most 2^24 slots.
+    fn probed(keys: &[&[Option<i64>]], probes: usize) -> Option<Index> {
         match keys {
             [one] => {
                 let (mut min, mut max, mut count) = (i64::MAX, i64::MIN, 0usize);
@@ -639,8 +644,8 @@ impl Index {
                 }
                 let span = max.checked_sub(min).and_then(|s| usize::try_from(s).ok());
                 if let Some(span) = span
-                    && span < (count * 8).max(1 << 16)
-                    && span < 1 << 27
+                    && ((span < (count * 8).max(1 << 16) && span < 1 << 27)
+                        || span < probes.saturating_mul(2).min(1 << 24))
                 {
                     let mut rows = vec![NONE; span + 1];
                     for (row, k) in one.iter().enumerate() {
@@ -760,7 +765,8 @@ impl Tree {
                         };
                     let keys: Vec<&[Option<i64>]> =
                         child_keys.iter().map(|&k| selected[child].keys[k].as_slice()).collect();
-                    let Some(index) = Index::of(&keys) else { continue };
+                    let probes = selected[parent].places.len();
+                    let Some(index) = Index::probed(&keys, probes) else { continue };
                     links.push(Link { parent, child, parent_keys, index });
                     done[child] = true;
                     grew = true;
