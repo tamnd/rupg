@@ -584,6 +584,55 @@ impl Col {
     }
 }
 
+/// Puts the words of the key `k` of each row of the column `col` into `words`, which has `width` words for each row. A null gives the word 0 and sets the bit of the key in the last word of the row. It gives `false` when a row that is not null has a value with no word, as [`Col::word`] does.
+fn put_key_words(col: &Col, k: usize, width: usize, words: &mut [u64]) -> bool {
+    fn fill(words: &mut [u64], k: usize, width: usize, f: impl Fn(usize) -> u64) {
+        for (i, row) in words.chunks_exact_mut(width).enumerate() {
+            row[k] = f(i);
+        }
+    }
+    let bit = 1_u64 << (k % 64);
+    let all_null = |words: &mut [u64]| {
+        for row in words.chunks_exact_mut(width) {
+            row[k] = 0;
+            row[width - 1] |= bit;
+        }
+    };
+    match &col.data {
+        Data::Int(v) | Data::Dec(v, _) => fill(words, k, width, |i| v[i] as u64),
+        Data::Float(v) => fill(words, k, width, |i| float_word(v[i])),
+        Data::Code(v, _) => fill(words, k, width, |i| u64::from(v[i])),
+        Data::Const(v) if v.is_null() => {
+            all_null(words);
+            return true;
+        }
+        Data::Const(v) => {
+            let w = int_of(v).map_or(0, |v| v as u64);
+            fill(words, k, width, |_| w);
+            return true;
+        }
+        Data::Values(v) => {
+            for (row, v) in words.chunks_exact_mut(width).zip(v) {
+                if !v.is_null() {
+                    return false;
+                }
+                row[k] = 0;
+                row[width - 1] |= bit;
+            }
+            return true;
+        }
+    }
+    if let Some(nulls) = &col.nulls {
+        for (row, &null) in words.chunks_exact_mut(width).zip(nulls) {
+            if null {
+                row[k] = 0;
+                row[width - 1] |= bit;
+            }
+        }
+    }
+    true
+}
+
 /// The value of the integer `v` of a column of the type `ty`.
 fn int_value(ty: u32, v: i64) -> Value {
     match ty {
@@ -4353,6 +4402,7 @@ fn grouped(
     let mut bail = false;
     let mut words: Vec<u64> = Vec::with_capacity(VECTOR * (keys.len() + 1));
     let mut row_hashes: Vec<u64> = Vec::with_capacity(VECTOR);
+    let mut starts: Vec<usize> = Vec::with_capacity(VECTOR);
     let mut direct = Direct::new(keys.len());
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let params = scan.exec.params;
@@ -4645,31 +4695,35 @@ fn grouped(
                     trailing = true;
                 } else {
                     let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
-                    // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
+                    // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row. The words of a key go in for all the rows of the batch at one time.
                     let width = keys.len() + 1;
                     words.clear();
-                    for i in 0..sel.len() {
-                        let mut mask = 0_u64;
-                        for (k, col) in cols.iter().enumerate() {
-                            if col.null(i) {
-                                mask |= 1 << (k % 64);
-                                words.push(0);
-                            } else {
-                                let Some(w) = col.word(i) else {
-                                    bail = true;
-                                    return Ok(false);
-                                };
-                                words.push(w);
-                            }
+                    words.resize(sel.len() * width, 0);
+                    for (k, col) in cols.iter().enumerate() {
+                        if !put_key_words(col, k, width, &mut words) {
+                            bail = true;
+                            return Ok(false);
                         }
-                        words.push(mask);
+                    }
+                    // A row with the same words as the row before it is in the same group, so only the first row of each run of equal words gets a hash and a probe of the map. The rows of a table in the order of its keys make long runs.
+                    starts.clear();
+                    let mut before: Option<&[u64]> = None;
+                    for (i, w) in words.chunks_exact(width).enumerate() {
+                        if before != Some(w) {
+                            starts.push(i);
+                        }
+                        before = Some(w);
                     }
                     row_hashes.clear();
-                    row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
-                    for (i, &row_at) in sel.iter().enumerate() {
-                        if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
+                    row_hashes.extend(
+                        starts.iter().map(|&i| map.hash(&words[i * width..(i + 1) * width])),
+                    );
+                    for (run, &i) in starts.iter().enumerate() {
+                        if let Some(&ahead) = row_hashes.get(run + PREFETCH_ROWS) {
                             map.prefetch(ahead);
                         }
+                        let end = starts.get(run + 1).copied().unwrap_or(sel.len());
+                        let row_at = sel[i];
                         let word = &words[i * width..(i + 1) * width];
                         let (id, new) = match last_id {
                             Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => {
@@ -4678,13 +4732,13 @@ fn grouped(
                             _ => {
                                 let next = u32::try_from(groups)
                                     .map_err(|_| Error::internal("too many groups"))?;
-                                let found = map.id(word, row_hashes[i], next);
+                                let found = map.id(word, row_hashes[run], next);
                                 last_word.copy_from_slice(word);
                                 last_id = Some(found.0);
                                 found
                             }
                         };
-                        trailing = !new;
+                        trailing = !new || end - i > 1;
                         if new {
                             groups += 1;
                             new_rows.push(row_at);
@@ -4714,7 +4768,7 @@ fn grouped(
                                 );
                             }
                         }
-                        ids.push(id);
+                        ids.extend(std::iter::repeat_n(id, end - i));
                     }
                     if let (Some(direct), Some(codes)) = (&mut direct, &codes) {
                         direct.learn(codes, &ids);
