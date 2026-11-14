@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A `HAVING` of one comparison of a `count` or a `sum` with a constant, as `sum(l_quantity) > 300` in TPC-H Q18, now tests the state of each group in the scan of one table, with no value of the call and no evaluation of the expression for each group (#1575).
 - The groups of the scan of one table now get the words of each key for all the rows of a batch at one time, and only the first row of each run of rows with equal keys gets a hash and a probe of the map. A table in the order of its keys, as `lineitem` grouped by `l_orderkey` in TPC-H Q18, makes long runs (#1574).
 - The numeric math of the vector scan now scales a constant one time before the loop, and it does not multiply by a scale of 1. A test of a `date` against a `timestamp` with no nulls on either side now makes its booleans in one loop with no options, and a sum of integers with no nulls skips the test of the nulls for each row (#1573).
 - The groups of the scan of one table now come from an array of the dictionary codes of the keys when there are at most three keys of small codes, as `l_returnflag` and `l_linestatus` in TPC-H Q1. Before, each row made the words of its keys and a hash, and probed the map of the groups (#1572).
