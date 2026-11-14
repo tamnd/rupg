@@ -633,6 +633,11 @@ fn put_key_words(col: &Col, k: usize, width: usize, words: &mut [u64]) -> bool {
     true
 }
 
+/// The bytes of a text with no spaces at its end, which a comparison of `bpchar` does not read.
+fn trim_spaces(text: &[u8]) -> &[u8] {
+    &text[..text.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1)]
+}
+
 /// The value of the integer `v` of a column of the type `ty`.
 fn int_value(ty: u32, v: i64) -> Value {
     match ty {
@@ -705,6 +710,8 @@ struct Exec<'q> {
     lengths: FxMap<usize, Vec<u32>>,
     /// For each `x IN (c, ...)` of integers, the set of the elements, or `None` for no element, and true when an element is null.
     int_sets: FxMap<*const Expr, (Option<lift::Keys>, bool)>,
+    /// For each test of `bpchar` of [`Exec::padded_codes`], the dictionary of the column and the result for each code: 0 for a code that the test has not seen, 1 for a code that no element is equal to and 2 for a code that an element is equal to.
+    padded: FxMap<*const Expr, (usize, Vec<u8>)>,
     /// The dictionary of each key of `GROUP BY` whose codes come from a map of [`key_map`] on the tasks.
     key_dicts: FxMap<*const Expr, usize>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
@@ -1369,6 +1376,12 @@ impl<'q> Exec<'q> {
                 }
             }
             ExprKind::Func(func) if !func.retset => {
+                if plain(func.collation)
+                    && let Some(col) =
+                        self.bpchar_equal(expr, src(func.oid), &func.args, batch, sel)?
+                {
+                    return Ok(col);
+                }
                 if let Some(col) = self.func(expr, &func.args, src(func.oid), batch, sel)? {
                     return Ok(col);
                 }
@@ -1379,7 +1392,7 @@ impl<'q> Exec<'q> {
                 }
             }
             ExprKind::ScalarArrayOp { func, any, args, collation } if plain(*collation) => {
-                if let Some(col) = self.text_in(*func, *any, args, batch, sel)? {
+                if let Some(col) = self.text_in(expr, *func, *any, args, batch, sel)? {
                     return Ok(col);
                 }
                 if let Some(col) = self.int_in(expr, *func, *any, args, batch, sel)? {
@@ -1436,9 +1449,10 @@ impl<'q> Exec<'q> {
         Ok(Some(Col::bools(&out)))
     }
 
-    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
+    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end, in [`Exec::padded_codes`]. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
     fn text_in(
         &mut self,
+        expr: &Expr,
         func: u32,
         any: bool,
         args: &[Expr],
@@ -1469,23 +1483,17 @@ impl<'q> Exec<'q> {
         if !dict.is_text() {
             return Ok(None);
         }
-        let trim = |t: &[u8]| -> usize { t.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1) };
         // The test of a row whose value is equal to no element.
         let other = (!null_element).then_some(!equal);
         let mut out: Vec<Option<bool>> = Vec::with_capacity(sel.len());
         if padded {
-            let mut wanted: Vec<&[u8]> = texts.iter().map(|t| &t[..trim(t)]).collect();
+            let mut wanted: Vec<&[u8]> = texts.iter().map(|t| trim_spaces(t)).collect();
             wanted.sort_unstable();
             wanted.dedup();
-            for (i, &code) in codes.iter().enumerate() {
-                if code == 0 || col.null(i) {
-                    out.push(None);
-                    continue;
-                }
-                let Some(text) = dict.text(code) else { return Ok(None) };
-                let found = wanted.binary_search(&&text[..trim(text)]).is_ok();
-                out.push(if found { Some(equal) } else { other });
-            }
+            let Some(out) = self.padded_codes(expr, &col, &wanted, equal, other) else {
+                return Ok(None);
+            };
+            return Ok(Some(Col::bools(&out)));
         } else {
             let mut wanted: Vec<u32> =
                 texts.iter().map(|t| dict.find(t)).filter(|&c| c != 0 && c != MISSING).collect();
@@ -1501,6 +1509,77 @@ impl<'q> Exec<'q> {
             }
         }
         Ok(Some(Col::bools(&out)))
+    }
+
+    /// `x = c` and `x <> c` of `bpchar`, of a column of codes and a constant, as `p_brand = 'Brand#12'` in TPC-H Q19, in [`Exec::padded_codes`]. `None` for other arguments.
+    fn bpchar_equal(
+        &mut self,
+        expr: &Expr,
+        src: &str,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let equal = match src {
+            "bpchareq" => true,
+            "bpcharne" => false,
+            _ => return Ok(None),
+        };
+        let [a, b] = args else { return Ok(None) };
+        let (column, constant) = match (&a.kind, &b.kind) {
+            (_, ExprKind::Const(c)) => (a, c),
+            (ExprKind::Const(c), _) => (b, c),
+            _ => return Ok(None),
+        };
+        let text = match constant {
+            Value::Text(text) => text.as_bytes(),
+            _ => return Ok(None),
+        };
+        let col = self.eval(column, batch, sel)?;
+        let out = self.padded_codes(expr, &col, &[trim_spaces(text)], equal, Some(!equal));
+        Ok(out.map(|out| Col::bools(&out)))
+    }
+
+    /// The test of each row of a column of codes of `bpchar` against the texts of `wanted`, which are in order and have no spaces at their end: `equal` for a row whose text with no spaces at its end is in `wanted`, `other` for another row and `None` for a null. The bytes of each code are compared once in the scan for a column of the table, as PostgreSQL compares `bpchar` with no spaces at the end. `None` for another column.
+    fn padded_codes(
+        &mut self,
+        expr: &Expr,
+        col: &Col,
+        wanted: &[&[u8]],
+        equal: bool,
+        other: Option<bool>,
+    ) -> Option<Vec<Option<bool>>> {
+        let Data::Code(codes, d) = &col.data else { return None };
+        let dict = &self.dicts[*d];
+        if !dict.is_text() {
+            return None;
+        }
+        let key = std::ptr::from_ref(expr);
+        let stored = matches!(dict, Dict::Stored(_));
+        let mut memo = match self.padded.remove(&key) {
+            Some((at, memo)) if stored && at == *d => memo,
+            _ => Vec::new(),
+        };
+        let mut out = Vec::with_capacity(codes.len());
+        for (i, &code) in codes.iter().enumerate() {
+            if code == 0 || col.null(i) {
+                out.push(None);
+                continue;
+            }
+            let at = code as usize;
+            if memo.len() <= at {
+                memo.resize(at + 1, 0);
+            }
+            if memo[at] == 0 {
+                let text = trim_spaces(dict.text(code)?);
+                memo[at] = 1 + u8::from(wanted.binary_search(&text).is_ok());
+            }
+            out.push(if memo[at] == 2 { Some(equal) } else { other });
+        }
+        if stored {
+            self.padded.insert(key, (*d, memo));
+        }
+        Some(out)
     }
 
     /// The subquery of `self.links[link]` for each row: the `EXISTS` that [`lift::Probe::tests`] gives for the key of the row and its other column, or the value that [`lift::Scalar::value`] gives for the keys of the row.
@@ -3042,6 +3121,7 @@ pub(crate) fn run_on(
         likes: FxMap::default(),
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
+        padded: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
@@ -3273,6 +3353,7 @@ pub(crate) fn selected(
         likes: FxMap::default(),
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
+        padded: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
