@@ -24,7 +24,7 @@ use rupg_func::Session;
 use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::{Value, oid};
 
-use crate::compile::{Arg, Signature, compile};
+use crate::compile::{Arg, Settings, Signature, compile};
 use crate::exec::{Compiled, Frame};
 
 /// The OID of the language `plpgsql`.
@@ -174,7 +174,7 @@ pub fn call(
             let Some(function) = catalog.function(func) else {
                 return Err(Error::internal(format!("cache lookup failed for function {func}")));
             };
-            let sig = signature(function, types, ret);
+            let sig = signature(function, types, ret, Settings::of(spi.session()));
             let tree = compile(&function.src, spi.env(), &sig, false)?;
             let text = rupg_func::to_text(oid::REGPROCEDURE, &Value::Oid(func), spi.session())?;
             let compiled = Rc::new(Compiled::new(tree, text, func));
@@ -226,7 +226,7 @@ pub fn trigger(spi: &dyn Spi, call: &TriggerCall<'_>) -> Result<Option<Vec<Value
             let Some(function) = catalog.function(func) else {
                 return Err(Error::internal(format!("cache lookup failed for function {func}")));
             };
-            let mut sig = signature(function, &[], 0);
+            let mut sig = signature(function, &[], 0, Settings::of(spi.session()));
             sig.trigger = true;
             let tree = compile(&function.src, spi.env(), &sig, false)?;
             let text = rupg_func::to_text(oid::REGPROCEDURE, &Value::Oid(func), spi.session())?;
@@ -255,7 +255,7 @@ pub fn event_trigger(spi: &dyn Spi, func: u32, event: &str, tag: &str) -> Result
             let Some(function) = catalog.function(func) else {
                 return Err(Error::internal(format!("cache lookup failed for function {func}")));
             };
-            let mut sig = signature(function, &[], 0);
+            let mut sig = signature(function, &[], 0, Settings::of(spi.session()));
             sig.event_trigger = true;
             let tree = compile(&function.src, spi.env(), &sig, false)?;
             let text = rupg_func::to_text(oid::REGPROCEDURE, &Value::Oid(func), spi.session())?;
@@ -322,6 +322,7 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
         trigger: false,
         event_trigger: false,
         procedure: false,
+        settings: Settings::of(spi.session()),
     };
     let tree = compile(src, spi.env(), &sig, true)?;
     let compiled = Compiled::new(tree, "inline_code_block", 0);
@@ -333,7 +334,11 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
 /// # Errors
 ///
 /// The syntax errors of the body.
-pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> {
+pub fn validate(
+    env: &dyn Env,
+    session: &dyn Session,
+    function: &rupg_catalog::Function,
+) -> Result<()> {
     if function.lang != PLPGSQL_LANGUAGE {
         return Ok(());
     }
@@ -348,7 +353,7 @@ pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> 
         oid::ANYMULTIRANGE | oid::ANYCOMPATIBLEMULTIRANGE => oid::INT4MULTIRANGE,
         ty => ty,
     };
-    let mut sig = signature(function, &[], 0);
+    let mut sig = signature(function, &[], 0, Settings::of(session));
     for arg in &mut sig.args {
         arg.ty = dummy(arg.ty);
     }
@@ -377,7 +382,12 @@ fn array_like(ty: u32) -> bool {
 }
 
 /// `compute_function_hashkey` and `plpgsql_resolve_polymorphic_argtypes`: the arguments and the result type of the function, with the actual types `types` of the input arguments and the actual result type `ret` for the polymorphic types.
-fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Signature {
+fn signature(
+    function: &rupg_catalog::Function,
+    types: &[u32],
+    ret: u32,
+    settings: Settings,
+) -> Signature {
     let all =
         if function.allargtypes.is_empty() { &function.argtypes } else { &function.allargtypes };
     let mode = |i: usize| function.argmodes.get(i).copied().unwrap_or(b'i');
@@ -403,16 +413,36 @@ fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Sign
         }
     });
     let outs = (0..all.len()).filter(|&i| matches!(mode(i), b'o' | b'b' | b't')).count();
+    // `resolve_polymorphic_argtypes`: each family of the polymorphic types takes its type from its own arguments, so that `anycompatible` is the common type of its arguments and an element comes from a range too.
+    let declared: Vec<u32> = (0..all.len()).filter(|&i| input(mode(i))).map(|i| all[i]).collect();
+    let resolved = |ty: u32| {
+        if types.len() != declared.len() {
+            return None;
+        }
+        let ty = rupg_analyze::resolve_polymorphic(types, &mut declared.clone(), ty).ok()?;
+        Some(ty).filter(|&t| t != 0 && !types::is_polymorphic(t))
+    };
     let args = all
         .iter()
         .enumerate()
         .map(|(i, &ty)| {
+            let compatible = matches!(
+                ty,
+                oid::ANYCOMPATIBLE
+                    | oid::ANYCOMPATIBLENONARRAY
+                    | oid::ANYCOMPATIBLEARRAY
+                    | oid::ANYCOMPATIBLERANGE
+                    | oid::ANYCOMPATIBLEMULTIRANGE
+            );
             let ty = if !types::is_polymorphic(ty) {
                 ty
             } else if let Some(&found) = actual.get(&i) {
-                found
+                // The value of an argument of the `anycompatible` family has the common type of the family.
+                if compatible { resolved(ty).unwrap_or(found) } else { found }
             } else if outs == 1 && ret != 0 {
                 ret
+            } else if let Some(ty) = resolved(ty) {
+                ty
             } else if element_like(ty) && elem.is_some() {
                 elem.unwrap_or(ty)
             } else if array_like(ty) && elem.is_some() {
@@ -437,5 +467,6 @@ fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Sign
         trigger: false,
         event_trigger: false,
         procedure: function.kind == b'p',
+        settings,
     }
 }

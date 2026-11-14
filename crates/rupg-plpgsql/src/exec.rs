@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use rupg_analyze::{ExprKind, Params, Query, Variable, Variables, types};
+use rupg_analyze::{Conflict, ExprKind, Params, Query, Variable, Variables, types};
 use rupg_common::{Error, Object, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
@@ -48,6 +48,9 @@ pub(crate) struct Compiled {
 
 /// The rows of `EXECUTE`, their count, their columns, and true for a query that does not write.
 type DynamicRows = (Vec<Vec<Value>>, u64, Vec<Field>, bool);
+
+/// The plan of the query of `EXECUTE`, the values of `USING` and their types, the text of the query, and the line of the context of its errors.
+type DynamicPlanned = (Planned, Vec<Value>, Vec<u32>, String, String);
 
 impl Compiled {
     pub(crate) fn new(func: Function, sig: impl Into<Rc<str>>, oid: u32) -> Compiled {
@@ -340,6 +343,10 @@ impl Variables for Resolver<'_> {
             _ => return Ok(None),
         };
         self.bind(b).map(Some)
+    }
+
+    fn conflict(&self) -> Conflict {
+        self.func.conflict
     }
 
     fn param(&self, number: usize) -> Option<Variable> {
@@ -1537,7 +1544,8 @@ impl Exec<'_> {
             return Ok(());
         };
         let processed = if write { n } else { n.min(1) };
-        self.rows_into(target, &columns(&p.plan), rows, strict, write)?;
+        let detail = |this: &Self| this.expr_params(&p);
+        self.rows_into(target, &columns(&p.plan), rows, strict, write, detail)?;
         self.row_count = processed;
         self.set_found(processed > 0);
         Ok(())
@@ -1570,7 +1578,7 @@ impl Exec<'_> {
         Ok(node)
     }
 
-    /// The first row of `rows` into the target of `INTO`. With `strict`, no row and more than one row are errors. For a `write` with `RETURNING`, more than one row is an error, and no row sets the target to nulls.
+    /// The first row of `rows` into the target of `INTO`. With `strict`, no row and more than one row are errors. For a `write` with `RETURNING`, more than one row is an error, and no row sets the target to nulls. Otherwise more than one row is the check `too_many_rows`. `params` gives the parameters of the query for the detail of the error, under `print_strict_params`.
     fn rows_into(
         &mut self,
         target: usize,
@@ -1578,15 +1586,141 @@ impl Exec<'_> {
         rows: Vec<Vec<Value>>,
         strict: bool,
         write: bool,
+        params: impl Fn(&Self) -> Result<Option<String>>,
     ) -> Result<()> {
         if rows.is_empty() && strict {
-            return Err(Error::new(SqlState::NO_DATA_FOUND, "query returned no rows"));
+            let error = Error::new(SqlState::NO_DATA_FOUND, "query returned no rows");
+            return Err(self.strict_detail(error, params)?);
         }
-        if rows.len() > 1 && (strict || write) {
-            return Err(Error::new(SqlState::TOO_MANY_ROWS, "query returned more than one row")
-                .with_hint("Make sure the query returns a single row, or use LIMIT 1."));
+        if rows.len() > 1 {
+            let check =
+                if strict || write { Some(Check::Error) } else { self.extra_check(TOO_MANY_ROWS) };
+            if let Some(check) = check {
+                let error = Error::new(SqlState::TOO_MANY_ROWS, "query returned more than one row")
+                    .with_hint("Make sure the query returns a single row, or use LIMIT 1.");
+                let error = self.strict_detail(error, params)?;
+                self.extra(check, error)?;
+            }
         }
         self.move_rows(target, columns, rows.into_iter().next())
+    }
+
+    /// The error `error` of `INTO STRICT` with the parameters of the query from `params` as its detail, under `print_strict_params`.
+    fn strict_detail(
+        &self,
+        error: Error,
+        params: impl Fn(&Self) -> Result<Option<String>>,
+    ) -> Result<Error> {
+        if !self.f.print_strict_params {
+            return Ok(error);
+        }
+        Ok(match params(self)? {
+            Some(params) => error.with_detail(format!("parameters: {params}")),
+            None => error,
+        })
+    }
+
+    /// The errors of `EXECUTE ... INTO STRICT` for `n` rows, with the values of `USING` from `params` as the detail under `print_strict_params`.
+    fn strict_rows(
+        &self,
+        n: usize,
+        params: impl Fn(&Self) -> Result<Option<String>>,
+    ) -> Result<()> {
+        let error = match n {
+            0 => Error::new(SqlState::NO_DATA_FOUND, "query returned no rows"),
+            1 => return Ok(()),
+            _ => Error::new(SqlState::TOO_MANY_ROWS, "query returned more than one row"),
+        };
+        Err(self.strict_detail(error, params)?)
+    }
+
+    /// `format_expr_params`: the variables that the query `p` reads with their values, in the order of the variables, or `None` for none.
+    fn expr_params(&self, p: &Prepared) -> Result<Option<String>> {
+        let mut bindings: Vec<&(Binding, u32, i32)> = p.bindings.iter().collect();
+        bindings.sort_by(|(a, ..), (b, ..)| binding_order(a).cmp(&binding_order(b)));
+        let mut out = Vec::with_capacity(bindings.len());
+        for (b, ty, _) in bindings {
+            let name = match b {
+                Binding::Datum(d) => &self.f.datums[*d].name,
+                Binding::Field(_, name) => name,
+            };
+            let value = self.binding_value(b)?;
+            out.push(format!("{name} = {}", self.quoted(&value, *ty)?));
+        }
+        Ok((!out.is_empty()).then(|| out.join(", ")))
+    }
+
+    /// `format_preparedparamsdata`: the values of `USING` as `$1 = 'value'`, or `None` for none.
+    fn using_params(&self, values: &[Value], types: &[u32]) -> Result<Option<String>> {
+        let mut out = Vec::with_capacity(values.len());
+        for (i, (value, &ty)) in values.iter().zip(types).enumerate() {
+            out.push(format!("${} = {}", i + 1, self.quoted(value, ty)?));
+        }
+        Ok((!out.is_empty()).then(|| out.join(", ")))
+    }
+
+    /// The text of `value` in single quotes, or `NULL`, as `appendStringInfoStringQuoted` writes it.
+    fn quoted(&self, value: &Value, ty: u32) -> Result<String> {
+        if value.is_null() {
+            return Ok("NULL".to_owned());
+        }
+        Ok(format!("'{}'", self.text(value, ty)?.replace('\'', "''")))
+    }
+
+    /// The level of the extra check `check` under `plpgsql.extra_errors` and `plpgsql.extra_warnings`, or `None` when neither names it.
+    fn extra_check(&self, check: &str) -> Option<Check> {
+        let names = |setting: &str| {
+            self.session().setting(setting).is_some_and(|value| extra_checks(&value, check))
+        };
+        if names("plpgsql.extra_errors") {
+            Some(Check::Error)
+        } else if names("plpgsql.extra_warnings") {
+            Some(Check::Warning)
+        } else {
+            None
+        }
+    }
+
+    /// The error `error` of a check at the level `check`: an error, or a warning that goes to the client.
+    fn extra(&self, check: Check, error: Error) -> Result<()> {
+        match check {
+            Check::Error => Err(error),
+            Check::Warning => {
+                self.spi.notice(
+                    error.with_level(rupg_common::Level::Warning).with_context(self.stack()),
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// The check `strict_multi_assignment` of a row of `sources` values into `targets` fields: an error or a warning for each missing value, and one for the values after the last field.
+    fn multi_assignment(&self, sources: usize, targets: usize) -> Result<()> {
+        if sources == targets {
+            return Ok(());
+        }
+        let Some(check) = self.extra_check(STRICT_MULTI_ASSIGNMENT) else {
+            return Ok(());
+        };
+        let error = || {
+            let setting = match check {
+                Check::Error => "extra_errors",
+                Check::Warning => "extra_warnings",
+            };
+            Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "number of source and target fields in assignment does not match",
+            )
+            .with_detail(format!("{STRICT_MULTI_ASSIGNMENT} check of {setting} is active."))
+            .with_hint("Make sure the query returns the exact list of columns.")
+        };
+        for _ in sources..targets {
+            self.extra(check, error())?;
+        }
+        if sources > targets {
+            self.extra(check, error())?;
+        }
+        Ok(())
     }
 
     /// `exec_stmt_dynexecute`.
@@ -1597,24 +1731,16 @@ impl Exec<'_> {
         strict: bool,
         params: &[Expr],
     ) -> Result<()> {
-        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        let (planned, values, types, text, line) = self.dynamic_planned(query, params)?;
+        let detail = |this: &Self| this.using_params(&values, &types);
         let plan = match planned {
             Planned::Query(plan) => *plan,
             Planned::Utility(node) => {
                 check_utility(&node, "EXECUTE of transaction commands is not implemented")?;
                 if let Some(fetched) = self.utility_rows(&node, &text, line.clone(), false)? {
                     if let Some(target) = into {
-                        if fetched.rows.is_empty() && strict {
-                            return Err(Error::new(
-                                SqlState::NO_DATA_FOUND,
-                                "query returned no rows",
-                            ));
-                        }
-                        if fetched.rows.len() > 1 && strict {
-                            return Err(Error::new(
-                                SqlState::TOO_MANY_ROWS,
-                                "query returned more than one row",
-                            ));
+                        if strict {
+                            self.strict_rows(fetched.rows.len(), detail)?;
                         }
                         self.move_rows(target, &fetched.columns, fetched.rows.into_iter().next())?;
                     }
@@ -1631,14 +1757,8 @@ impl Exec<'_> {
         self.set_spi(None);
         let (rows, n) = result.map_err(|error| error.with_context(line))?;
         if let Some(target) = into {
-            if rows.is_empty() && strict {
-                return Err(Error::new(SqlState::NO_DATA_FOUND, "query returned no rows"));
-            }
-            if rows.len() > 1 && strict {
-                return Err(Error::new(
-                    SqlState::TOO_MANY_ROWS,
-                    "query returned more than one row",
-                ));
+            if strict {
+                self.strict_rows(rows.len(), detail)?;
             }
             self.move_rows(target, &columns(&plan), rows.into_iter().next())?;
         }
@@ -1648,7 +1768,7 @@ impl Exec<'_> {
 
     /// The rows of the query of `EXECUTE`, with the values of `USING` as its parameters, the columns, and true for a query that does not write. A statement that is not a query must give rows, as `EXPLAIN` and `SHOW` do.
     fn run_dynamic(&mut self, query: &Expr, params: &[Expr], cursor: bool) -> Result<DynamicRows> {
-        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        let (planned, values, _, text, line) = self.dynamic_planned(query, params)?;
         let plan = match planned {
             Planned::Query(plan) => *plan,
             Planned::Utility(node) => {
@@ -1698,7 +1818,7 @@ impl Exec<'_> {
         query: &Expr,
         params: &[Expr],
     ) -> Result<(Plan, Vec<Value>, String, String)> {
-        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        let (planned, values, _, text, line) = self.dynamic_planned(query, params)?;
         match planned {
             Planned::Query(plan) => Ok((*plan, values, text, line)),
             Planned::Utility(_) => Err(Error::new(
@@ -1710,11 +1830,7 @@ impl Exec<'_> {
     }
 
     /// [`Exec::dynamic_plan`] that gives the parse tree of a statement that is not a query.
-    fn dynamic_planned(
-        &mut self,
-        query: &Expr,
-        params: &[Expr],
-    ) -> Result<(Planned, Vec<Value>, String, String)> {
+    fn dynamic_planned(&mut self, query: &Expr, params: &[Expr]) -> Result<DynamicPlanned> {
         let (value, ty, _) = self.eval(query)?;
         if value.is_null() {
             return Err(Error::new(
@@ -1736,8 +1852,8 @@ impl Exec<'_> {
             if is_utility(&node) {
                 return Ok(Planned::Utility(node));
             }
-            let query =
-                rupg_analyze::analyze(&node, self.env(), &Params { types, variable: false })?;
+            let params = Params { types: types.clone(), variable: false };
+            let query = rupg_analyze::analyze(&node, self.env(), &params)?;
             rupg_exec::prepare(query, self.session())?
                 .fold(None, self.session())
                 .map(|plan| Planned::Query(Box::new(plan)))
@@ -1746,7 +1862,7 @@ impl Exec<'_> {
             Some(at) => error.with_position(None).with_internal(text.clone(), Some(at)),
             None => error.with_context(line.clone()),
         })?;
-        Ok((planned, values, text, line))
+        Ok((planned, values, types, text, line))
     }
 
     /// The name of the portal in the cursor variable `d`, which must not be null.
@@ -2207,6 +2323,7 @@ impl Exec<'_> {
         match &self.f.datums[d].kind {
             DatumKind::Rec { ty } => {
                 let ty = *ty;
+                let real = row.is_some();
                 // No row with the columns of a query sets the fields to nulls.
                 let row = match row {
                     Some(row) => row,
@@ -2227,6 +2344,9 @@ impl Exec<'_> {
                     Slot::Rec { fields: Some(fields), .. } => Rc::clone(fields),
                     _ => Rc::from(Vec::new()),
                 };
+                if real {
+                    self.multi_assignment(row.len(), fields.len())?;
+                }
                 let mut row = row.into_iter();
                 let mut values = Vec::with_capacity(fields.len());
                 for (i, field) in fields.iter().enumerate() {
@@ -2240,6 +2360,9 @@ impl Exec<'_> {
                 Ok(())
             }
             DatumKind::Row { fields } => {
+                if let Some(row) = &row {
+                    self.multi_assignment(row.len(), fields.len())?;
+                }
                 let mut row = row.map(Vec::into_iter);
                 for (i, &f) in fields.iter().enumerate() {
                     let value = row.as_mut().and_then(Iterator::next).unwrap_or(Value::Null);
@@ -2249,11 +2372,44 @@ impl Exec<'_> {
                 Ok(())
             }
             DatumKind::Var { .. } | DatumKind::Field { .. } => {
+                if let Some(row) = &row {
+                    self.multi_assignment(row.len(), 1)?;
+                }
                 let value = row.and_then(|row| row.into_iter().next()).unwrap_or(Value::Null);
                 let (ty, typmod) = columns.first().map_or((oid::UNKNOWN, -1), |c| (c.1, c.2));
                 self.assign_datum(d, value, ty, typmod)
             }
         }
+    }
+}
+
+/// The extra check of more than one row into the target of `INTO` with no `STRICT`.
+const TOO_MANY_ROWS: &str = "too_many_rows";
+/// The extra check of a row into a target with another count of fields.
+const STRICT_MULTI_ASSIGNMENT: &str = "strict_multi_assignment";
+
+/// The level of an extra check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Check {
+    Error,
+    Warning,
+}
+
+/// True when the value `value` of `plpgsql.extra_errors` or `plpgsql.extra_warnings` names the check `check`: `all`, `none`, or a list of checks, as `plpgsql_extra_checks_check_hook` reads it.
+fn extra_checks(value: &str, check: &str) -> bool {
+    let names: Vec<String> = value.split(',').map(|n| n.trim().to_ascii_lowercase()).collect();
+    match names.as_slice() {
+        [one] if one == "all" => true,
+        [one] if one == "none" => false,
+        _ => names.iter().any(|n| n == check),
+    }
+}
+
+/// The order of the variables in `format_expr_params`: a field after its record.
+fn binding_order(b: &Binding) -> (usize, Option<&str>) {
+    match b {
+        Binding::Datum(d) => (*d, None),
+        Binding::Field(d, name) => (*d, Some(name)),
     }
 }
 

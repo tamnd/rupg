@@ -102,7 +102,7 @@ pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables, ran
 pub use merge::{MatchKind, Merge, MergeClause, MergeClauseDef, MergeCommand, MergeDef};
 pub use perm::{PermInfo, option_on, security_barrier};
 pub use plpgsql::{
-    Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
+    Conflict, Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
     plpgsql_cast, relation_by_names, relation_row_type, row_type_fields,
 };
 pub use poly::resolve as resolve_polymorphic;

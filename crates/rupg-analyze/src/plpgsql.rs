@@ -28,6 +28,18 @@ pub struct Variable {
     pub typmod: i32,
 }
 
+/// `plpgsql.variable_conflict` and `#variable_conflict`: what a name that is a column and a variable names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Conflict {
+    /// `PLPGSQL_RESOLVE_ERROR`: the name is an error.
+    #[default]
+    Error,
+    /// `PLPGSQL_RESOLVE_VARIABLE`: the name is the variable.
+    Variable,
+    /// `PLPGSQL_RESOLVE_COLUMN`: the name is the column.
+    Column,
+}
+
 /// The variables of a PL/pgSQL function that the queries of the function can name.
 pub trait Variables {
     /// `resolve_column_ref`: the variable that the names of a column reference name, such as `x`, `r.f` or `block.x`, or `None` when no variable has the names. `*` is not a name here.
@@ -38,13 +50,17 @@ pub trait Variables {
     fn column(&self, names: &[&str], at: Option<usize>) -> Result<Option<Variable>>;
     /// `plpgsql_param_ref`: the variable of `$n`, which is the argument `n` of the function, or `None`.
     fn param(&self, number: usize) -> Option<Variable>;
+    /// What a name that is a column and a variable names, `resolve_option`.
+    fn conflict(&self) -> Conflict {
+        Conflict::Error
+    }
 }
 
-/// [`crate::analyze`] of a query of a PL/pgSQL function, whose names can be variables of the function. A name that is a column and a variable is an error, as `plpgsql.variable_conflict` with the value `error` gives it.
+/// [`crate::analyze`] of a query of a PL/pgSQL function, whose names can be variables of the function. A name that is a column and a variable names what [`Variables::conflict`] says, and is an error for [`Conflict::Error`].
 ///
 /// # Errors
 ///
-/// The errors of the analysis, and `42702` for a name that is a column and a variable.
+/// The errors of the analysis, and `42702` for a name that is a column and a variable under [`Conflict::Error`].
 pub fn analyze_with(
     stmt: &Node,
     env: &dyn Env,
@@ -236,6 +252,14 @@ impl Analyzer<'_> {
                 _ => None,
             })
             .collect();
+        let conflict = variables.conflict();
+        // `plpgsql_pre_column_ref`: under `use_variable` a variable comes before a column.
+        if conflict == Conflict::Variable
+            && let Some(names) = &names
+            && let Some(variable) = variables.column(names, at)?
+        {
+            return Ok(self.variable_param(variable, at));
+        }
         let core = self.column_ref(c);
         let missing =
             |e: &Error| matches!(e.state(), SqlState::UNDEFINED_COLUMN | SqlState::UNDEFINED_TABLE);
@@ -261,6 +285,8 @@ impl Analyzer<'_> {
             return core;
         };
         match core {
+            // `plpgsql_post_column_ref`: under `use_column` a column comes before a variable.
+            Ok(expr) if conflict != Conflict::Error => Ok(expr),
             Ok(expr) => match variables.column(&names, at)? {
                 Some(_) => Err(Error::new(
                     SqlState::AMBIGUOUS_COLUMN,

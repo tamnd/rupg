@@ -1,7 +1,8 @@
 //! The parser of the body of a function, as the grammar `pl_gram.y` and the compiler `pl_comp.c` read it. The parser reads the tokens of [`Scanner`] by recursive descent and builds the tree of [`crate::ast`]. With the check of the syntax, the parser of SQL reads each expression and each statement of SQL, but the analysis of the queries waits for the first call.
 
-use rupg_analyze::{Env, types};
+use rupg_analyze::{Conflict, Env, types};
 use rupg_common::{Error, Level, Result, SqlState};
+use rupg_func::Session;
 use rupg_sql::nodes::{CURSOR_OPT_NO_SCROLL, CURSOR_OPT_SCROLL, FETCH_ALL, FetchDirection};
 use rupg_sql::token;
 use rupg_types::oid;
@@ -39,6 +40,49 @@ pub(crate) struct Signature {
     pub(crate) event_trigger: bool,
     /// True for a procedure, `fn_prokind` `p`.
     pub(crate) procedure: bool,
+    /// The settings of `plpgsql.*` at the compile.
+    pub(crate) settings: Settings,
+}
+
+/// The settings of `plpgsql.*` that a compile reads, as `pl_handler.c` keeps them in globals.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Settings {
+    /// `plpgsql.variable_conflict`.
+    pub(crate) conflict: Conflict,
+    /// `plpgsql.print_strict_params`.
+    pub(crate) print_strict_params: bool,
+}
+
+impl Settings {
+    /// The settings of the session `session`. A value that the setting does not take counts as the default, as the session keeps `plpgsql.*` as placeholders.
+    pub(crate) fn of(session: &dyn Session) -> Settings {
+        let conflict = match session.setting("plpgsql.variable_conflict") {
+            Some(v) if v.eq_ignore_ascii_case("use_variable") => Conflict::Variable,
+            Some(v) if v.eq_ignore_ascii_case("use_column") => Conflict::Column,
+            _ => Conflict::Error,
+        };
+        let print_strict_params =
+            session.setting("plpgsql.print_strict_params").and_then(|v| parse_bool(&v))
+                == Some(true);
+        Settings { conflict, print_strict_params }
+    }
+}
+
+/// `parse_bool`: `true`, `false`, `yes`, `no`, `on`, `off`, `1` and `0` with no regard to case, and a prefix of a word that is not ambiguous.
+pub(crate) fn parse_bool(text: &str) -> Option<bool> {
+    let lower = text.trim().to_ascii_lowercase();
+    let prefix = |word: &str, least: usize| lower.len() >= least && word.starts_with(&lower);
+    match lower.as_bytes().first()? {
+        b't' if prefix("true", 1) => Some(true),
+        b'f' if prefix("false", 1) => Some(false),
+        b'y' if prefix("yes", 1) => Some(true),
+        b'n' if prefix("no", 1) => Some(false),
+        b'o' if prefix("on", 2) => Some(true),
+        b'o' if prefix("off", 2) => Some(false),
+        b'1' if lower.len() == 1 => Some(true),
+        b'0' if lower.len() == 1 => Some(false),
+        _ => None,
+    }
 }
 
 /// The variables of a trigger function after `new` and `old`, with their types, in the order of `do_compile`.
@@ -76,6 +120,8 @@ pub(crate) fn compile(src: &str, env: &dyn Env, sig: &Signature, check: bool) ->
         out: None,
         procedure: sig.procedure,
         latest: 0,
+        conflict: sig.settings.conflict,
+        print_strict_params: sig.settings.print_strict_params,
     };
     let result = c.function(sig);
     result.map_err(|e| {
@@ -143,6 +189,10 @@ struct Compiler<'a> {
     procedure: bool,
     /// The byte offset of the last line that the compiler counted, as `plpgsql_latest_lineno` keeps it.
     latest: usize,
+    /// `resolve_option`, which `#variable_conflict` can change.
+    conflict: Conflict,
+    /// `print_strict_params`, which `#print_strict_params` can change.
+    print_strict_params: bool,
 }
 
 /// True for a stop token of [`Compiler::read_sql`]: a character, `..`, or a keyword.
@@ -474,6 +524,8 @@ impl Compiler<'_> {
             rettype: self.rettype,
             trigger,
             event_trigger,
+            conflict: self.conflict,
+            print_strict_params: self.print_strict_params,
         })
     }
 
@@ -538,14 +590,26 @@ impl Compiler<'_> {
                 if !v.is_ident() {
                     return Err(self.yyerror(&v, "syntax error"));
                 }
+                self.print_strict_params = match v.word.as_deref().unwrap_or_default() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(Error::internal(format!(
+                            "unrecognized print_strict_params option {other}"
+                        )));
+                    }
+                };
             } else if t.is("variable_conflict") {
                 let v = self.sc.next()?;
-                if v.is("use_variable") || v.is("use_column") {
-                    return Err(not_yet("#variable_conflict with a value other than error"));
-                }
-                if !v.is("error") {
+                self.conflict = if v.is("error") {
+                    Conflict::Error
+                } else if v.is("use_variable") {
+                    Conflict::Variable
+                } else if v.is("use_column") {
+                    Conflict::Column
+                } else {
                     return Err(self.yyerror(&v, "syntax error"));
-                }
+                };
             } else {
                 return Err(self.yyerror(&t, "syntax error"));
             }
