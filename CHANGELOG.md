@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The vector kernels now compare a `date` with a `timestamp`, as `l_shipdate <= date '1998-12-01' - interval '90' day` in TPC-H Q1 and `l_shipdate < date '1994-01-01' + interval '1' year` in Q6. Before, the scan made a `Value` for each row and called the generic comparison (#1571).
 - The vector kernels of `numeric` now take a cast of an integer column to `numeric`, as `ps_availqty` in `ps_supplycost * ps_availqty` of TPC-H Q11. Before, the scan made a `Numeric` for each row of such an expression (#1570).
 - The join of the vectors now uses an array for a join key of one column when the span of the keys is not more than two times the number of lookups, as the `l_orderkey` of the orders of one year. Before, a key with a large span relative to the number of rows in the index used a hash table (#1569).
 - A subquery in `HAVING` that reads no column of the outer query, as in TPC-H Q11, now runs one time before the groups, and the join of the vectors runs the query. Before, the row engine ran the whole query. When the subquery gives an error, the row engine runs the query, so the error comes only when PostgreSQL gives it (#1568).
