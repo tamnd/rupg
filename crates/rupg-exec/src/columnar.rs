@@ -2665,6 +2665,110 @@ impl Results<'_> {
     }
 }
 
+/// A `HAVING` that is one comparison of a `count` or a `sum` of integers or of `numeric` with a constant, as `sum(l_quantity) > 300` in TPC-H Q18. It tests the state of each group, with no `Value` for the result of the call and no [`Eval`].
+struct QuickHaving<'r> {
+    states: QuickStates<'r>,
+    /// The constant as an integer count of `10^-scale` for the scale of the result of the call, rounded down, and true when the constant has no rest.
+    floor: i128,
+    exact: bool,
+    /// True when the constant is the first argument of the comparison.
+    flip: bool,
+    /// The test of the order of the first argument against the second argument.
+    test: fn(std::cmp::Ordering) -> bool,
+}
+
+/// The states of the groups of the call of a [`QuickHaving`].
+enum QuickStates<'r> {
+    Count(&'r [i64]),
+    /// The sums of a call whose result is a `bigint`, which gives an error when the sum does not fit.
+    Int8(&'r [(i64, i128)]),
+    /// The sums of a call whose result is a `numeric`.
+    Numeric(&'r [(i64, i128)]),
+}
+
+impl<'r> QuickHaving<'r> {
+    /// The quick test of `having`, or `None` when `having` is not a comparison of one call of `results` with a constant.
+    fn of(having: &Expr, results: &'r Results<'_>) -> Option<Self> {
+        let ExprKind::Func(func) = &having.kind else { return None };
+        let [a, b] = func.args.as_slice() else { return None };
+        let (agg, constant, flip) = match (&a.kind, &b.kind) {
+            (ExprKind::Agg(agg), ExprKind::Const(c)) => (agg, c, false),
+            (ExprKind::Const(c), ExprKind::Agg(agg)) => (agg, c, true),
+            _ => return None,
+        };
+        let key = std::ptr::from_ref(&**agg);
+        let call = results.calls.iter().find(|c| c.key == key)?;
+        let name = src(func.oid);
+        let (head, op) = name.split_at_checked(name.len().checked_sub(2)?)?;
+        let test: fn(std::cmp::Ordering) -> bool = match op {
+            "eq" => std::cmp::Ordering::is_eq,
+            "ne" => std::cmp::Ordering::is_ne,
+            "lt" => std::cmp::Ordering::is_lt,
+            "le" => std::cmp::Ordering::is_le,
+            "gt" => std::cmp::Ordering::is_gt,
+            "ge" => std::cmp::Ordering::is_ge,
+            _ => return None,
+        };
+        let (states, floor, exact) = match (&call.method, &call.states, constant) {
+            (Method::Count | Method::CountArg | Method::Distinct, States::Count(states), _) => {
+                let c = matches!(constant, Value::Int2(_) | Value::Int4(_) | Value::Int8(_))
+                    .then(|| int_of(constant))
+                    .flatten()?;
+                int_compare(name).filter(|_| head.starts_with("int"))?;
+                (QuickStates::Count(states), i128::from(c), true)
+            }
+            (
+                Method::SumInt,
+                States::Sum(states),
+                Value::Int2(_) | Value::Int4(_) | Value::Int8(_),
+            ) => {
+                int_compare(name).filter(|_| head.starts_with("int"))?;
+                (QuickStates::Int8(states), i128::from(int_of(constant)?), true)
+            }
+            (
+                Method::Int128 { avg: false } | Method::Dec { avg: false, .. },
+                States::Sum(states),
+                Value::Numeric(c),
+            ) if head == "numeric_" => {
+                let scale = match call.method {
+                    Method::Dec { scale, .. } => u32::from(scale),
+                    _ => 0,
+                };
+                let scaled = c.to_decimal(scale)?;
+                let (floor, exact) = match Numeric::from_decimal(scaled, scale).compare(c) {
+                    std::cmp::Ordering::Equal => (scaled, true),
+                    std::cmp::Ordering::Greater => (scaled - 1, false),
+                    std::cmp::Ordering::Less => (scaled, false),
+                };
+                (QuickStates::Numeric(states), floor, exact)
+            }
+            _ => return None,
+        };
+        Some(QuickHaving { states, floor, exact, flip, test })
+    }
+
+    /// The result of the test for the group `g`: false for a null result of the call, or `None` when the row engine must evaluate `HAVING`, for a sum that does not fit in a `bigint`.
+    fn test(&self, g: usize) -> Option<bool> {
+        let v = match self.states {
+            QuickStates::Count(counts) => i128::from(counts[g]),
+            QuickStates::Int8(sums) => match sums[g] {
+                (0, _) => return Some(false),
+                (_, sum) => i128::from(i64::try_from(sum).ok()?),
+            },
+            QuickStates::Numeric(sums) => match sums[g] {
+                (0, _) => return Some(false),
+                (_, sum) => sum,
+            },
+        };
+        let order = match (self.exact, v <= self.floor) {
+            (true, _) => v.cmp(&self.floor),
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => std::cmp::Ordering::Greater,
+        };
+        Some((self.test)(if self.flip { order.reverse() } else { order }))
+    }
+}
+
 /// The method of the scan for an aggregate call.
 fn method<'q>(agg: &'q Aggref, expr: &'q Expr) -> Result<Option<Method<'q>>> {
     let name = if agg.oid < rupg_catalog::FIRST_NORMAL_OID {
@@ -5173,11 +5277,18 @@ fn grouped(
         let mut eval = Eval::new(params, session, &empty, cache, &[]);
         eval.tuple = &[scan::NONE];
         let mut passed = Vec::new();
+        let quick = QuickHaving::of(having, &results);
         for (n, g) in order.enumerate() {
             if passed.len() >= needed {
                 break;
             }
             crate::interrupt(session, n)?;
+            if let Some(pass) = quick.as_ref().and_then(|q| q.test(g)) {
+                if pass {
+                    passed.push(g);
+                }
+                continue;
+            }
             eval.group = Group { aggs: results.group(g, Some(&having_read))?, ..Group::default() };
             if eval.eval(having)? == Value::Bool(true) {
                 passed.push(g);
