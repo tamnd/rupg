@@ -11972,6 +11972,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/xidage.test")));
     }
 
+    /// The settings of PL/pgSQL that a compile reads and the checks that a call makes: `print_strict_params` gives the values of the variables of a query, or of `USING`, as the detail of the errors of `INTO STRICT`; `variable_conflict` and `#variable_conflict` choose a variable or a column for a name that is both; `extra_warnings` and `extra_errors` make `too_many_rows` and `strict_multi_assignment` warnings or errors; and the `anycompatible` arguments of a call give the types of its `OUT` arguments. The messages are those of PostgreSQL 19.
+    #[test]
+    fn plpgsql_checks() {
+        big_stack(|| script(include_str!("connection/plpgsql_checks.test")));
+    }
+
     /// `SET` of `CREATE FUNCTION` and `ALTER FUNCTION`: `proconfig` keeps each setting, `pg_get_functiondef` shows it, and a call runs with the settings, which go back at the end of the call, other than one that a `SET` in the call changed. `connection/fnset.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fnset() {

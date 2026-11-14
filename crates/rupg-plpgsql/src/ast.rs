@@ -28,6 +28,10 @@ pub(crate) struct Function {
     pub(crate) trigger: Option<usize>,
     /// The variable `tg_event` of an event trigger function, which `tg_tag` follows.
     pub(crate) event_trigger: Option<usize>,
+    /// `resolve_option`: what a name that is a column and a variable names in a query.
+    pub(crate) conflict: rupg_analyze::Conflict,
+    /// `print_strict_params`: the error of `INTO STRICT` shows the values of the parameters of the query.
+    pub(crate) print_strict_params: bool,
 }
 
 /// A variable, `PLpgSQL_datum`.

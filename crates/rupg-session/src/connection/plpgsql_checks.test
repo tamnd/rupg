@@ -1,0 +1,122 @@
+!details
+> CREATE TABLE pc (a int, b text);
+CREATE TABLE
+> INSERT INTO pc VALUES (1, 'x'), (2, 'it''s');
+INSERT 0 2
+> CREATE FUNCTION pc_strict(p1 int, p2 text) RETURNS int LANGUAGE plpgsql AS $$
+>> #print_strict_params on
+>> DECLARE r int; BEGIN SELECT a INTO STRICT r FROM pc WHERE a > p1 AND b <> p2; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_strict(5, 'it''s');
+fields pc_strict:23:4:-1
+ERROR P0002 query returned no rows (PL/pgSQL function pc_strict(integer,text) line 3 at SQL statement)
+DETAIL parameters: p1 = '5', p2 = 'it''s'
+> SELECT pc_strict(0, NULL);
+fields pc_strict:23:4:-1
+ERROR P0002 query returned no rows (PL/pgSQL function pc_strict(integer,text) line 3 at SQL statement)
+DETAIL parameters: p1 = '0', p2 = NULL
+> SELECT pc_strict(0, 'zz');
+fields pc_strict:23:4:-1
+ERROR P0003 query returned more than one row (PL/pgSQL function pc_strict(integer,text) line 3 at SQL statement)
+DETAIL parameters: p1 = '0', p2 = 'zz'
+HINT Make sure the query returns a single row, or use LIMIT 1.
+> CREATE FUNCTION pc_dyn(n int) RETURNS int LANGUAGE plpgsql AS $$
+>> #print_strict_params on
+>> DECLARE r int; BEGIN EXECUTE 'SELECT a FROM pc WHERE a > $1' INTO STRICT r USING n; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_dyn(5);
+fields pc_dyn:23:4:-1
+ERROR P0002 query returned no rows (PL/pgSQL function pc_dyn(integer) line 3 at EXECUTE)
+DETAIL parameters: $1 = '5'
+> SELECT pc_dyn(0);
+fields pc_dyn:23:4:-1
+ERROR P0003 query returned more than one row (PL/pgSQL function pc_dyn(integer) line 3 at EXECUTE)
+DETAIL parameters: $1 = '0'
+> SET plpgsql.print_strict_params = on;
+SET
+> CREATE FUNCTION pc_guc() RETURNS int LANGUAGE plpgsql AS $$ DECLARE r int; k int := 9; BEGIN SELECT a INTO STRICT r FROM pc WHERE a = k; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_guc();
+fields pc_guc:23:4:-1
+ERROR P0002 query returned no rows (PL/pgSQL function pc_guc() line 1 at SQL statement)
+DETAIL parameters: k = '9'
+> RESET plpgsql.print_strict_params;
+RESET
+> CREATE FUNCTION pc_conflict(a int) RETURNS int LANGUAGE plpgsql AS $$
+>> #variable_conflict use_variable
+>> DECLARE r int; BEGIN SELECT pc.a INTO r FROM pc WHERE pc.a = a; SELECT count(*) + r INTO r FROM pc WHERE a = a; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_conflict(2);
+fields pc_conflict:23:4:-1
+row 4
+SELECT 1
+> CREATE FUNCTION pc_column(a int) RETURNS int LANGUAGE plpgsql AS $$
+>> #variable_conflict use_column
+>> DECLARE r int; BEGIN SELECT count(*) INTO r FROM pc WHERE a = a + 0; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_column(2);
+fields pc_column:23:4:-1
+row 2
+SELECT 1
+> SET plpgsql.variable_conflict = use_variable;
+SET
+> CREATE FUNCTION pc_guc_conflict(a int) RETURNS int LANGUAGE plpgsql AS $$ DECLARE r int; BEGIN SELECT count(*) INTO r FROM pc WHERE a = 1; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_guc_conflict(1), pc_guc_conflict(5);
+fields pc_guc_conflict:23:4:-1,pc_guc_conflict:23:4:-1
+row 2,0
+SELECT 1
+> RESET plpgsql.variable_conflict;
+RESET
+> CREATE FUNCTION pc_ambiguous(a int) RETURNS int LANGUAGE plpgsql AS $$ DECLARE r int; BEGIN SELECT count(*) INTO r FROM pc WHERE a = 1; RETURN r; END $$;
+CREATE FUNCTION
+> SELECT pc_ambiguous(1);
+fields pc_ambiguous:23:4:-1
+ERROR 42702 column reference "a" is ambiguous (PL/pgSQL function pc_ambiguous(integer) line 1 at SQL statement)
+DETAIL It could refer to either a PL/pgSQL variable or a table column.
+QUERY SELECT count(*)        FROM pc WHERE a = 1 at 38
+> SET plpgsql.extra_warnings = 'too_many_rows';
+SET
+> DO $$ DECLARE x int; BEGIN SELECT a INTO x FROM pc ORDER BY a; RAISE NOTICE 'x = %', x; END $$;
+WARNING P0003 query returned more than one row (PL/pgSQL function inline_code_block line 1 at SQL statement)
+HINT Make sure the query returns a single row, or use LIMIT 1.
+NOTICE 00000 x = 1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SET plpgsql.extra_errors = 'all';
+SET
+> DO $$ DECLARE x int; BEGIN SELECT a INTO x FROM pc; END $$;
+ERROR P0003 query returned more than one row (PL/pgSQL function inline_code_block line 1 at SQL statement)
+HINT Make sure the query returns a single row, or use LIMIT 1.
+> SET plpgsql.extra_errors = 'none';
+SET
+> SET plpgsql.extra_warnings = 'shadowed_variables, strict_multi_assignment';
+SET
+> DO $$ DECLARE x int; y int; BEGIN SELECT 1 INTO x, y; SELECT 1, 2 INTO x, y; SELECT 1, 2, 3 INTO x, y; END $$;
+WARNING 42804 number of source and target fields in assignment does not match (PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL strict_multi_assignment check of extra_warnings is active.
+HINT Make sure the query returns the exact list of columns.
+WARNING 42804 number of source and target fields in assignment does not match (PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL strict_multi_assignment check of extra_warnings is active.
+HINT Make sure the query returns the exact list of columns.
+DO
+> DO $$ DECLARE r pc; BEGIN SELECT 1 INTO r; SELECT * INTO r FROM pc WHERE false; SELECT * INTO r FROM pc LIMIT 1; END $$;
+WARNING 42804 number of source and target fields in assignment does not match (PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL strict_multi_assignment check of extra_warnings is active.
+HINT Make sure the query returns the exact list of columns.
+DO
+> SET plpgsql.extra_errors = 'strict_multi_assignment';
+SET
+> DO $$ DECLARE x int; BEGIN SELECT 1, 2 INTO x; END $$;
+ERROR 42804 number of source and target fields in assignment does not match (PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL strict_multi_assignment check of extra_errors is active.
+HINT Make sure the query returns the exact list of columns.
+> RESET plpgsql.extra_errors;
+RESET
+> RESET plpgsql.extra_warnings;
+RESET
+> CREATE FUNCTION pc_poly(x anycompatible, y anycompatible, OUT f1 anycompatible, OUT f2 anycompatiblearray) LANGUAGE plpgsql AS $$ BEGIN f1 := x; f2 := ARRAY[x, y]; END $$;
+CREATE FUNCTION
+> SELECT pc_poly(1, 2.5);
+fields pc_poly:2249:-1:-1
+row (1,"{1,2.5}")
+SELECT 1

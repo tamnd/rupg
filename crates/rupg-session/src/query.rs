@@ -2354,7 +2354,7 @@ impl Env for Reader<'_> {
     }
 
     fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
-        rupg_plpgsql::validate(self, function)
+        rupg_plpgsql::validate(self, self, function)
     }
 
     fn function_setting(&self, set: &VariableSetStmt) -> Result<(String, Option<String>)> {
