@@ -937,6 +937,7 @@ fn dec_scale(expr: &Expr) -> Option<u8> {
         }
         ExprKind::Const(Value::Numeric(n)) => u8::try_from(n.dscale()).ok()?,
         ExprKind::Func(func) => match (src(func.oid), func.args.as_slice()) {
+            ("int2_numeric" | "int4_numeric" | "int8_numeric", [_]) => 0,
             ("numeric_add" | "numeric_sub", [a, b]) => dec_scale(a)?.max(dec_scale(b)?),
             ("numeric_mul", [a, b]) => dec_scale(a)?.checked_add(dec_scale(b)?)?,
             _ => return None,
@@ -1806,7 +1807,7 @@ impl<'q> Exec<'q> {
         Ok(Some(Col { data, nulls, ty: expr.ty }))
     }
 
-    /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression.
+    /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression. A cast of an integer vector to `numeric` gives the same integers with the scale 0, as `ps_availqty` in `ps_supplycost * ps_availqty`.
     fn decimal(
         &mut self,
         src: &str,
@@ -1814,6 +1815,16 @@ impl<'q> Exec<'q> {
         batch: &mut Batch,
         sel: &[u32],
     ) -> Result<Option<Col>> {
+        if matches!(src, "int2_numeric" | "int4_numeric" | "int8_numeric") {
+            let [a] = args else { return Ok(None) };
+            let col = self.eval(a, batch, sel)?;
+            return Ok(match col.data {
+                Data::Int(v) => {
+                    Some(Col { data: Data::Dec(v, 0), nulls: col.nulls, ty: oid::NUMERIC })
+                }
+                _ => None,
+            });
+        }
         let compare: Option<fn(i128, i128) -> bool> = match src {
             "numeric_eq" => Some(|a, b| a == b),
             "numeric_ne" => Some(|a, b| a != b),
