@@ -4322,6 +4322,7 @@ fn grouped(
     let mut bail = false;
     let mut words: Vec<u64> = Vec::with_capacity(VECTOR * (keys.len() + 1));
     let mut row_hashes: Vec<u64> = Vec::with_capacity(VECTOR);
+    let mut direct = Direct::new(keys.len());
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let params = scan.exec.params;
     let session = scan.exec.session;
@@ -4603,76 +4604,90 @@ fn grouped(
             } else {
                 let cols =
                     keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
-                let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
                 new_rows.clear();
-                // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
-                let width = keys.len() + 1;
-                words.clear();
-                for i in 0..sel.len() {
-                    let mut mask = 0_u64;
-                    for (k, col) in cols.iter().enumerate() {
-                        if col.null(i) {
-                            mask |= 1 << (k % 64);
-                            words.push(0);
-                        } else {
-                            let Some(w) = col.word(i) else {
-                                bail = true;
-                                return Ok(false);
-                            };
-                            words.push(w);
-                        }
-                    }
-                    words.push(mask);
-                }
-                row_hashes.clear();
-                row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
-                for (i, &row_at) in sel.iter().enumerate() {
-                    if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
-                        map.prefetch(ahead);
-                    }
-                    let word = &words[i * width..(i + 1) * width];
-                    let (id, new) = match last_id {
-                        Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
-                        _ => {
-                            let next = u32::try_from(groups)
-                                .map_err(|_| Error::internal("too many groups"))?;
-                            let found = map.id(word, row_hashes[i], next);
-                            last_word.copy_from_slice(word);
-                            last_id = Some(found.0);
-                            found
-                        }
-                    };
-                    trailing = !new;
-                    if new {
-                        groups += 1;
-                        new_rows.push(row_at);
-                        // The keys of the groups go into the words with no hash, and also with a hash for `key_top`, which reads them.
-                        let mut keep = hashing.is_none() || key_top.is_some();
-                        if let Some(places) = &hashing
-                            && hash_error.is_none()
-                        {
-                            match key_hash(places, &cols, i, &exec.dicts) {
-                                Ok(h) => hashes.push(h),
-                                // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
-                                Err(_) if hashes.is_empty() => {
-                                    hashing = None;
-                                    keep = true;
-                                }
-                                Err(error) => hash_error = Some(error),
+                // Keys of a few dictionary codes find their groups in an array of the codes, with no words and no probe of the map, after the first rows of the groups.
+                let codes = direct.as_mut().and_then(|d| d.codes(&cols));
+                if let (Some(direct), Some(codes)) = (&direct, &codes)
+                    && !sel.is_empty()
+                    && direct.find(codes, sel.len(), &mut ids)
+                {
+                    trailing = true;
+                } else {
+                    let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
+                    // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
+                    let width = keys.len() + 1;
+                    words.clear();
+                    for i in 0..sel.len() {
+                        let mut mask = 0_u64;
+                        for (k, col) in cols.iter().enumerate() {
+                            if col.null(i) {
+                                mask |= 1 << (k % 64);
+                                words.push(0);
+                            } else {
+                                let Some(w) = col.word(i) else {
+                                    bail = true;
+                                    return Ok(false);
+                                };
+                                words.push(w);
                             }
                         }
-                        if keep {
-                            key_words.keep(
-                                word,
-                                batch_shapes.as_deref(),
-                                &cols,
-                                i,
-                                &exec.dicts,
-                                &mut key_values,
-                            );
-                        }
+                        words.push(mask);
                     }
-                    ids.push(id);
+                    row_hashes.clear();
+                    row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
+                    for (i, &row_at) in sel.iter().enumerate() {
+                        if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
+                            map.prefetch(ahead);
+                        }
+                        let word = &words[i * width..(i + 1) * width];
+                        let (id, new) = match last_id {
+                            Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => {
+                                (id, false)
+                            }
+                            _ => {
+                                let next = u32::try_from(groups)
+                                    .map_err(|_| Error::internal("too many groups"))?;
+                                let found = map.id(word, row_hashes[i], next);
+                                last_word.copy_from_slice(word);
+                                last_id = Some(found.0);
+                                found
+                            }
+                        };
+                        trailing = !new;
+                        if new {
+                            groups += 1;
+                            new_rows.push(row_at);
+                            // The keys of the groups go into the words with no hash, and also with a hash for `key_top`, which reads them.
+                            let mut keep = hashing.is_none() || key_top.is_some();
+                            if let Some(places) = &hashing
+                                && hash_error.is_none()
+                            {
+                                match key_hash(places, &cols, i, &exec.dicts) {
+                                    Ok(h) => hashes.push(h),
+                                    // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                                    Err(_) if hashes.is_empty() => {
+                                        hashing = None;
+                                        keep = true;
+                                    }
+                                    Err(error) => hash_error = Some(error),
+                                }
+                            }
+                            if keep {
+                                key_words.keep(
+                                    word,
+                                    batch_shapes.as_deref(),
+                                    &cols,
+                                    i,
+                                    &exec.dicts,
+                                    &mut key_values,
+                                );
+                            }
+                        }
+                        ids.push(id);
+                    }
+                    if let (Some(direct), Some(codes)) = (&mut direct, &codes) {
+                        direct.learn(codes, &ids);
+                    }
                 }
                 // The rows of the table up to the end of this batch, also the rows that the conditions or the zones took out, so that the rate of new groups is a rate for each row of the table and not for each row that passes.
                 seen = batch.segment * ROWS + batch.vector * VECTOR + batch.rows;
@@ -6222,6 +6237,82 @@ impl Shape {
             Shape::Code(d) => dicts[d].value(word as u32),
             Shape::Dec(scale) => {
                 Value::Numeric(Numeric::from_decimal(i128::from(word as i64), u32::from(scale)))
+            }
+        }
+    }
+}
+
+/// The groups of the keys of the rows by the dictionary codes of the keys, for at most three keys of small codes, as `l_returnflag` and `l_linestatus` in TPC-H Q1. The codes of a dictionary do not change during a scan, and they are the words of the keys in the map, so a slot of the array keeps the group that the map gave for its codes.
+struct Direct {
+    /// The dictionaries of the keys of the slots.
+    dicts: Vec<usize>,
+    /// The bits of the code of each key in a slot.
+    bits: u32,
+    /// The group of each slot, or `u32::MAX` for no group yet.
+    ids: Vec<u32>,
+}
+
+impl Direct {
+    const SLOT_BITS: u32 = 12;
+
+    fn new(keys: usize) -> Option<Direct> {
+        let keys = u32::try_from(keys).ok().filter(|k| (1..=3).contains(k))?;
+        Some(Direct { dicts: Vec::new(), bits: Direct::SLOT_BITS / keys, ids: Vec::new() })
+    }
+
+    /// The codes of the keys of a batch, or `None` when a key has no codes or has a vector of nulls. When the dictionaries change, the slots are empty again.
+    fn codes<'c>(&mut self, cols: &'c [Col]) -> Option<Vec<&'c [u32]>> {
+        let mut codes = Vec::with_capacity(cols.len());
+        let mut dicts = Vec::with_capacity(cols.len());
+        for col in cols {
+            let Data::Code(v, d) = &col.data else { return None };
+            if col.nulls.is_some() {
+                return None;
+            }
+            codes.push(v.as_slice());
+            dicts.push(*d);
+        }
+        if dicts != self.dicts || self.ids.is_empty() {
+            self.ids.clear();
+            self.ids.resize(1 << Direct::SLOT_BITS, u32::MAX);
+            self.dicts = dicts;
+        }
+        Some(codes)
+    }
+
+    /// The slot of the codes of a row, or `None` for a code that does not fit in its bits.
+    #[inline]
+    fn slot(&self, codes: &[&[u32]], i: usize) -> Option<usize> {
+        let mut slot = 0_usize;
+        for code in codes {
+            let code = code[i];
+            if code >> self.bits != 0 {
+                return None;
+            }
+            slot = (slot << self.bits) | code as usize;
+        }
+        Some(slot)
+    }
+
+    /// The groups of the rows of a batch in `ids`, or false with no groups when a row has no group in a slot.
+    fn find(&self, codes: &[&[u32]], rows: usize, ids: &mut Vec<u32>) -> bool {
+        for i in 0..rows {
+            match self.slot(codes, i).map(|slot| self.ids[slot]) {
+                Some(id) if id != u32::MAX => ids.push(id),
+                _ => {
+                    ids.clear();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Keeps the groups that the map gave for the rows of a batch.
+    fn learn(&mut self, codes: &[&[u32]], ids: &[u32]) {
+        for (i, &id) in ids.iter().enumerate() {
+            if let Some(slot) = self.slot(codes, i) {
+                self.ids[slot] = id;
             }
         }
     }
