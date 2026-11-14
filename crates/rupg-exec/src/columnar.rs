@@ -399,23 +399,42 @@ fn dense_math(
     my: i64,
     op: impl Fn(i64, i64) -> (i64, bool),
 ) -> Option<Vec<i64>> {
-    let one = |a: i64, b: i64, bad: &mut bool| {
-        let (a, o1) = a.overflowing_mul(mx);
-        let (b, o2) = b.overflowing_mul(my);
-        let (v, o3) = op(a, b);
-        *bad |= o1 | o2 | o3;
-        v
-    };
-    let mut bad = false;
-    let out: Vec<i64> = match (x, y) {
-        (Dense::Vector(a), Dense::Vector(b)) => {
-            a.iter().zip(b).map(|(&a, &b)| one(a, b, &mut bad)).collect()
+    // A constant takes its scale once, so a vector of the scale of the result needs no product for its scale, as each side of `*` and `l_discount` in `1 - l_discount`.
+    fn scaled(side: Dense<'_>, m: i64) -> Option<(Dense<'_>, i64)> {
+        match side {
+            Dense::Const(c) => c.checked_mul(m).map(|c| (Dense::Const(c), 1)),
+            vector @ Dense::Vector(_) => Some((vector, m)),
         }
-        (Dense::Vector(a), Dense::Const(b)) => a.iter().map(|&a| one(a, b, &mut bad)).collect(),
-        (Dense::Const(a), Dense::Vector(b)) => b.iter().map(|&b| one(a, b, &mut bad)).collect(),
-        (Dense::Const(_), Dense::Const(_)) => return None,
-    };
+    }
+    let ((x, mx), (y, my)) = (scaled(x, mx)?, scaled(y, my)?);
+    let mut bad = false;
+    let out = if mx == 1 && my == 1 {
+        dense_each(x, y, |a, b| {
+            let (v, o) = op(a, b);
+            bad |= o;
+            v
+        })
+    } else {
+        dense_each(x, y, |a, b| {
+            let (a, o1) = a.overflowing_mul(mx);
+            let (b, o2) = b.overflowing_mul(my);
+            let (v, o3) = op(a, b);
+            bad |= o1 | o2 | o3;
+            v
+        })
+    }?;
     (!bad).then_some(out)
+}
+
+/// The values of `f` for each row of two sides with no null, or `None` for two constants.
+#[inline]
+fn dense_each(x: Dense<'_>, y: Dense<'_>, mut f: impl FnMut(i64, i64) -> i64) -> Option<Vec<i64>> {
+    Some(match (x, y) {
+        (Dense::Vector(a), Dense::Vector(b)) => a.iter().zip(b).map(|(&a, &b)| f(a, b)).collect(),
+        (Dense::Vector(a), Dense::Const(b)) => a.iter().map(|&a| f(a, b)).collect(),
+        (Dense::Const(a), Dense::Vector(b)) => b.iter().map(|&b| f(a, b)).collect(),
+        (Dense::Const(_), Dense::Const(_)) => return None,
+    })
 }
 
 /// A comparison `cmp` of two sides with no null, with the scales `mx` and `my`, as 0 and 1. The scaled values are `i64` when the scales fit, so most comparisons have no `i128`. `None` for two constants, for a vector with a scale that is not 1 and for a scale that does not fit, and then the caller compares with `i128`.
@@ -1666,6 +1685,18 @@ impl<'q> Exec<'q> {
             let first = src.starts_with("date_");
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
+            // Two sides with no null give the booleans with no `Option` for each row.
+            if let (Some(x), Some(y)) = (Dense::of(a, sel.len()), Dense::of(b, sel.len()))
+                && let Some(out) = dense_each(x, y, |x, y| {
+                    i64::from(if first {
+                        compare(date_micros(x), y)
+                    } else {
+                        compare(x, date_micros(y))
+                    })
+                })
+            {
+                return Ok(Some(Col { data: Data::Int(out), nulls: None, ty: oid::BOOL }));
+            }
             let out: Vec<Option<bool>> = if first {
                 (0..sel.len()).map(|i| Some(compare(date_micros(a.get(i)?), b.get(i)?))).collect()
             } else {
@@ -4878,6 +4909,14 @@ fn grouped(
                                 let state = &mut states[0];
                                 state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
                                 state.1 += v.iter().map(|&x| i128::from(x)).sum::<i128>();
+                            }
+                            // A vector with no null needs no test of a null for each row.
+                            Ints::Vector(v, None) => {
+                                for (&v, &id) in v.iter().zip(ids.iter()) {
+                                    let state = &mut states[id as usize];
+                                    state.0 += 1;
+                                    state.1 += i128::from(v);
+                                }
                             }
                             _ => {
                                 for (i, &id) in ids.iter().enumerate() {
