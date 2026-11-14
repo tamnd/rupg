@@ -2226,6 +2226,59 @@ fn data_len(data: &DecodedData) -> usize {
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
 ///
 /// With `links`, an `EXISTS`, a subquery of one value and an `IN` are supported, and the scan gets their values from the run once of [`links_of`]. The columns of the query in a subquery are then columns of the query outside it.
+/// True for a subquery of `EXISTS` or of one value that reads no column and no aggregate of a query outside it and calls no volatile function, so that it gives the same rows each time, as an `InitPlan` of PostgreSQL.
+pub(super) fn once(sub: &rupg_analyze::SubLink) -> bool {
+    matches!(sub.kind, SubLinkKind::Expr | SubLinkKind::Exists)
+        && !sub.query.all_exprs(0).iter().any(|(e, depth)| {
+            crate::volatile(e)
+                || e.find(*depth, &mut |e, depth| match &e.kind {
+                    ExprKind::Var(var) if var.levels_up > depth => Some(()),
+                    ExprKind::Agg(agg) if agg.levels_up > depth => Some(()),
+                    _ => None,
+                })
+                .is_some()
+        })
+}
+
+/// A copy of `having` with the value of each subquery that [`once`] tells in the place of the subquery, or `None` when a subquery gives an error. PostgreSQL runs such a subquery as an `InitPlan` when the first group tests `HAVING`, so after an error the row engine runs the query, which runs the subquery only then. The subqueries run in `having` and not in the copy, as the cache keeps their rows by the address of the subquery.
+pub(super) fn having_once(
+    having: &Expr,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<Expr> {
+    let mut subs = Vec::new();
+    having.find(0, &mut |e, depth| {
+        if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+            subs.push(e);
+        }
+        None::<()>
+    });
+    let mut copy = having.clone();
+    if subs.is_empty() {
+        return Some(copy);
+    }
+    let empty = scan::Tables::default();
+    let mut eval = Eval::new(params, session, &empty, cache, &[]);
+    let mut values = Vec::with_capacity(subs.len());
+    for sub in subs {
+        values.push(eval.eval(sub).ok()?);
+    }
+    let mut values = values.into_iter();
+    let mut missing = false;
+    copy.each_mut(0, &mut |e, depth| {
+        if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+            match values.next() {
+                Some(value) => e.kind = ExprKind::Const(value),
+                None => missing = true,
+            }
+            return true;
+        }
+        false
+    });
+    (!missing && values.next().is_none()).then_some(copy)
+}
+
 fn unsupported(expr: &Expr, links: bool) -> bool {
     // The columns of the subquery in the test of an `IN`, which [`in_set`] reads.
     let mut tested: Vec<*const Expr> = Vec::new();
