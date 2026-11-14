@@ -19,8 +19,8 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, kind_of,
-    numeric_kind, plain, unsupported,
+    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, having_once,
+    kind_of, numeric_kind, once, plain, unsupported,
 };
 use crate::{Cache, reduce, scan, sort};
 
@@ -138,7 +138,15 @@ fn finish(
     residual: Vec<Expr>,
     mut links: Vec<Ran>,
 ) -> Result<Option<Vec<Vec<Value>>>> {
-    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having);
+    // A subquery of `HAVING` that runs one time, as the `InitPlan` of TPC-H Q11, gives a constant.
+    let having = match &query.having {
+        Some(having) => match having_once(having, params, session, cache) {
+            Some(having) => Some(having),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+    let exprs = query.targets.iter().map(|t| &t.expr).chain(&having);
     if exprs.chain(&query.offset).chain(&query.limit).any(|e| unsupported(e, false))
         || residual.iter().any(|e| unsupported(e, true))
     {
@@ -147,7 +155,7 @@ fn finish(
     // The columns of each table that the query reads after the join.
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
-    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having).chain(&residual);
+    let exprs = query.targets.iter().map(|t| &t.expr).chain(&having).chain(&residual);
     for expr in exprs {
         // A column of a table in a subquery is a column of the query just outside the subquery.
         expr.find(0, &mut |e, depth| {
@@ -207,6 +215,7 @@ fn finish(
         }
     }
     let mut virt = query.clone();
+    virt.having = having;
     let mut root = query.relations[base].clone();
     root.columns = columns;
     virt.relations = vec![root];
@@ -552,14 +561,23 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
     if let [FromItem::Join(join)] = query.from.as_slice() {
         conds.extend(&join.on);
     }
-    let exprs = query
-        .targets
-        .iter()
-        .map(|t| &t.expr)
-        .chain(conds)
-        .chain(&query.having)
-        .chain(&query.offset)
-        .chain(&query.limit);
+    // `HAVING` can have a subquery that runs one time, which [`finish`] runs before the groups.
+    if let Some(having) = &query.having
+        && having
+            .find(0, &mut |e, depth| match &e.kind {
+                ExprKind::SubLink(sub) if depth == 0 => (!once(sub)).then_some(()),
+                ExprKind::Var(var) if depth == 0 && (var.levels_up != 0 || var.attnum <= 0) => {
+                    Some(())
+                }
+                ExprKind::Agg(agg) if depth == 0 && agg.levels_up != 0 => Some(()),
+                _ => None,
+            })
+            .is_some()
+    {
+        return false;
+    }
+    let exprs =
+        query.targets.iter().map(|t| &t.expr).chain(conds).chain(&query.offset).chain(&query.limit);
     for expr in exprs {
         let other = expr.find(0, &mut |e, depth| match &e.kind {
             ExprKind::SubLink(_) => Some(()),
