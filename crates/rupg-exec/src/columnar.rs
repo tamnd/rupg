@@ -15,7 +15,10 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
 use rupg_summary::zone::{Test, Verdict, Zone, has_code};
-use rupg_types::{DateUnit, Numeric, POSTGRES_EPOCH_JDATE, Value, date2j, j2date, oid};
+use rupg_types::{
+    DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateUnit, Numeric, POSTGRES_EPOCH_JDATE,
+    TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, USECS_PER_DAY, Value, date2j, j2date, oid,
+};
 
 use crate::agg;
 use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
@@ -1014,6 +1017,37 @@ fn int_compare(src: &str) -> Option<fn(i64, i64) -> bool> {
     })
 }
 
+/// The comparison of a `date` and a `timestamp`, as `l_shipdate <= date '1998-12-01' - interval '90' day` in TPC-H Q1. The name of the function tells if the `date` is the first argument.
+fn date_timestamp_compare(src: &str) -> Option<fn(i64, i64) -> bool> {
+    let op = match src.strip_prefix("date_").and_then(|s| s.strip_suffix("_timestamp")) {
+        Some(op) => op,
+        None => src.strip_prefix("timestamp_")?.strip_suffix("_date")?,
+    };
+    let compare: fn(i64, i64) -> bool = match op {
+        "eq" => |a, b| a == b,
+        "ne" => |a, b| a != b,
+        "lt" => |a, b| a < b,
+        "le" => |a, b| a <= b,
+        "gt" => |a, b| a > b,
+        "ge" => |a, b| a >= b,
+        _ => return None,
+    };
+    Some(compare)
+}
+
+/// The microseconds of a `date` for a comparison with a `timestamp`, in the order of `date_cmp_timestamp`. The infinities stay infinite. A date after the range of `timestamp` comes after each finite timestamp and before infinity.
+fn date_micros(date: i64) -> i64 {
+    match i32::try_from(date) {
+        Ok(DATE_INFINITY) => TIMESTAMP_INFINITY,
+        Ok(DATE_NEGATIVE_INFINITY) => TIMESTAMP_NEGATIVE_INFINITY,
+        _ => date.checked_mul(USECS_PER_DAY).unwrap_or(if date > 0 {
+            TIMESTAMP_INFINITY - 1
+        } else {
+            TIMESTAMP_NEGATIVE_INFINITY + 1
+        }),
+    }
+}
+
 /// The arithmetic of a function of integers.
 fn int_arith(src: &str) -> Option<fn(i64, i64) -> Option<i64>> {
     let head = ["int2", "int4", "int8", "int24", "int42", "int28", "int82", "int48", "int84"]
@@ -1627,6 +1661,17 @@ impl<'q> Exec<'q> {
                 return Ok(Some(Col::bools(&out)));
             }
             return Ok(None);
+        }
+        if let (Some(compare), [a, b]) = (date_timestamp_compare(src), args) {
+            let first = src.starts_with("date_");
+            let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
+            let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
+            let out: Vec<Option<bool>> = if first {
+                (0..sel.len()).map(|i| Some(compare(date_micros(a.get(i)?), b.get(i)?))).collect()
+            } else {
+                (0..sel.len()).map(|i| Some(compare(a.get(i)?, date_micros(b.get(i)?)))).collect()
+            };
+            return Ok(Some(Col::bools(&out)));
         }
         if let (Some(compare), [a, b]) = (float_compare(src), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
