@@ -688,7 +688,7 @@ impl Exec<'_> {
         self.cast(value, (ty, typmod), (self.ret, -1))
     }
 
-    /// A row value of the row type `ret` from `value`, with each field cast to the type of the field of `ret`.
+    /// A row value of the row type `ret` from `value`, as `convert_tuples_by_position` makes it: each field must have the type of the field of `ret`, with no cast. A field whose type is not known is cast.
     fn coerce_row(&self, ret: u32, value: Value, mismatch: &str) -> Result<Value> {
         let record = match value {
             Value::Null => return Ok(Value::Null),
@@ -710,8 +710,19 @@ impl Exec<'_> {
         }
         let mut values = Vec::with_capacity(fields.len());
         for (i, value) in record.values.into_iter().enumerate() {
-            let from = record.types.get(i).copied().unwrap_or(oid::UNKNOWN);
-            values.push(self.cast(value, (from, -1), (fields[i].1, fields[i].2))?);
+            let (name, ty, typmod) = (&fields[i].0, fields[i].1, fields[i].2);
+            let from = record.types.get(i).copied();
+            if let Some(from) = from
+                && from != ty
+            {
+                return Err(Error::new(SqlState::DATATYPE_MISMATCH, mismatch).with_detail(format!(
+                    "Returned type {} does not match expected type {} in column \"{name}\" (position {}).",
+                    types::name(from),
+                    types::name(ty),
+                    i + 1
+                )));
+            }
+            values.push(self.cast(value, (from.unwrap_or(oid::UNKNOWN), -1), (ty, typmod))?);
         }
         Ok(Value::Record(Box::new(Record::new(fields.iter().map(|f| f.1).collect(), values))))
     }
@@ -832,7 +843,8 @@ impl Exec<'_> {
                 Ok(Flow::Normal)
             }
             StmtKind::ReturnQuery(source) => {
-                let ((rows, columns), _) = self.source_rows(source, false)?;
+                let ((rows, columns), _) =
+                    self.source_rows(source, false).map_err(must_return_tuples)?;
                 let n = rows.len();
                 for row in rows {
                     let value = self.query_row(&columns, row)?;
@@ -1334,6 +1346,14 @@ impl Exec<'_> {
             ));
         }
         if !self.f.retset {
+            // `exec_stmt_return`: a function that returns a row cannot return a scalar, which is an error of `RETURN`.
+            let row = self.ret == oid::RECORD || is_composite(self.env(), self.ret);
+            if row && !matches!(value, Value::Null | Value::Record(_)) {
+                return Err(Error::new(
+                    SqlState::DATATYPE_MISMATCH,
+                    "cannot return non-composite value from function returning composite type",
+                ));
+            }
             self.retval = Some((value, ty, typmod));
             return Ok(());
         }
@@ -1919,6 +1939,13 @@ impl Exec<'_> {
     /// `exec_stmt_open`.
     fn open(&mut self, d: usize, query: &Opened, options: i32) -> Result<()> {
         let name = self.free_cursor(d)?;
+        // `exec_check_assignable`: a null variable gets the name of the portal, which a `CONSTANT` cannot.
+        if name.is_none() && self.f.datums[d].constant {
+            return Err(Error::new(
+                SqlState::ERROR_IN_ASSIGNMENT,
+                format!("variable \"{}\" is declared CONSTANT", self.f.datums[d].name),
+            ));
+        }
         let opened = match query {
             Opened::Bound(args) => self.open_bound(d, name.as_deref(), args.as_ref())?,
             Opened::Query(e) => self.open_query(name.as_deref(), e, options)?,
@@ -2381,6 +2408,24 @@ impl Exec<'_> {
             }
         }
     }
+}
+
+/// `_SPI_execute_plan` with `must_return_tuples`, as `RETURN QUERY` runs its query: a `SELECT ... INTO` gives no rows, which is an error before the analysis would find the `INTO`.
+fn must_return_tuples(error: Error) -> Error {
+    if error.state() != SqlState::SYNTAX_ERROR
+        || error.message() != "SELECT ... INTO is not allowed here"
+    {
+        return error;
+    }
+    let Some((query, _)) = error.internal_query() else {
+        return error;
+    };
+    let top = parse_statement(query);
+    if !matches!(&top, Ok(Node::SelectStmt(s)) if s.intoClause.is_some()) {
+        return error;
+    }
+    Error::new(SqlState::SYNTAX_ERROR, "SELECT INTO query does not return tuples")
+        .with_context(spi_line(Mode::Statement, query))
 }
 
 /// The extra check of more than one row into the target of `INTO` with no `STRICT`.

@@ -2121,6 +2121,8 @@ impl Compiler<'_> {
                 options = self.raise_options()?;
             }
         }
+        // `stmt_raise` takes the line of the statement before `check_raise_parameters`, so that its errors are near the line of `RAISE`.
+        self.lineno(t.start);
         if let Some(message) = &message {
             let mut expected = 0;
             let mut bytes = message.bytes();

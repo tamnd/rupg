@@ -590,7 +590,7 @@ impl Connection {
                 result.map(|_| ())
             } else if let Node::DoStmt(stmt) = node {
                 let mut warnings = Vec::new();
-                let result = self.run_do(stmt, text, &mut warnings);
+                let result = self.run_do(stmt, text, &mut warnings, false);
                 found.extend(warnings.into_iter().map(Notice::of_function));
                 result
             } else {

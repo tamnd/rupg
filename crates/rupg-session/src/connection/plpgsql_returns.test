@@ -1,0 +1,75 @@
+!details
+> CREATE FUNCTION pr_const() RETURNS void LANGUAGE plpgsql AS $$ DECLARE rc CONSTANT refcursor; BEGIN OPEN rc FOR SELECT 1; END $$;
+CREATE FUNCTION
+> SELECT pr_const();
+fields pr_const:2278:4:-1
+ERROR 22005 variable "rc" is declared CONSTANT (PL/pgSQL function pr_const() line 1 at OPEN)
+> CREATE FUNCTION pr_raise() RETURNS void LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'x %', 1, 2;
+>> END $$;
+ERROR 42601 too many parameters specified for RAISE (compilation of PL/pgSQL function "pr_raise" near line 3)
+> CREATE TYPE pr_t AS (a int, b varchar);
+CREATE TYPE
+> CREATE FUNCTION pr_scalar() RETURNS pr_t LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN 1;
+>> END $$;
+CREATE FUNCTION
+> SELECT * FROM pr_scalar();
+fields a:23:4:-1,b:1043:-1:-1
+ERROR 42804 cannot return non-composite value from function returning composite type (PL/pgSQL function pr_scalar() line 3 at RETURN)
+> CREATE FUNCTION pr_row() RETURNS pr_t LANGUAGE plpgsql AS $$
+>> DECLARE r record;
+>> BEGIN
+>>   SELECT 1 AS a, 'x'::text AS b INTO r;
+>>   RETURN r;
+>> END $$;
+CREATE FUNCTION
+> SELECT * FROM pr_row();
+fields a:23:4:-1,b:1043:-1:-1
+ERROR 42804 returned record type does not match expected record type (PL/pgSQL function pr_row() while casting return value to function's return type)
+DETAIL Returned type text does not match expected type character varying in column "b" (position 2).
+> CREATE FUNCTION pr_query() RETURNS SETOF int LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN QUERY SELECT 10 INTO no_such_table;
+>> END $$;
+CREATE FUNCTION
+> SELECT * FROM pr_query();
+fields pr_query:23:4:-1
+ERROR 42601 SELECT INTO query does not return tuples (SQL statement "SELECT 10 INTO no_such_table"
+PL/pgSQL function pr_query() line 3 at RETURN QUERY)
+> CREATE FUNCTION pr_do() RETURNS int LANGUAGE plpgsql AS $$
+>> DECLARE n int := 0;
+>> BEGIN
+>>   FOR i IN 1..3 LOOP
+>>     BEGIN
+>>       EXECUTE 'DO $d$ DECLARE x int = 0; BEGIN x := 1 / x; END $d$';
+>>     EXCEPTION WHEN division_by_zero THEN
+>>       n := n + 1;
+>>     END;
+>>   END LOOP;
+>>   EXECUTE 'DO $d$ BEGIN RAISE NOTICE ''inner''; END $d$';
+>>   RETURN n;
+>> END $$;
+CREATE FUNCTION
+> SELECT pr_do();
+fields pr_do:23:4:-1
+NOTICE 00000 inner (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $d$ BEGIN RAISE NOTICE 'inner'; END $d$"
+PL/pgSQL function pr_do() line 11 at EXECUTE)
+row 3
+SELECT 1
+> CREATE FUNCTION pr_err() RETURNS int LANGUAGE plpgsql AS $$ BEGIN EXECUTE 'DO $d$ DECLARE x int = 0; BEGIN x := 1 / x; END $d$'; RETURN 0; END $$;
+CREATE FUNCTION
+> SELECT pr_err();
+fields pr_err:23:4:-1
+ERROR 22012 division by zero (PL/pgSQL function inline_code_block line 1 at assignment
+SQL statement "DO $d$ DECLARE x int = 0; BEGIN x := 1 / x; END $d$"
+PL/pgSQL function pr_err() line 1 at EXECUTE)
+> CREATE FUNCTION pr_bool(n int) RETURNS bool LANGUAGE plpgsql AS $$ DECLARE b bool := n; BEGIN RETURN b AND n::text::bool; END $$;
+CREATE FUNCTION
+> SELECT pr_bool(1), pr_bool(0);
+fields pr_bool:16:1:-1,pr_bool:16:1:-1
+row t,f
+SELECT 1
