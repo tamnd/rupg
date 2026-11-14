@@ -1639,6 +1639,14 @@ fn run_query(
     {
         return Ok(rows);
     }
+    // `EXISTS` on a subquery that reads no column of a query outside it needs one row of the scan, which stops at the first row that passes, as the plan of PostgreSQL does. An error of the scan lets the row engine run the subquery, which also gives the error of a target that `simplify_EXISTS_query` drops.
+    if exists
+        && (outer.is_empty() || !correlated(query))
+        && !filled
+        && let Ok(Some(rows)) = columnar::run(query, params, session, cache, Some(1), unordered)
+    {
+        return Ok(rows.into_iter().take(1).map(|_| Vec::new()).collect());
+    }
     // A subquery that reads no column of a query outside it runs once, so the scan can run it too.
     if !exists
         && (outer.is_empty() || !correlated(query))
