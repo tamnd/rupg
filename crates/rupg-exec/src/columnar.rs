@@ -3911,7 +3911,10 @@ impl Scan<'_, '_> {
                         sel.retain(|&i| passes(test, null(i), values[i as usize]));
                     }
                 }
-                for ((cond, verdict), test) in self.conds.iter().zip(&verdicts).zip(&tests) {
+                let mut failed = None;
+                for (at, ((cond, verdict), test)) in
+                    self.conds.iter().zip(&verdicts).zip(&tests).enumerate()
+                {
                     if sel.is_empty() {
                         break;
                     }
@@ -3926,7 +3929,10 @@ impl Scan<'_, '_> {
                             continue;
                         }
                     }
-                    let col = self.exec.eval(cond, &mut batch, &sel)?;
+                    let Ok(col) = self.exec.eval(cond, &mut batch, &sel) else {
+                        failed = Some(at);
+                        break;
+                    };
                     next.clear();
                     next.extend(
                         sel.iter()
@@ -3935,6 +3941,37 @@ impl Scan<'_, '_> {
                             .map(|(_, &i)| i),
                     );
                     std::mem::swap(&mut sel, &mut next);
+                }
+                // A condition with an error on a row of the vector runs again on each row in turn, from that condition on. PostgreSQL tests the rows one at a time, so it raises the error of the first row that has one, and a limit can stop the scan before a row with an error.
+                if let Some(from) = failed {
+                    for &row in &sel {
+                        next.clear();
+                        next.push(row);
+                        for ((cond, verdict), test) in
+                            self.conds.iter().zip(&verdicts).zip(&tests).skip(from)
+                        {
+                            if next.is_empty() {
+                                break;
+                            }
+                            if *verdict == Verdict::All {
+                                continue;
+                            }
+                            if let Some((place, test)) = test {
+                                self.exec.decode(&mut batch, *place)?;
+                                if let Some(decoded) = &batch.decoded[*place] {
+                                    groups::keep(test, decoded, &mut next);
+                                    continue;
+                                }
+                            }
+                            if self.exec.eval(cond, &mut batch, &next)?.truth(0) != Some(true) {
+                                next.clear();
+                            }
+                        }
+                        if !next.is_empty() && !each(self.exec, &mut batch, &next)? {
+                            return Ok(());
+                        }
+                    }
+                    continue;
                 }
                 if !sel.is_empty() && !each(self.exec, &mut batch, &sel)? {
                     return Ok(());
