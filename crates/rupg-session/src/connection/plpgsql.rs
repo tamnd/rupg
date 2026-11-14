@@ -413,7 +413,15 @@ impl Spi for PlSpi<'_> {
         text: &str,
         notices: &mut Vec<Error>,
     ) -> rupg_common::Result<u64> {
-        let result = self.conn.call_utility(stmt, text, notices);
+        let result = if let Node::DoStmt(stmt) = stmt {
+            // `standard_ProcessUtility`: a `DO` of a function runs in its context, which is atomic. The messages of its code have the context of the call already.
+            let mut warnings = Vec::new();
+            let result = self.conn.run_do(stmt, text, &mut warnings, true);
+            warnings.into_iter().for_each(|warning| self.outer.warn(warning));
+            result.map(|()| 0)
+        } else {
+            self.conn.call_utility(stmt, text, notices)
+        };
         self.conn.calls.changes.set(self.conn.calls.changes.get() + 1);
         result
     }
@@ -747,7 +755,7 @@ impl Connection {
         result
     }
 
-    /// `ExecuteDoStmt`: runs the code of `DO`, which is a part of the query `text`. The messages of `RAISE` go to `warnings`.
+    /// `ExecuteDoStmt`: runs the code of `DO`, which is a part of the query `text`. The messages of `RAISE` go to `warnings`. The code of a `DO` in a call (`nested`) cannot end the transaction.
     ///
     /// # Errors
     ///
@@ -757,12 +765,13 @@ impl Connection {
         stmt: &DoStmt,
         text: &str,
         warnings: &mut Vec<Error>,
+        nested: bool,
     ) -> Result<(), Error> {
         let src = rupg_plpgsql::do_code(stmt)?;
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         // `ExecuteDoStmt`: outside of a transaction block the code can end the transaction.
-        let atomic = self.transaction.in_block();
+        let atomic = nested || self.transaction.in_block();
         let transition = self.transition.take();
         let result = rupg_plpgsql::inline(&PlSpi::new(self, &reader, atomic), &src);
         self.transition.replace(transition);

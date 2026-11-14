@@ -51,7 +51,8 @@ pub fn find_path(target: u32, source: u32, context: Context) -> Path {
             _ => Context::Explicit,
         };
         if context < allowed {
-            return Path::None;
+            // `find_coercion_pathway`: in PL/pgSQL a cast of a stronger context gives way to the I/O cast, as `integer` to `boolean`.
+            return if context == Context::Plpgsql { Path::ViaIo } else { Path::None };
         }
         return match cast.method {
             b'f' => Path::Func(cast.func),

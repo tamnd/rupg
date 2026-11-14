@@ -2813,7 +2813,7 @@ impl Connection {
             } else if let Node::DoStmt(stmt) = node {
                 drop(self.portals.get_mut().close(b""));
                 let mut warnings = Vec::new();
-                let result = self.run_do(stmt, text, &mut warnings);
+                let result = self.run_do(stmt, text, &mut warnings, false);
                 notices.extend(warnings.into_iter().map(Notice::of_function));
                 result.map(|()| Done::Tag(CommandTag::Do))
             } else {
@@ -10085,7 +10085,7 @@ mod tests {
             &query(
                 "CREATE TYPE rta AS (b bytea); \
                  CREATE FUNCTION rta_func() RETURNS rta LANGUAGE plpgsql AS \
-                 $$ BEGIN RETURN ROW('\\x4649584d45'::bytea); END; $$; \
+                 $$ BEGIN RETURN ROW('\\x4649584d45')::rta; END; $$; \
                  CREATE FUNCTION rta_exec(cmd text) RETURNS int LANGUAGE plpgsql AS \
                  $$ BEGIN EXECUTE cmd; RETURN 1; END; $$; \
                  CREATE TABLE tgt (s text, n int); INSERT INTO tgt VALUES (NULL, NULL)",
@@ -11976,6 +11976,12 @@ mod tests {
     #[test]
     fn plpgsql_checks() {
         big_stack(|| script(include_str!("connection/plpgsql_checks.test")));
+    }
+
+    /// The checks of the values of `RETURN` and `RETURN QUERY` and of the variables of `OPEN`, and the code of `DO` in `EXECUTE`: a `CONSTANT` cursor variable cannot get the name of a portal, a function of a composite type cannot return a scalar, the columns of a returned record have the types of the result, `RETURN QUERY` of `SELECT INTO` gives no rows, a `DO` of a function runs in its context, and an assignment casts through text when no cast of the context exists. The messages are those of PostgreSQL 19.
+    #[test]
+    fn plpgsql_returns() {
+        big_stack(|| script(include_str!("connection/plpgsql_returns.test")));
     }
 
     /// `SET` of `CREATE FUNCTION` and `ALTER FUNCTION`: `proconfig` keeps each setting, `pg_get_functiondef` shows it, and a call runs with the settings, which go back at the end of the call, other than one that a `SET` in the call changed. `connection/fnset.test` is the output of PostgreSQL 19 for the same script in a new database.
