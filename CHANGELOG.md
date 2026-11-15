@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_column_compression` and `pg_column_toast_chunk_id` read how the version of a row keeps a column: the heap keeps the method of each value that the toaster compressed and the ID of each value that it moved out of line. An update that keeps a value out of line keeps its ID, and `VACUUM FULL`, `CLUSTER` and `REPACK` keep the method of a compressed value and the ID of a value that they move again, as `toast_tuple_init` and `rd_toastoid` do. The image of a store has the version 4 (#1586)
 - A join of the vectors whose `ORDER BY` gives the order of its rows, or that has no groups, now runs with no plan, so the planner does not run for it, as in TPC-H Q3, Q7, Q8, Q9, Q13, Q14, Q18 and Q21. When the sort finds ties or a run gives an error, the row engine runs the query with the plan, as before (#1585).
 - `collate`: a comparison, sort, aggregate or hash of strings with conflicting implicit collations fails with "could not determine which collation to use" when a row reaches it, as in PostgreSQL (#1584)
 - `debug_parallel_query = on`: `EXPLAIN` shows a `Gather` with one worker and `Single Copy` on top of a plan that a worker can run, with the `InitPlan` nodes of the top node and the costs of `standard_planner`, and none for a cursor or a plan with a restricted function, a temporary table, a subquery with `LIMIT`, a query of `WITH`, a lock of rows, a window function or a correlated subplan (#1583)
