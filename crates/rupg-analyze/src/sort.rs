@@ -603,11 +603,14 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// `exprCollation` of a target of the query that the analyzer reads now.
+    /// `exprCollation` of a target of the query that the analyzer reads now, which the sort or the hash of the target gets. A target of a collatable type with no collation, as a column of a set operation whose inputs have a conflict of implicit collations, gives [`crate::INDETERMINATE_COLLATION`]: its sort fails when it starts.
     fn target_collation(&self, expr: &Expr) -> u32 {
         let mut levels = vec![&self.scope.relations[..]];
         levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
-        crate::collate::expr_collation(expr, &levels, self.env.catalog())
+        match crate::collate::expr_collation(expr, &levels, self.env.catalog()) {
+            0 if types::collatable(expr.ty) => crate::INDETERMINATE_COLLATION,
+            collation => collation,
+        }
     }
 
     /// `lookup_type_cache` with `cache_record_field_properties` and `cache_array_element_properties`: the operators of the type, where a composite type has `=` only when each field has `=`, and `<` and `>` only when each field has `<`. An array of a composite type has the operators of its element type.

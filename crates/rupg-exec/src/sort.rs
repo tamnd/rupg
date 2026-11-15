@@ -304,6 +304,13 @@ impl<'a> Keys<'a> {
         let keys = list
             .iter()
             .map(|g| {
+                // `varstr_sortsupport` and `check_collation_set`: a sort of strings with no collation fails when it starts.
+                if g.collation == rupg_analyze::INDETERMINATE_COLLATION
+                    && let Some(error) =
+                        rupg_analyze::indeterminate(if g.sort != 0 { g.sort } else { g.equal })
+                {
+                    return Err(error);
+                }
                 let ty = types[g.target];
                 let text = matches!(ty, oid::TEXT | oid::VARCHAR);
                 let collator = rupg_func::collator(session, g.collation);

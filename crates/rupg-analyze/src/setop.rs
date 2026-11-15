@@ -171,7 +171,15 @@ impl Analyzer<'_> {
         let width = targets.len();
         let sort = self.sort_clause(&s.sortClause, &mut targets);
         self.remove_columns(saved);
-        let sort = sort?;
+        let mut sort = sort?;
+        // The sort of a column has the collation of the column of the operation, `colCollations`, not the one of the leftmost `SELECT`. A column whose inputs have a conflict of implicit collations has none, so its sort fails when it starts.
+        for item in &mut sort {
+            let ty = targets.get(item.target).map_or(0, |t| t.expr.ty);
+            item.collation = match op.collations.get(item.target).copied().unwrap_or(0) {
+                0 if crate::types::collatable(ty) => crate::INDETERMINATE_COLLATION,
+                collation => collation,
+            };
+        }
         if let Some(junk) = targets.get(width) {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

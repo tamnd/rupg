@@ -282,7 +282,7 @@ pub struct Func {
     pub variadic: bool,
     /// `funcretset`: true when the function gives a set.
     pub retset: bool,
-    /// `inputcollid` when it is a collation of ICU, which orders the strings as the collator does, or 0 for a collation that orders them as their bytes.
+    /// `inputcollid` when it is a collation of ICU, which orders the strings as the collator does, [`crate::INDETERMINATE_COLLATION`] when the function needs a collation and its inputs have none, or 0 for a collation that orders them as their bytes.
     pub collation: u32,
 }
 
@@ -320,7 +320,7 @@ pub struct Aggref {
     pub filter: Option<Box<Expr>>,
     /// `agglevelsup`: 0 for an aggregate of the query that has the call, 1 for an aggregate of the query outside it, and so on. The arguments of an aggregate of an outer query read only the columns of that query and of the queries outside it.
     pub levels_up: usize,
-    /// `inputcollid` when it is a collation of ICU and the transition function orders strings, as `max` and `min` of `text` do, or 0, as in [`Func::collation`].
+    /// `inputcollid` when it is a collation of ICU and the transition function orders strings, as `max` and `min` of `text` do, [`crate::INDETERMINATE_COLLATION`] when the inputs have none, or 0, as in [`Func::collation`].
     pub collation: u32,
 }
 

@@ -290,9 +290,11 @@ fn column_collation(
         if let Some(rel) = catalog.and_then(|c| c.relation(relation.oid)) {
             return rel.column(var.attnum).map_or(0, |c| c.collation);
         }
-        return rupg_pgcatalog::catalog_by_oid(relation.oid)
-            .and_then(|c| c.columns.get(index))
-            .map_or(0, |c| c.collation);
+        if let Some(table) = rupg_pgcatalog::catalog_by_oid(relation.oid) {
+            return table.columns.get(index).map_or(0, |c| c.collation);
+        }
+        // A table that the statement creates, as the expressions of its constraints and its indexes read it, is not in the catalog yet: its column has the collation of its type.
+        return relation.columns.get(index).map_or(0, |c| type_collation(c.ty));
     }
     let outer = &levels[var.levels_up..];
     if let Some(sub) = &relation.subquery {
@@ -393,17 +395,85 @@ pub(crate) fn collation_use(func: u32) -> Use {
     if pattern { Use::Pattern } else { Use::None }
 }
 
-/// The collation of the inputs of a call, as `inputcollid`, when it is a collation of ICU, or 0. A conflict of implicit collations gives 0.
-pub(crate) fn icu_input(args: &[Expr], levels: &[&[Relation]], catalog: Option<&Catalog>) -> u32 {
+/// `inputcollid` of a call whose inputs have a collatable type: the merged collation of the inputs, which is 0 for a conflict of implicit collations and for inputs with no collation. `None` when no input has a collatable type, or for two different explicit collations, whose error the analysis gave before. `sub` holds the collations of the columns of a subquery whose test the analyzer builds, which a column of the subquery in the inputs has.
+fn input(
+    args: &[Expr],
+    levels: &[&[Relation]],
+    sub: &[u32],
+    catalog: Option<&Catalog>,
+) -> Option<u32> {
     if !args.iter().any(|a| types::collatable(a.ty)) {
-        return 0;
+        return None;
     }
     let mut merged = State::None;
     for arg in args {
-        let Ok(one) = state(arg, levels, catalog) else { return 0 };
-        let Ok(next) = merged.merge(one, catalog) else { return 0 };
-        merged = next;
+        let one = match sub_column(arg) {
+            Some(n) => match sub.get(n).copied().unwrap_or(0) {
+                0 => State::None,
+                oid => State::Implicit(oid, None),
+            },
+            None => state(arg, levels, catalog).ok()?,
+        };
+        merged = merged.merge(one, catalog).ok()?;
     }
-    let oid = merged.oid();
-    if icu(oid, catalog) { oid } else { 0 }
+    Some(merged.oid())
+}
+
+/// The column of the subquery that an input of a test of a subquery reads, through a relabeling.
+fn sub_column(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::SubColumn(n) => Some(*n),
+        ExprKind::Relabel(arg, _) => sub_column(arg),
+        _ => None,
+    }
+}
+
+/// The collation of a call, a sort or a hash whose inputs have a collatable type but no collation, as an `inputcollid` of 0 is in PostgreSQL: a conflict of implicit collations, or a column of a set operation whose inputs have one. A function that needs a collation gives the error of `check_collation_set` when it runs, so the error comes only when a row reaches the call.
+pub const INDETERMINATE_COLLATION: u32 = u32::MAX;
+
+/// The collation of a call of `func` with the inputs `args`, where `sub` holds the collations of the columns of the subquery whose test the analyzer builds: [`INDETERMINATE_COLLATION`] when the function needs a collation, as [`indeterminate`] tells, and the inputs have a collatable type but no collation; else the collation of ICU of the inputs when the function reads it, as [`collation_use`] tells, or 0.
+pub(crate) fn call_input(
+    func: u32,
+    args: &[Expr],
+    levels: &[&[Relation]],
+    sub: &[u32],
+    catalog: Option<&Catalog>,
+) -> u32 {
+    let reads = collation_use(func) != Use::None;
+    let needs = indeterminate(func).is_some();
+    if !reads && !needs {
+        return 0;
+    }
+    match input(args, levels, sub, catalog) {
+        Some(0) if needs => INDETERMINATE_COLLATION,
+        Some(oid) if reads && icu(oid, catalog) => oid,
+        _ => 0,
+    }
+}
+
+/// The error of the built-in function `func` when it runs with no collation, as `check_collation_set`, `GenericMatchText`, `pg_set_regex_collation`, `hashtext` and `str_tolower` give it, or `None` for a function that needs no collation.
+pub fn indeterminate(func: u32) -> Option<Error> {
+    let proc = rupg_pgcatalog::builtin::proc_by_oid(func)?;
+    let what = match proc.src {
+        "hashtext" | "hashtextextended" | "hashbpchar" | "hashbpcharextended" => "string hashing",
+        "textlike" | "textnlike" | "namelike" | "namenlike" => "LIKE",
+        "texticlike" | "texticnlike" | "nameiclike" | "nameicnlike" | "bpchariclike"
+        | "bpcharicnlike" => "ILIKE",
+        "upper" => "upper() function",
+        "lower" => "lower() function",
+        "initcap" => "initcap() function",
+        "casefold" => "casefold() function",
+        "texteq" | "textne" | "bpchareq" | "bpcharne" | "texteqname" | "textnename"
+        | "nameeqtext" | "namenetext" | "text_starts_with" | "textpos" => "string comparison",
+        src if src.contains("regex") => "regular expression",
+        _ if collation_use(func) == Use::Order => "string comparison",
+        _ => return None,
+    };
+    Some(
+        Error::new(
+            SqlState::INDETERMINATE_COLLATION,
+            format!("could not determine which collation to use for {what}"),
+        )
+        .with_hint("Use the COLLATE clause to set the collation explicitly."),
+    )
 }
