@@ -69,7 +69,7 @@ pub enum Test {
     Gt(u64),
     /// `x >= c`.
     Ge(u64),
-    /// `x IN (c, ...)`.
+    /// `x IN (c, ...)`, with the keys in ascending order and no key two times.
     In(Vec<u64>),
     /// `x IS NULL`.
     IsNull,
@@ -184,12 +184,13 @@ impl Zone {
             Test::Le(c) => self.below(c, true),
             Test::Gt(c) => self.above(c, false),
             Test::Ge(c) => self.above(c, true),
+            // A key out of the bounds of the zone is in no row of it. A zone with two values or more passes a key in its bounds as some rows, and a zone with one value has at most one key in its bounds, so the first key in the bounds gives the verdict.
             Test::In(ref list) => {
-                let mut verdict = Verdict::None;
-                for &c in list {
-                    verdict = verdict.or(self.test_values(&Test::Eq(c)));
+                let from = list.partition_point(|&c| c < lo);
+                match list.get(from) {
+                    Some(&c) if c <= hi => self.test_values(&Test::Eq(c)),
+                    _ => Verdict::None,
                 }
-                verdict
             }
             // The zones of codes hold ranks, and a set of codes has no bounds to test them with.
             Test::Codes(_) => Verdict::Some,
@@ -258,6 +259,9 @@ mod tests {
             Test::IsNull,
             Test::IsNotNull,
             Test::In(vec![key::int(0), key::int(2)]),
+            Test::In(vec![key::int(1), key::int(3)]),
+            Test::In(vec![key::int(2)]),
+            Test::In(vec![key::int(-1), key::int(0), key::int(4)]),
             Test::Codes(Arc::from([0b1010_u64])),
         ];
         for c in 0..=4 {

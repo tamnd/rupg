@@ -729,10 +729,15 @@ fn narrow(all: &mut Query, domain: &[KeySet]) {
     };
     let name = format!("?key{n}?");
     let Some(target) = all.targets.iter().find(|t| t.name == name) else { return };
-    let inner = target.expr.clone();
-    let Some((_, _, equal)) = int_operators(inner.ty) else { return };
     let mut ints: Vec<i64> = keys.iter().copied().collect();
     ints.sort_unstable();
+    let Some(cond) = any_of(target.expr.clone(), ints) else { return };
+    all.filter = and(all.filter.take().into_iter().chain([cond]).collect());
+}
+
+/// The condition `inner = ANY (array)` with the integers `ints` in ascending order, for an `inner` of an integer type. An integer that does not fit the type of `inner` is equal to no value, so it is not in the array. `None` for another type. The condition is a test of the zones of a column.
+pub(crate) fn any_of(inner: Expr, ints: Vec<i64>) -> Option<Expr> {
+    let (_, _, equal) = int_operators(inner.ty)?;
     let (values, array): (Vec<Option<Value>>, u32) = match inner.ty {
         oid::INT2 => (
             ints.into_iter()
@@ -769,7 +774,7 @@ fn narrow(all: &mut Query, domain: &[KeySet]) {
         location: None,
         collation: 0,
     };
-    all.filter = and(all.filter.take().into_iter().chain([cond]).collect());
+    Some(cond)
 }
 
 /// The `<` operator, the `<` function and the `=` function of an integer type.
