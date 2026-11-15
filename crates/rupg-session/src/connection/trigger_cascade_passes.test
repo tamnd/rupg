@@ -1,0 +1,32 @@
+> create function trigger_func() returns trigger language plpgsql as $$ begin raise notice 'trigger_func(%) called: action = %, when = %, level = %', TG_ARGV[0], TG_OP, TG_WHEN, TG_LEVEL; return null; end; $$
+CREATE FUNCTION
+> create function dump_delete() returns trigger language plpgsql as $$ begin raise notice 'trigger = %, old table = %', TG_NAME, (select string_agg(old_table::text, ', ' order by a) from old_table); return null; end; $$
+CREATE FUNCTION
+> create table self_ref (a int primary key, b int references self_ref(a) on delete cascade)
+CREATE TABLE
+> create trigger self_ref_before_trig before delete on self_ref for each statement execute procedure trigger_func('self_ref')
+CREATE TRIGGER
+> create trigger self_ref_r_trig after delete on self_ref referencing old table as old_table for each row execute procedure dump_delete()
+CREATE TRIGGER
+> create trigger self_ref_s_trig after delete on self_ref referencing old table as old_table for each statement execute procedure dump_delete()
+CREATE TRIGGER
+> insert into self_ref values (1, null), (2, 1), (3, 2)
+INSERT 0 3
+> delete from self_ref where a = 1
+NOTICE 00000 trigger_func(self_ref) called: action = DELETE, when = BEFORE, level = STATEMENT (PL/pgSQL function trigger_func() line 1 at RAISE)
+NOTICE 00000 trigger = self_ref_r_trig, old table = (1,), (2,1) (PL/pgSQL function dump_delete() line 1 at RAISE)
+NOTICE 00000 trigger_func(self_ref) called: action = DELETE, when = BEFORE, level = STATEMENT (PL/pgSQL function trigger_func() line 1 at RAISE
+SQL statement "DELETE FROM ONLY "public"."self_ref" WHERE $1 OPERATOR(pg_catalog.=) "b"")
+NOTICE 00000 trigger = self_ref_r_trig, old table = (1,), (2,1) (PL/pgSQL function dump_delete() line 1 at RAISE)
+NOTICE 00000 trigger = self_ref_s_trig, old table = (1,), (2,1) (PL/pgSQL function dump_delete() line 1 at RAISE)
+NOTICE 00000 trigger = self_ref_r_trig, old table = (3,2) (PL/pgSQL function dump_delete() line 1 at RAISE)
+NOTICE 00000 trigger = self_ref_s_trig, old table = (3,2) (PL/pgSQL function dump_delete() line 1 at RAISE)
+DELETE 1
+> drop trigger self_ref_r_trig on self_ref
+DROP TRIGGER
+> insert into self_ref values (1, null), (2, 1), (3, 2), (4, 3)
+INSERT 0 4
+> delete from self_ref where a = 1
+NOTICE 00000 trigger_func(self_ref) called: action = DELETE, when = BEFORE, level = STATEMENT (PL/pgSQL function trigger_func() line 1 at RAISE)
+NOTICE 00000 trigger = self_ref_s_trig, old table = (1,), (2,1), (3,2), (4,3) (PL/pgSQL function dump_delete() line 1 at RAISE)
+DELETE 1
