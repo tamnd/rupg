@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Triggers: the triggers of the foreign keys fire in passes, so an `AFTER` row trigger fires between the levels of a cascade and closes its transition table, and the messages of the triggers of a cascade have its statement in their context (#1580)
 - PL/pgSQL: `EXPLAIN` of a transition table in a trigger function shows a `Named Tuplestore Scan`, and the planner sizes it by its rows (#1579)
 - PL/pgSQL: `shadowed_variables` in `plpgsql.extra_warnings` or `plpgsql.extra_errors` makes `CREATE FUNCTION` warn or fail on a variable that has the name of an argument, of a variable of an outer block, or of `found`, with the place of the name in the statement (#1578).
 - In the join of the vectors, a table with its own `EXISTS` or `NOT EXISTS`, as `lineitem l1` of TPC-H Q21, is now read after the other tables. The other tables first remove the rows that join no row of a table next to them, and their keys then select the rows of the table before its subqueries run. A long `IN` list of integers now finds a value with a binary search, in the test of the zones and in the test of the rows (#1577).
