@@ -6742,6 +6742,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/absent.test")));
     }
 
+    /// `make_sort_input_target`: a target that calls a volatile function or a function that gives a set, and that is not a key of `ORDER BY`, runs above the sort for the rows that `Limit` reads, in the order of the sort. `nextval` runs for the rows that `OFFSET` skips and for the row after the window of `WITH TIES`, and the rows of `generate_series` come after the sort. `connection/late_targets.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn late_targets() {
+        big_stack(|| script(include_str!("connection/late_targets.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
