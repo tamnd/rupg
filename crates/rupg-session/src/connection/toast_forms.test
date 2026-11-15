@@ -1,0 +1,89 @@
+> CREATE TABLE tf (id int, f1 text STORAGE plain)
+CREATE TABLE
+> INSERT INTO tf VALUES (1, repeat('a', 7000))
+INSERT 0 1
+> ALTER TABLE tf ALTER COLUMN f1 SET STORAGE EXTERNAL
+ALTER TABLE
+> INSERT INTO tf VALUES (2, repeat('a', 7000))
+INSERT 0 1
+> CREATE TABLE tf_old AS SELECT id, pg_column_toast_chunk_id(f1) AS chunk FROM tf
+SELECT 2
+> SELECT id, pg_column_toast_chunk_id(f1) IS NULL AS chunk_null, pg_column_compression(f1) AS comp FROM tf ORDER BY id
+fields id@tf.1:23:4:-1,chunk_null:16:1:-1,comp:25:-1:-1
+row 1,t,NULL
+row 2,f,NULL
+SELECT 2
+> VACUUM FULL tf
+VACUUM
+> SELECT id, pg_column_toast_chunk_id(f1) IS NULL AS chunk_null, pg_column_compression(f1) AS comp FROM tf ORDER BY id
+fields id@tf.1:23:4:-1,chunk_null:16:1:-1,comp:25:-1:-1
+row 1,f,NULL
+row 2,f,NULL
+SELECT 2
+> SELECT tf.id, pg_column_toast_chunk_id(f1) = tf_old.chunk AS same_chunk FROM tf JOIN tf_old USING (id) ORDER BY id
+fields id@tf.1:23:4:-1,same_chunk:16:1:-1
+row 1,NULL
+row 2,t
+SELECT 2
+> UPDATE tf SET id = id + 10
+UPDATE 2
+> SELECT tf.id - 10 AS id, pg_column_toast_chunk_id(f1) = tf_old.chunk AS same_chunk FROM tf JOIN tf_old ON tf.id - 10 = tf_old.id ORDER BY tf.id
+fields id:23:4:-1,same_chunk:16:1:-1
+row 1,NULL
+row 2,t
+SELECT 2
+> UPDATE tf SET f1 = f1 || 'b' WHERE id = 12
+UPDATE 1
+> SELECT tf.id - 10 AS id, pg_column_toast_chunk_id(f1) = tf_old.chunk AS same_chunk, pg_column_toast_chunk_id(f1) IS NULL AS chunk_null FROM tf JOIN tf_old ON tf.id - 10 = tf_old.id ORDER BY tf.id
+fields id:23:4:-1,same_chunk:16:1:-1,chunk_null:16:1:-1
+row 1,NULL,f
+row 2,f,f
+SELECT 2
+> CREATE TABLE tc (id int, p text COMPRESSION pglz, l text COMPRESSION lz4, m text STORAGE main)
+CREATE TABLE
+> INSERT INTO tc VALUES (1, repeat('1234567890', 1000), repeat('1234567890', 1000), repeat('1234567890', 1000)), (2, 'short', 'short', 'short')
+INSERT 0 2
+> SELECT id, pg_column_compression(p) AS p, pg_column_compression(l) AS l, pg_column_compression(m) AS m, pg_column_toast_chunk_id(p) IS NULL AS p_inline FROM tc ORDER BY id
+fields id@tc.1:23:4:-1,p:25:-1:-1,l:25:-1:-1,m:25:-1:-1,p_inline:16:1:-1
+row 1,pglz,lz4,lz4,f
+row 2,NULL,NULL,NULL,t
+SELECT 2
+> ALTER TABLE tc ALTER COLUMN p SET COMPRESSION lz4
+ALTER TABLE
+> VACUUM FULL tc
+VACUUM
+> SELECT id, pg_column_compression(p) AS p FROM tc ORDER BY id
+fields id@tc.1:23:4:-1,p:25:-1:-1
+row 1,pglz
+row 2,NULL
+SELECT 2
+> INSERT INTO tc VALUES (3, repeat('1234567890', 1000))
+INSERT 0 1
+> SELECT id, pg_column_compression(p) AS p FROM tc ORDER BY id
+fields id@tc.1:23:4:-1,p:25:-1:-1
+row 1,pglz
+row 2,NULL
+row 3,lz4
+SELECT 3
+> SELECT pg_column_compression('abc'::text) IS NULL AS n1, pg_column_toast_chunk_id(repeat('x', 10000)) IS NULL AS n2
+fields n1:16:1:-1,n2:16:1:-1
+row t,t
+SELECT 1
+> SELECT pg_column_compression(p) FROM (SELECT p FROM tc WHERE id = 1) s
+fields pg_column_compression:25:-1:-1
+row pglz
+SELECT 1
+> CREATE TABLE tp (k int, f1 text) PARTITION BY RANGE (k)
+CREATE TABLE
+> CREATE TABLE tp1 PARTITION OF tp FOR VALUES FROM (0) TO (10)
+CREATE TABLE
+> INSERT INTO tp VALUES (1, repeat('1234567890', 1000))
+INSERT 0 1
+> SELECT k, pg_column_compression(f1) AS comp, pg_column_toast_chunk_id(f1) IS NULL AS chunk_null FROM tp
+fields k@tp.1:23:4:-1,comp:25:-1:-1,chunk_null:16:1:-1
+row 1,lz4,t
+SELECT 1
+> SELECT count(*) FROM pg_class WHERE relname = 'tf' AND EXISTS (SELECT 1 FROM tf WHERE pg_column_toast_chunk_id(f1) IS NOT NULL)
+fields count:20:8:-1
+row 1
+SELECT 1

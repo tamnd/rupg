@@ -523,9 +523,15 @@ impl Connection {
             plan.start(&reader)?;
         }
         new_rows.reserve(rows.len());
+        // The old version of each new row of a repack, whose TOAST values keep their forms.
+        let mut old_tids = Vec::new();
         for row in rows {
             // A row from before an `ADD COLUMN` has no value for the new columns, which are null, and the ID of the version is at the end of the row.
             let stored = row.len().saturating_sub(1);
+            let old_tid = match row.last() {
+                Some(Value::Int8(tid)) if repack => Some(tid.cast_unsigned()),
+                _ => None,
+            };
             let row: Vec<Value> = live
                 .iter()
                 .zip(&reshape)
@@ -567,6 +573,7 @@ impl Connection {
                 }
                 values.truncate(info.width);
                 new_rows.push(values);
+                old_tids.extend(old_tid);
             }
         }
         drop(reader);
@@ -606,8 +613,13 @@ impl Connection {
             self.relation_layout(new);
         }
         let mut kept = Vec::new();
+        let table = (view.database, rel.oid);
+        let carry = repack && old_tids.len() == new_rows.len();
         loop {
-            match heap.insert(
+            if carry {
+                heap.carry_toasts(table, &old_tids);
+            }
+            let changed = heap.insert(
                 rel.oid,
                 view,
                 new_rows.clone(),
@@ -615,7 +627,11 @@ impl Connection {
                     rupg_exec::index_key(d, r, &self.reader_without_view(Arc::clone(work)))
                 }),
                 &kept,
-            )? {
+            );
+            if carry {
+                heap.carry_toasts(table, &[]);
+            }
+            match changed? {
                 Changed::Done(_) => break,
                 Changed::Duplicate { index, key } => {
                     return Err(self.duplicated(rel.oid, info.unique.get(index), &key, work));

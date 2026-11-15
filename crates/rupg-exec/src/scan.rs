@@ -27,7 +27,7 @@ const CMIN_ATTNUM: i16 = -3;
 const CMAX_ATTNUM: i16 = -5;
 
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
-const CTID_ATTNUM: i16 = -1;
+pub(crate) const CTID_ATTNUM: i16 = -1;
 
 /// The bits of the ID of a version that are its item pointer, `(page << 16) | item`. The bits above them are the generation of the heap of the table.
 const ITEM_POINTER_MASK: i64 = (1 << 48) - 1;

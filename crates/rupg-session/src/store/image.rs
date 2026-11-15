@@ -25,7 +25,7 @@ const LOG_LIMIT: u64 = 256 << 20;
 const RELEASE_EVERY: Duration = Duration::from_secs(1);
 
 /// The version of the form of an image. An image of another version does not load.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// The place of the image of a store: the file and the I/O that writes it, and the log of the commits after the image.
 #[derive(Debug)]

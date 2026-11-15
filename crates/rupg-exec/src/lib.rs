@@ -1134,7 +1134,7 @@ impl Cache {
         let found = (|| {
             if func >= FIRST_NORMAL_OID
                 || populates(func)
-                || func == PG_COLUMN_SIZE
+                || matches!(func, PG_COLUMN_SIZE | PG_COLUMN_COMPRESSION | PG_COLUMN_TOAST_CHUNK_ID)
                 || session.catalog().is_some_and(|c| c.function(func).is_some())
                 || runs_body(func)
             {
@@ -3962,6 +3962,28 @@ impl<'a> Eval<'a> {
         {
             return rupg_func::column_size(arg.ty, value, true);
         }
+        // `pg_column_compression` and `pg_column_toast_chunk_id` of a column read how the version of the row keeps the value.
+        if matches!(f.oid, PG_COLUMN_COMPRESSION | PG_COLUMN_TOAST_CHUNK_ID)
+            && let ([arg], [value]) = (&exprs[..], &args[..])
+            && let ExprKind::Var(var) = &arg.kind
+            && var.attnum > 0
+            && !value.is_null()
+        {
+            let form = self.toast_form(*var)?;
+            return Ok(match form {
+                Some(rupg_func::ToastForm { method: Some(method), .. })
+                    if f.oid == PG_COLUMN_COMPRESSION =>
+                {
+                    Value::Text(method.into())
+                }
+                Some(rupg_func::ToastForm { chunk: Some(chunk), .. })
+                    if f.oid == PG_COLUMN_TOAST_CHUNK_ID =>
+                {
+                    Value::Oid(chunk)
+                }
+                _ => Value::Null,
+            });
+        }
         if matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
             && let Some(ret) = cast_result(f.oid, expr.ty)
         {
@@ -3969,6 +3991,30 @@ impl<'a> Eval<'a> {
             return Ok(relabel(self.call(f.oid, &types, ret, f.variadic, &args)?, expr.ty));
         }
         self.call(f.oid, &types, expr.ty, f.variadic, &args)
+    }
+
+    /// How the version of the row of the column `var` keeps the value of the column, from the ID of the version and the OID of its table. A row that is not a version of a table of the user has no form.
+    fn toast_form(&self, var: Var) -> Result<Option<rupg_func::ToastForm>> {
+        let (tables, tuple) = if var.levels_up == 0 {
+            (self.tables, self.tuple)
+        } else {
+            let frame = self
+                .outer
+                .len()
+                .checked_sub(var.levels_up)
+                .and_then(|i| self.outer.get(i))
+                .ok_or_else(|| Error::internal("a column of an outer query has no row"))?;
+            (frame.tables, frame.tuple)
+        };
+        let Some(&relation) = tables.oids.get(var.relation) else { return Ok(None) };
+        let tid = tables.var(tuple, Var { attnum: scan::CTID_ATTNUM, ..var });
+        let leaf = tables.var(tuple, Var { attnum: rupg_analyze::TABLE_OID_ATTNUM, ..var });
+        Ok(match (tid, leaf) {
+            (Value::Int8(tid), Value::Oid(leaf)) if leaf >= FIRST_NORMAL_OID => {
+                self.session.toast_form(relation, leaf, tid, var.attnum)
+            }
+            _ => None,
+        })
     }
 
     /// [`Eval::func`] for a call in a collation of ICU, as `<` of `text` in `en-x-icu`: the kernel gets the collation, as `fncollation` gives it to the function. The analyzer gives a collation of ICU only to a built-in function.
@@ -5093,6 +5139,10 @@ mod tests;
 /// Whether `ty` is `point`, `lseg`, `box` or `line`, or a domain over one of them: a type of fixed length whose subscripts `raw_array_subscript_handler` reads.
 /// The OID of `pg_column_size`.
 const PG_COLUMN_SIZE: u32 = 1269;
+/// `pg_column_compression(any)`.
+const PG_COLUMN_COMPRESSION: u32 = 2121;
+/// `pg_column_toast_chunk_id(any)`.
+const PG_COLUMN_TOAST_CHUNK_ID: u32 = 6316;
 
 /// The OID of `satisfies_hash_partition`, which reads the partition key of the table. [`partition::satisfies_hash_partition`] runs it with no kernel.
 const SATISFIES_HASH_PARTITION: u32 = 5028;
