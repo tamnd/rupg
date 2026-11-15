@@ -277,19 +277,11 @@ impl Analyzer<'_> {
         self.lookup_collation(list, at, true)
     }
 
-    /// The collation of ICU of the inputs of a call, or 0, with the relations of the query that the analyzer reads now.
-    pub(crate) fn icu_input(&self, args: &[Expr]) -> u32 {
+    /// `inputcollid` of a call of the function `func` when the function orders strings, maps their case or matches a pattern in a collation of ICU, [`crate::INDETERMINATE_COLLATION`] when the function needs a collation and its inputs have none, or 0.
+    pub(crate) fn call_collation(&self, func: u32, args: &[Expr]) -> u32 {
         let mut levels = vec![&self.scope.relations[..]];
         levels.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
-        crate::collate::icu_input(args, &levels, self.env.catalog())
-    }
-
-    /// `inputcollid` of a call of the function `func` when the function orders strings, maps their case or matches a pattern in a collation of ICU, or 0.
-    pub(crate) fn call_collation(&self, func: u32, args: &[Expr]) -> u32 {
-        if crate::collate::collation_use(func) == crate::collate::Use::None {
-            return 0;
-        }
-        self.icu_input(args)
+        crate::collate::call_input(func, args, &levels, &self.sub_collations, self.env.catalog())
     }
 
     /// `inputcollid` of a call of the built-in aggregate `agg`, which its transition function reads, as [`Analyzer::call_collation`] gives it. An aggregate of `CREATE AGGREGATE` has none.

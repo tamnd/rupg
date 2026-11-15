@@ -3235,6 +3235,9 @@ impl<'a> Eval<'a> {
                 _ => Err(Error::internal("a function in FROM did not give a row")),
             };
         }
+        if f.collation == rupg_analyze::INDETERMINATE_COLLATION {
+            return Err(indeterminate(f.oid));
+        }
         let kernel = set_kernel(f.oid, call.location)?;
         let c = Call {
             session: self.session,
@@ -3805,6 +3808,14 @@ impl<'a> Eval<'a> {
             return Ok(None);
         }
         let Some(pairs) = hash_pairs(test) else { return Ok(None) };
+        // `hashtext` with no collation: the hash table fails at the first row of the subquery.
+        let mut collation = |e: &Expr, _| {
+            matches!(&e.kind, ExprKind::Func(f) if f.collation == rupg_analyze::INDETERMINATE_COLLATION)
+                .then_some(())
+        };
+        if test.find(0, &mut collation).is_some() && rows.iter().next().is_some() {
+            return Err(indeterminate(HASHTEXT));
+        }
         let found = self
             .cache
             .hashed
@@ -3980,6 +3991,9 @@ impl<'a> Eval<'a> {
         collation: u32,
         args: &[Value],
     ) -> Result<Value> {
+        if collation == rupg_analyze::INDETERMINATE_COLLATION {
+            return Err(indeterminate(func));
+        }
         let kernel = kernel(func, None)?;
         let call =
             Call { session: self.session, args: types, ret, variadic, want: None, collation };
@@ -5002,6 +5016,15 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         }
     }
     Ok(None)
+}
+
+/// `hashtext`.
+const HASHTEXT: u32 = 400;
+
+/// The error of the built-in function `func` when the analyzer found no collation for its inputs, [`rupg_analyze::INDETERMINATE_COLLATION`]: the error of `check_collation_set` or of the function's own check, which PostgreSQL gives when a row reaches the call.
+pub(crate) fn indeterminate(func: u32) -> Error {
+    rupg_analyze::indeterminate(func)
+        .unwrap_or_else(|| Error::internal("a function with no collation that needs none"))
 }
 
 /// The result type of the cast function `func` when it is not the base type of the target `ty`, such as `int4` for the cast of `int2` to `oid`.

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `collate`: a comparison, sort, aggregate or hash of strings with conflicting implicit collations fails with "could not determine which collation to use" when a row reaches it, as in PostgreSQL (#1584)
 - `debug_parallel_query = on`: `EXPLAIN` shows a `Gather` with one worker and `Single Copy` on top of a plan that a worker can run, with the `InitPlan` nodes of the top node and the costs of `standard_planner`, and none for a cursor or a plan with a restricted function, a temporary table, a subquery with `LIMIT`, a query of `WITH`, a lock of rows, a window function or a correlated subplan (#1583)
 - SQL functions: one column that takes an assignment cast to the composite result type of a function is the whole row, as `check_sql_fn_retval` tests it, and the output arguments of a procedure stay its columns, so that `CALL` of a procedure with one composite `INOUT` argument gives the row of `SELECT ROW(1, 2)` as its value (#1582)
 - `substring(x from s for n)` and `substring(x from s)` with constants for `s` and `n`, as in TPC-H Q22, now cut the text of each code of a column one time in the vector scan, and the result is a column of codes. Before, the expression ran on each row (#1581).

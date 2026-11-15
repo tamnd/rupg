@@ -127,7 +127,20 @@ impl Analyzer<'_> {
                         location: None,
                     })
                     .collect();
-                let test = self.row_comparison(&op_names, left, right, at)?;
+                let mut inner = vec![&query.relations[..]];
+                inner.push(&self.scope.relations[..]);
+                inner.extend(self.outer.iter().rev().map(|s| &s.relations[..]));
+                let catalog = self.env.catalog();
+                let collations = query
+                    .targets
+                    .iter()
+                    .filter(|t| !t.junk)
+                    .map(|t| crate::collate::expr_collation(&t.expr, &inner, catalog))
+                    .collect();
+                let saved = std::mem::replace(&mut self.sub_collations, collations);
+                let test = self.row_comparison(&op_names, left, right, at);
+                self.sub_collations = saved;
+                let test = test?;
                 (oid::BOOL, -1, Some(test))
             }
         };

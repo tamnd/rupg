@@ -1,0 +1,68 @@
+> CREATE TABLE t (a int, x text COLLATE "C", y text COLLATE "POSIX")
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'hij', 'hij'), (2, 'HIJ', 'HIJ')
+INSERT 0 2
+> SELECT x < y FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT x < y FROM t WHERE false
+fields ?column?:16:1:-1
+SELECT 0
+> SELECT x = y FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT x || y FROM t ORDER BY a
+fields ?column?:25:-1:-1
+row hijhij
+row HIJHIJ
+SELECT 2
+> SELECT x LIKE y FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for LIKE
+> SELECT x ILIKE y FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for ILIKE
+> SELECT x ~ y FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for regular expression
+> SELECT upper(x || y) FROM t
+fields upper:25:-1:-1
+ERROR 42P22 could not determine which collation to use for upper() function
+> SELECT greatest(x, y) FROM t
+fields greatest:25:-1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT (x, 1) < (y, 2) FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT x = ANY (ARRAY[y]) FROM t
+fields ?column?:16:1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT max(x || y) FROM t
+fields max:25:-1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT max(x || y) FROM t WHERE a = 1
+fields max:25:-1:-1
+row hijhij
+SELECT 1
+> SELECT x < y COLLATE "C" FROM t ORDER BY a
+fields ?column?:16:1:-1
+row f
+row f
+SELECT 2
+> SELECT x FROM t UNION ALL SELECT y FROM t ORDER BY 1
+fields x:25:-1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT * FROM (SELECT x FROM t UNION ALL SELECT y FROM t) s ORDER BY 1
+fields x:25:-1:-1
+ERROR 42P22 could not determine which collation to use for string comparison
+> SELECT x FROM (SELECT x FROM t UNION ALL SELECT y FROM t) s WHERE x < 'b' ORDER BY x COLLATE "C"
+fields x:25:-1:-1
+row HIJ
+row HIJ
+SELECT 2
+> SELECT * FROM t WHERE (x, y) NOT IN (SELECT y, x FROM t)
+fields a@t.1:23:4:-1,x@t.2:25:-1:-1,y@t.3:25:-1:-1
+ERROR 42P22 could not determine which collation to use for string hashing
+> SELECT * FROM t WHERE (x COLLATE "POSIX", y COLLATE "C") NOT IN (SELECT y, x FROM t)
+fields a@t.1:23:4:-1,x@t.2:25:-1:-1,y@t.3:25:-1:-1
+SELECT 0

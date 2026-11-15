@@ -65,6 +65,7 @@ use crate::coerce::AtOpt;
 
 pub use call::OutArg;
 pub use coerce::{Context, Path, can_coerce, explicit_cast, find_path};
+pub use collate::{INDETERMINATE_COLLATION, indeterminate};
 pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
@@ -466,6 +467,8 @@ pub(crate) struct Analyzer<'a> {
     has_aggs: bool,
     /// For each scope of `outer`, the part of that query that has the subquery and `p_hasAggs` of that query. The part is `None` for a subquery in `FROM`.
     outer_kinds: Vec<(Option<agg::Kind>, bool)>,
+    /// The collations of the columns of the subquery of `ANY`, `ALL` or a row comparison while the analyzer builds its test, as `paramcollid` gives each `Param` of the test, with 0 for a column with no collation.
+    sub_collations: Vec<u32>,
     /// `p_windowdefs`: the windows of the `WINDOW` clause of the query, then the windows of its `OVER` clauses.
     windowdefs: Vec<rupg_sql::nodes::WindowDef>,
     /// `p_hasWindowFuncs`: true when the query has a call of a window function.
@@ -554,6 +557,7 @@ impl<'a> Analyzer<'a> {
             kind: agg::Kind::Other,
             has_aggs: false,
             outer_kinds: Vec::new(),
+            sub_collations: Vec::new(),
             windowdefs: Vec::new(),
             has_windows: false,
             keep_unknowns: false,

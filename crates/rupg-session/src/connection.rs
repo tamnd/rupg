@@ -10826,6 +10826,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/debug_parallel_gather.test")));
     }
 
+    /// A comparison, a pattern match, a case mapping, a sort, an aggregate or a hash of strings whose inputs have a conflict of implicit collations, or a column of `UNION ALL` with one, fails when a row reaches it, as `check_collation_set` fails with an `inputcollid` of 0, and works with `COLLATE`. A strict transition function does not run for the first value, so `max` of one row works. `connection/collation_indeterminate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn collation_indeterminate() {
+        big_stack(|| script(include_str!("connection/collation_indeterminate.test")));
+    }
+
     /// `CALL` in PL/pgSQL: the values of `INOUT` and `OUT` arguments go back to the variables and to the fields of records, with named arguments and defaults, a `CALL` in a procedure and in a function, and the errors of an argument that is not a variable, of a `CONSTANT` and of a cast. `FOUND` does not change. `connection/plpgsql_call.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plpgsql_call() {

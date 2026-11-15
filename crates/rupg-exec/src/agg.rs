@@ -450,6 +450,11 @@ impl Agg<'_> {
                         return Ok(());
                     }
                 }
+                // A transition function that needs a collation gives its error at its first call, which a strict function does not get for the first value.
+                if self.agg.collation == rupg_analyze::INDETERMINATE_COLLATION {
+                    let trans = builtin::aggregate(self.agg.oid).map(|a| a.transfn);
+                    return Err(crate::indeterminate(trans.unwrap_or(0)));
+                }
                 let state = std::mem::replace(value, Value::Null);
                 // Most aggregates have one argument or none, which need no vectors for each row.
                 *value = match args {

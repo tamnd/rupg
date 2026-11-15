@@ -1408,7 +1408,9 @@ impl Explainer<'_, '_> {
             let mut text = self.items(scope, std::slice::from_ref(&key.item), prefix)?.remove(0);
             // `show_sortorder_options`: a collation that is not the collation of the type.
             let own = rupg_analyze::types::row(key.item.expr.ty).map_or(0, |t| t.collation);
-            if key.collation != 0 && key.collation != own {
+            if !matches!(key.collation, 0 | rupg_analyze::INDETERMINATE_COLLATION)
+                && key.collation != own
+            {
                 text.push_str(" COLLATE ");
                 text.push_str(&self.texts.quote(&self.texts.collation_name(key.collation)));
             }
