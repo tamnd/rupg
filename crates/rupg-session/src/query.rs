@@ -2482,6 +2482,10 @@ impl Env for Reader<'_> {
         transition.rows(name).map(|_| transition.rows.table)
     }
 
+    fn transition_tuples(&self, name: &str) -> Option<f64> {
+        self.transition.as_ref()?.rows(name).map(|rows| rows.len() as f64)
+    }
+
     fn allow_system_table_mods(&self) -> bool {
         self.settings().get_of(guc::known!("allow_system_table_mods")).as_deref() == Some("on")
     }

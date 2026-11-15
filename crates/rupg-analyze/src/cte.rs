@@ -55,6 +55,8 @@ pub struct CteRef {
     pub origins: Vec<Option<(u32, i16)>>,
     /// True for a transition table of the trigger that runs, as a `RangeTblEntry` of the kind `RTE_NAMEDTUPLESTORE`. The relation then has no subquery, and its rows are the old or the new rows of the write that fired the trigger.
     pub transition: bool,
+    /// `enrtuples`: for a transition table, the number of its rows when the query was analyzed, or `None` when it is not known.
+    pub tuples: Option<f64>,
 }
 
 /// A query of `WITH` in the scope of a query, as an item of `p_ctenamespace`.
@@ -740,6 +742,7 @@ impl Analyzer<'_> {
                 write: Some(write),
                 origins: item.origins.clone(),
                 transition: false,
+                tuples: None,
             });
             let alias = rv.alias.as_deref();
             let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
@@ -764,6 +767,7 @@ impl Analyzer<'_> {
             write: None,
             origins: Vec::new(),
             transition: false,
+            tuples: None,
         });
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
@@ -808,6 +812,7 @@ impl Analyzer<'_> {
             write: None,
             origins: Vec::new(),
             transition: true,
+            tuples: self.env.transition_tuples(name),
         });
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();

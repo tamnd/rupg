@@ -679,6 +679,10 @@ impl Env for SchemaEnv<'_> {
         if self.transitions { self.env.transition_table(name) } else { None }
     }
 
+    fn transition_tuples(&self, name: &str) -> Option<f64> {
+        if self.transitions { self.env.transition_tuples(name) } else { None }
+    }
+
     fn database(&self) -> String {
         self.env.database()
     }

@@ -1,0 +1,25 @@
+> create table ttb (id int primary key, val text)
+CREATE TABLE
+> create function ttb_ins() returns trigger language plpgsql as $$ declare l text; begin for l in execute 'explain (timing off, costs off, verbose on) select * from newtable' loop raise notice '%', l; end loop; return new; end; $$
+CREATE FUNCTION
+> create trigger ttb_ins after insert on ttb referencing new table as newtable for each statement execute procedure ttb_ins()
+CREATE TRIGGER
+> insert into ttb values (1, 'One'), (2, 'Two')
+NOTICE 00000 Named Tuplestore Scan (PL/pgSQL function ttb_ins() line 1 at RAISE)
+NOTICE 00000   Output: id, val (PL/pgSQL function ttb_ins() line 1 at RAISE)
+INSERT 0 2
+> create function ttb_upd() returns trigger language plpgsql as $$ declare l text; begin for l in execute 'explain (timing off, costs off, verbose on) select * from oldtable ot full join newtable nt using (id)' loop raise notice '%', l; end loop; return new; end; $$
+CREATE FUNCTION
+> create trigger ttb_upd after update on ttb referencing old table as oldtable new table as newtable for each statement execute procedure ttb_upd()
+CREATE TRIGGER
+> update ttb set val = '*' || val || '*' where id between 1 and 2
+NOTICE 00000 Hash Full Join (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000   Output: COALESCE(ot.id, nt.id), ot.val, nt.val (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000   Hash Cond: (ot.id = nt.id) (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000   ->  Named Tuplestore Scan (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000         Output: ot.id, ot.val (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000   ->  Hash (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000         Output: nt.id, nt.val (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000         ->  Named Tuplestore Scan (PL/pgSQL function ttb_upd() line 1 at RAISE)
+NOTICE 00000               Output: nt.id, nt.val (PL/pgSQL function ttb_upd() line 1 at RAISE)
+UPDATE 2

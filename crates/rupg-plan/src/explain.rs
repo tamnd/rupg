@@ -380,7 +380,14 @@ impl Explainer<'_, '_> {
     ) -> Result<()> {
         let text = self.w.format == Format::Text;
         let save_indent = self.w.indent;
-        let n = names(&node.kind);
+        let mut n = names(&node.kind);
+        if self.tuplestore(node) {
+            n = Names {
+                pname: "Named Tuplestore Scan".to_string(),
+                sname: "Named Tuplestore Scan",
+                ..n
+            };
+        }
         if text {
             if let Some(name) = plan_name {
                 self.w.indent_text();
@@ -567,7 +574,18 @@ impl Explainer<'_, '_> {
     }
 
     /// The target of a scan or of a `ModifyTable`.
+    /// True for a scan of a transition table, a `NamedTuplestoreScan` and not a `CteScan`.
+    fn tuplestore(&self, node: &Node<'_>) -> bool {
+        let Kind::CteScan(r) = node.kind else { return false };
+        let query = self.plan.scopes[node.scope].query;
+        query.relations[r].cte.as_ref().is_some_and(|c| c.transition)
+    }
+
     fn target(&mut self, node: &Node<'_>) -> Option<Target> {
+        // `ExplainNode` names no relation for a `NamedTuplestoreScan`.
+        if self.tuplestore(node) {
+            return None;
+        }
         let scope = node.scope;
         let query = self.plan.scopes[scope].query;
         let relation_of = |index: usize| -> &Relation { &query.relations[index] };
@@ -698,7 +716,7 @@ impl Explainer<'_, '_> {
                 let own = Some(*r);
                 self.scan_qual("Filter", scope, &node.filter, self.options.verbose, own)?;
                 self.removed(node, "Rows Removed by Filter", 0);
-                if matches!(node.kind, Kind::CteScan(_)) {
+                if matches!(node.kind, Kind::CteScan(_)) && !self.tuplestore(node) {
                     self.storage(node);
                 }
             }

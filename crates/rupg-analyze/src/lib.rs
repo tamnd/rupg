@@ -176,6 +176,11 @@ pub trait Env {
         let _ = name;
         None
     }
+    /// `enrtuples`: the number of rows of the transition table `name` of the trigger that runs, which the planner takes as the size of the relation.
+    fn transition_tuples(&self, name: &str) -> Option<f64> {
+        let _ = name;
+        None
+    }
     /// `object_aclcheck` of `USAGE` on a schema for the current user. A session with no roles has each privilege.
     fn namespace_usage(&self, namespace: u32) -> bool {
         let _ = namespace;
