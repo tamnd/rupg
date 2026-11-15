@@ -1900,13 +1900,12 @@ fn run_query(
         .collect())
 }
 
-/// `make_sort_input_target`: for each target of a query with `ORDER BY` and no groups, no window and no `DISTINCT`, true when it runs above the sort, or an empty list when none does. A target that is not a key of the sort and calls a volatile function or a function that gives a set runs above the sort, in a `Result` or a `ProjectSet`. A function that gives a set in a key of the sort keeps them all below the sort here, and so does `WITH TIES` with a function that gives a set.
+/// `make_sort_input_target`: for each target of a query with `ORDER BY` and no groups and no window, true when it runs above the sort and `DISTINCT`, or an empty list when none does. A target that is not a key of the sort or of `DISTINCT` and calls a volatile function or a function that gives a set runs above them, in a `Result` or a `ProjectSet`. A function that gives a set in a key keeps them all below the sort here, and so does `WITH TIES` with a function that gives a set.
 fn late_targets(query: &Query) -> Vec<bool> {
     if query.sort.is_empty()
         || query.grouped
         || query.set_op.is_some()
         || query.write.is_some()
-        || !query.distinct.is_empty()
         || !window::calls(query).is_empty()
         || query.with_ties && query.has_target_srfs()
     {
@@ -1919,7 +1918,7 @@ fn late_targets(query: &Query) -> Vec<bool> {
         .enumerate()
         .map(|(at, target)| {
             let set = target.expr.first_set_call().is_some();
-            if query.sort.iter().any(|s| s.target == at) {
+            if query.sort.iter().chain(&query.distinct).any(|s| s.target == at) {
                 set_key |= set;
                 return false;
             }

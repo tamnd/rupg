@@ -6748,6 +6748,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/late_targets.test")));
     }
 
+    /// `make_sort_input_target` with `DISTINCT ON`: a target that is not a key of `DISTINCT ON` or of `ORDER BY` runs above the `Unique`, so the rows of `generate_series` come for each row that `DISTINCT ON` keeps, and `nextval` runs only for the rows that `Limit` reads. `connection/distinct_on_late.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn distinct_on_late() {
+        big_stack(|| script(include_str!("connection/distinct_on_late.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
