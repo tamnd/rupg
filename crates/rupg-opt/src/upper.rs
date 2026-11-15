@@ -384,6 +384,9 @@ fn steps<'q>(
         if costs.late {
             node = project_late(level, node, costs);
         }
+        if query.has_target_srfs() && !postponed(level).is_empty() {
+            node = project_set(level, node);
+        }
     }
     if !query.row_marks.is_empty() {
         let c = node.cost;
@@ -635,11 +638,7 @@ fn target_costs(level: &Level<'_>) -> Option<TargetCosts> {
 /// `make_sort_input_target`: for each target of the query, true when it comes after the sort, or an empty list when none does. With `ORDER BY`, a target that is not a key of the query and calls a volatile function, or costs more than 10 times `cpu_operator_cost`, can come after the sort. They all do when one of them is volatile, or when the query has `LIMIT` or reads a part of its rows.
 pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
     let query = level.query;
-    if query.sort.is_empty()
-        || level.no_targets
-        || query.set_op.is_some()
-        || query.write.is_some()
-        || query.has_target_srfs()
+    if query.sort.is_empty() || level.no_targets || query.set_op.is_some() || query.write.is_some()
     {
         return Vec::new();
     }
@@ -652,6 +651,22 @@ pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
         .chain(&query.group)
         .map(|s| s.target)
         .collect();
+    let srf = |at: usize| query.targets[at].expr.first_set_call().is_some();
+    if query.has_target_srfs() {
+        // `postpone_srfs`: the functions that give a set come after the sort when no key of the query gives a set, and the targets that are volatile or cost much come with them. The executor computes these targets in the same place.
+        if !query.distinct.is_empty() || keys.iter().any(|&at| srf(at)) {
+            return Vec::new();
+        }
+        return (0..query.targets.len())
+            .map(|at| {
+                let t = &query.targets[at];
+                !keys.contains(&at)
+                    && (srf(at)
+                        || exprs::volatile(&t.expr)
+                        || level.stats.qual_costs([&t.expr]).1 > 10.0 * cost::CPU_OPERATOR)
+            })
+            .collect();
+    }
     let late: Vec<(bool, bool)> = query
         .targets
         .iter()
@@ -668,6 +683,25 @@ pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
         return Vec::new();
     }
     late.into_iter().map(|(volatile, expensive)| volatile || expensive).collect()
+}
+
+/// The `ProjectSet` node that computes the functions of the targets that give a set, as `adjust_paths_for_srfs` adds it, below the sort or above it when [`postponed`] puts them after it.
+fn project_set<'q>(level: &Level<'q>, node: Node<'q>) -> Node<'q> {
+    let query = level.query;
+    let c = node.cost;
+    let rows = query.targets.iter().map(|t| set_rows(&t.expr)).fold(1.0, f64::max);
+    let per_row = cost::qual_cost(query.targets.iter().map(|t| &t.expr));
+    let out_rows = c.rows * rows;
+    let mut out = Node::new(Kind::ProjectSet, level.display, vec![node]);
+    out.cost = Cost {
+        startup: c.startup,
+        total: c.total
+            + (cost::CPU_TUPLE + per_row) * c.rows
+            + (out_rows - c.rows) * cost::CPU_TUPLE / 2.0,
+        rows: out_rows,
+        width: 0,
+    };
+    out
 }
 
 /// The node above the sort that computes the targets that come after it, as `apply_projection_to_path` in `create_ordered_paths`. A node that can compute its targets adds their costs, and a `Result` above the other nodes costs the targets and `cpu_tuple_cost` for each row, as `create_projection_path`.
@@ -1111,20 +1145,8 @@ impl<'q> Builder<'q> {
                 only &= query.grouping_sets.is_empty();
             }
             node = windows(level, node, &mut order, only, costs)?;
-            if query.has_target_srfs() {
-                let c = node.cost;
-                let rows = query.targets.iter().map(|t| set_rows(&t.expr)).fold(1.0, f64::max);
-                let per_row = cost::qual_cost(query.targets.iter().map(|t| &t.expr));
-                let out_rows = c.rows * rows;
-                node = Node::new(Kind::ProjectSet, scope, vec![node]);
-                node.cost = Cost {
-                    startup: c.startup,
-                    total: c.total
-                        + (cost::CPU_TUPLE + per_row) * c.rows
-                        + (out_rows - c.rows) * cost::CPU_TUPLE / 2.0,
-                    rows: out_rows,
-                    width: 0,
-                };
+            if query.has_target_srfs() && postponed(level).is_empty() {
+                node = project_set(level, node);
             }
         }
         let node = steps(level, node, &mut order, only, costs)?;
