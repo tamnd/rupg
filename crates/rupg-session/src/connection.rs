@@ -11984,6 +11984,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plpgsql_returns.test")));
     }
 
+    /// The check `shadowed_variables` of `plpgsql.extra_warnings` and `plpgsql.extra_errors` at `CREATE FUNCTION`: a variable with the name of an argument, of a variable of an outer block or of `found` is a warning or an error, with its place in the statement. A call and the code of `DO` make no check, as only the validator of PostgreSQL 19 does.
+    #[test]
+    fn plpgsql_shadow() {
+        big_stack(|| script(include_str!("connection/plpgsql_shadow.test")));
+    }
+
     /// `SET` of `CREATE FUNCTION` and `ALTER FUNCTION`: `proconfig` keeps each setting, `pg_get_functiondef` shows it, and a call runs with the settings, which go back at the end of the call, other than one that a `SET` in the call changed. `connection/fnset.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fnset() {

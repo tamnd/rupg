@@ -813,7 +813,7 @@ impl Env for SchemaEnv<'_> {
         self.env.access_temp();
     }
 
-    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<Vec<Error>> {
         self.env.check_function(function)
     }
 

@@ -1,0 +1,57 @@
+!details
+> SET plpgsql.extra_warnings TO 'shadowed_variables'
+SET
+> CREATE FUNCTION ps_args(in1 int) RETURNS TABLE (out1 int) LANGUAGE plpgsql AS $$
+>> DECLARE
+>> in1 int;
+>> out1 int;
+>> BEGIN
+>> END $$
+WARNING 42712 variable "in1" shadows a previously defined variable at 90
+WARNING 42712 variable "out1" shadows a previously defined variable at 99
+CREATE FUNCTION
+> SELECT ps_args(1)
+fields ps_args:23:4:-1
+SELECT 0
+> CREATE FUNCTION ps_inner() RETURNS void LANGUAGE plpgsql AS $$
+>> DECLARE
+>> f1 int;
+>> BEGIN
+>>   DECLARE
+>>   f1 int;
+>>   BEGIN
+>>   END;
+>> END $$
+WARNING 42712 variable "f1" shadows a previously defined variable at 98
+CREATE FUNCTION
+> CREATE FUNCTION ps_cursor() RETURNS void LANGUAGE plpgsql AS $$
+>> DECLARE
+>> f1 int;
+>> c1 CURSOR (f1 int) FOR SELECT 1;
+>> BEGIN
+>> END $$
+WARNING 42712 variable "f1" shadows a previously defined variable at 92
+CREATE FUNCTION
+> CREATE FUNCTION ps_found() RETURNS void LANGUAGE plpgsql AS $$ DECLARE found int; BEGIN END $$
+WARNING 42712 variable "found" shadows a previously defined variable at 72
+CREATE FUNCTION
+> DO $$ DECLARE x int; BEGIN DECLARE x int; BEGIN END; END $$
+DO
+> SET plpgsql.extra_errors TO 'shadowed_variables'
+SET
+> CREATE FUNCTION ps_error(f1 int) RETURNS boolean LANGUAGE plpgsql AS $$ DECLARE f1 int; BEGIN RETURN 1; END $$
+ERROR 42712 variable "f1" shadows a previously defined variable at 81
+> SELECT count(*) FROM pg_proc WHERE proname = 'ps_error'
+fields count:20:8:-1
+row 0
+SELECT 1
+> RESET plpgsql.extra_errors
+RESET
+> RESET plpgsql.extra_warnings
+RESET
+> CREATE FUNCTION ps_quiet(f1 int) RETURNS boolean LANGUAGE plpgsql AS $$ DECLARE f1 int := 1; BEGIN RETURN f1; END $$
+CREATE FUNCTION
+> SELECT ps_quiet(0)
+fields ps_quiet:16:1:-1
+row t
+SELECT 1

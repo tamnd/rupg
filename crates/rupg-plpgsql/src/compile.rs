@@ -51,6 +51,38 @@ pub(crate) struct Settings {
     pub(crate) conflict: Conflict,
     /// `plpgsql.print_strict_params`.
     pub(crate) print_strict_params: bool,
+    /// `shadowed_variables` of `plpgsql.extra_errors` or `plpgsql.extra_warnings`, which only the compile of the validator reads, as `do_compile` with `forValidator` does.
+    pub(crate) shadowed: Option<Check>,
+}
+
+/// The level of an extra check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Check {
+    Error,
+    Warning,
+}
+
+/// The level of the extra check `check` in the session `session`: an error when `plpgsql.extra_errors` names it, else a warning when `plpgsql.extra_warnings` names it.
+pub(crate) fn extra_level(session: &dyn Session, check: &str) -> Option<Check> {
+    let names =
+        |setting: &str| session.setting(setting).is_some_and(|value| extra_checks(&value, check));
+    if names("plpgsql.extra_errors") {
+        Some(Check::Error)
+    } else if names("plpgsql.extra_warnings") {
+        Some(Check::Warning)
+    } else {
+        None
+    }
+}
+
+/// True when the value `value` of `plpgsql.extra_errors` or `plpgsql.extra_warnings` names the check `check`: `all`, `none`, or a list of checks, as `plpgsql_extra_checks_check_hook` reads it.
+fn extra_checks(value: &str, check: &str) -> bool {
+    let names: Vec<String> = value.split(',').map(|n| n.trim().to_ascii_lowercase()).collect();
+    match names.as_slice() {
+        [one] if one == "all" => true,
+        [one] if one == "none" => false,
+        _ => names.iter().any(|n| n == check),
+    }
 }
 
 impl Settings {
@@ -64,7 +96,7 @@ impl Settings {
         let print_strict_params =
             session.setting("plpgsql.print_strict_params").and_then(|v| parse_bool(&v))
                 == Some(true);
-        Settings { conflict, print_strict_params }
+        Settings { conflict, print_strict_params, shadowed: None }
     }
 }
 
@@ -105,6 +137,16 @@ pub(crate) const TRIGGER_VARIABLES: [(&str, u32); 10] = [
 ///
 /// A syntax error at a byte offset in `src`. An error with no place gets the context of the line, as `plpgsql_compile_error_callback` adds it.
 pub(crate) fn compile(src: &str, env: &dyn Env, sig: &Signature, check: bool) -> Result<Function> {
+    compile_warned(src, env, sig, check).map(|(function, _)| function)
+}
+
+/// [`compile`], with the warnings of the compile, which have their places in `src`.
+pub(crate) fn compile_warned(
+    src: &str,
+    env: &dyn Env,
+    sig: &Signature,
+    check: bool,
+) -> Result<(Function, Vec<Error>)> {
     let mut c = Compiler {
         sc: Scanner::new(src),
         env,
@@ -122,8 +164,10 @@ pub(crate) fn compile(src: &str, env: &dyn Env, sig: &Signature, check: bool) ->
         latest: 0,
         conflict: sig.settings.conflict,
         print_strict_params: sig.settings.print_strict_params,
+        shadowed: sig.settings.shadowed,
+        warnings: Vec::new(),
     };
-    let result = c.function(sig);
+    let result = c.function(sig).map(|function| (function, std::mem::take(&mut c.warnings)));
     result.map_err(|e| {
         if e.position().is_some() {
             return e;
@@ -193,6 +237,10 @@ struct Compiler<'a> {
     conflict: Conflict,
     /// `print_strict_params`, which `#print_strict_params` can change.
     print_strict_params: bool,
+    /// The level of the check `shadowed_variables`.
+    shadowed: Option<Check>,
+    /// The warnings of the compile.
+    warnings: Vec<Error>,
 }
 
 /// True for a stop token of [`Compiler::read_sql`]: a character, `..`, or a keyword.
@@ -308,6 +356,28 @@ impl Compiler<'_> {
     ) -> Option<(usize, usize)> {
         let names: Vec<&str> = [n1].into_iter().chain(n2).chain(n3).collect();
         ns_lookup(&self.ns, &self.datums, self.top, local, &names)
+    }
+
+    /// `decl_varname` with the check `shadowed_variables`: a new variable `name` at `at` with the name of a variable of an outer block, or of an argument, is an error or a warning.
+    fn shadow(&mut self, name: &str, at: usize) -> Result<()> {
+        let Some(check) = self.shadowed else {
+            return Ok(());
+        };
+        if self.lookup(false, name, None, None).is_none() {
+            return Ok(());
+        }
+        let error = Error::new(
+            SqlState::DUPLICATE_ALIAS,
+            format!("variable \"{name}\" shadows a previously defined variable"),
+        )
+        .at(at);
+        match check {
+            Check::Error => Err(error),
+            Check::Warning => {
+                self.warnings.push(error.with_level(Level::Warning));
+                Ok(())
+            }
+        }
     }
 
     /// `plpgsql_ns_lookup_label`: the kind of the block or loop with the label `name`.
@@ -888,6 +958,7 @@ impl Compiler<'_> {
         if self.lookup(true, &name, None, None).is_some() {
             return Err(self.yyerror(&t, "duplicate declaration"));
         }
+        self.shadow(&name, t.start)?;
         let next = self.sc.peek()?;
         if next.is("alias") {
             self.sc.next()?;
@@ -990,6 +1061,7 @@ impl Compiler<'_> {
                 if self.lookup(true, &arg, None, None).is_some() {
                     return Err(self.yyerror(&t, "duplicate declaration"));
                 }
+                self.shadow(&arg, t.start)?;
                 let arg_line = self.lineno(t.start);
                 let (ty, typmod) = self.datatype()?;
                 let Some(kind) = self.datum_kind(ty, typmod) else {

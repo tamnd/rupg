@@ -16,6 +16,7 @@ use crate::ast::{
     Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, Opened, RaiseOption, Returned, Source,
     Stmt, StmtKind, Target, ns_lookup,
 };
+use crate::compile::{Check, extra_level};
 use crate::{Fetched, Spi, TriggerCall};
 
 /// The name, the type and the typmod of a field of a row or of a column of a result.
@@ -1689,16 +1690,7 @@ impl Exec<'_> {
 
     /// The level of the extra check `check` under `plpgsql.extra_errors` and `plpgsql.extra_warnings`, or `None` when neither names it.
     fn extra_check(&self, check: &str) -> Option<Check> {
-        let names = |setting: &str| {
-            self.session().setting(setting).is_some_and(|value| extra_checks(&value, check))
-        };
-        if names("plpgsql.extra_errors") {
-            Some(Check::Error)
-        } else if names("plpgsql.extra_warnings") {
-            Some(Check::Warning)
-        } else {
-            None
-        }
+        extra_level(self.session(), check)
     }
 
     /// The error `error` of a check at the level `check`: an error, or a warning that goes to the client.
@@ -2432,23 +2424,6 @@ fn must_return_tuples(error: Error) -> Error {
 const TOO_MANY_ROWS: &str = "too_many_rows";
 /// The extra check of a row into a target with another count of fields.
 const STRICT_MULTI_ASSIGNMENT: &str = "strict_multi_assignment";
-
-/// The level of an extra check.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Check {
-    Error,
-    Warning,
-}
-
-/// True when the value `value` of `plpgsql.extra_errors` or `plpgsql.extra_warnings` names the check `check`: `all`, `none`, or a list of checks, as `plpgsql_extra_checks_check_hook` reads it.
-fn extra_checks(value: &str, check: &str) -> bool {
-    let names: Vec<String> = value.split(',').map(|n| n.trim().to_ascii_lowercase()).collect();
-    match names.as_slice() {
-        [one] if one == "all" => true,
-        [one] if one == "none" => false,
-        _ => names.iter().any(|n| n == check),
-    }
-}
 
 /// The order of the variables in `format_expr_params`: a field after its record.
 fn binding_order(b: &Binding) -> (usize, Option<&str>) {

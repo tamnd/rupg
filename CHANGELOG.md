@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- PL/pgSQL: `shadowed_variables` in `plpgsql.extra_warnings` or `plpgsql.extra_errors` makes `CREATE FUNCTION` warn or fail on a variable that has the name of an argument, of a variable of an outer block, or of `found`, with the place of the name in the statement (#1578).
 - In the join of the vectors, a table with its own `EXISTS` or `NOT EXISTS`, as `lineitem l1` of TPC-H Q21, is now read after the other tables. The other tables first remove the rows that join no row of a table next to them, and their keys then select the rows of the table before its subqueries run. A long `IN` list of integers now finds a value with a binary search, in the test of the zones and in the test of the rows (#1577).
 - A compare of a `char(n)` column with a constant (`=`, `<>`, `IN` and `NOT IN`), as in TPC-H Q12, Q16 and Q19, now tests each code of the column dictionary one time and keeps the result for the next batches. Before, each row compared its text with the constant (#1576).
 - A `HAVING` of one comparison of a `count` or a `sum` with a constant, as `sum(l_quantity) > 300` in TPC-H Q18, now tests the state of each group in the scan of one table, with no value of the call and no evaluation of the expression for each group (#1575).
