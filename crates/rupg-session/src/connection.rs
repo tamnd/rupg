@@ -495,6 +495,8 @@ pub struct Connection {
     calls: plpgsql::Calls,
     /// The queue of the triggers `AFTER` of the statement.
     events: RefCell<Vec<trigger::Event>>,
+    /// The number of the next event of [`Connection::events`], which tells the events that were in the queue before a pass of the triggers of the foreign keys.
+    event_serial: Cell<u64>,
     /// The state of the triggers of each event of a table in the query and in each query of a function that runs inside it, as `query_stack` of `AfterTriggersData`.
     trigger_tables: RefCell<Vec<Vec<trigger::TableData>>>,
     /// The tables that the writes of the statement and of the queries of its functions have open, as `rd_refcnt` counts the references of the executors to a relation.
@@ -627,6 +629,7 @@ impl Connection {
             plpgsql: rupg_plpgsql::Cache::default(),
             calls: plpgsql::Calls::default(),
             events: RefCell::new(Vec::new()),
+            event_serial: Cell::new(0),
             trigger_tables: RefCell::new(vec![Vec::new()]),
             open_tables: RefCell::new(Vec::new()),
             merged: Cell::new([0; 3]),
@@ -9297,6 +9300,12 @@ mod tests {
     #[test]
     fn transition_explain() {
         big_stack(|| script(include_str!("connection/transition_explain.test")));
+    }
+
+    /// The triggers of the foreign keys fire in passes, as `AfterTriggerEndQuery` does: a row trigger `AFTER DELETE` whose name sorts after `RI_ConstraintTrigger` fires after the cascade of its row and before the cascades of the rows that the cascade deleted. It reads the transition table and closes it, so the next level of the cascade fills a new one and fires the trigger `BEFORE ... FOR EACH STATEMENT` again. With no row trigger, all the cascaded rows go to one transition table. The order of the messages is the order of the regression test `triggers` of PostgreSQL 19.
+    #[test]
+    fn trigger_cascade_passes() {
+        big_stack(|| script(include_str!("connection/trigger_cascade_passes.test")));
     }
 
     /// The deferred check of a foreign key that a statement dropped does nothing at the commit, as `AfterTriggerExecute` skips a dropped trigger.

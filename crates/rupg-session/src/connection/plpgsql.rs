@@ -160,7 +160,7 @@ impl<'a> PlSpi<'a> {
         } else {
             Vec::new()
         };
-        let fired = if batches.is_empty() { Ok(()) } else { self.conn.fire(batches) };
+        let fired = if batches.is_empty() { Ok(()) } else { self.conn.fire_in(batches, mark) };
         let fired = fired.and_then(|()| self.conn.recheck_unique(command));
         let fired = fired.and_then(|()| self.conn.fire_events(mark));
         self.forward_triggers(said);

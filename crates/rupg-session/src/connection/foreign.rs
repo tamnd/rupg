@@ -287,9 +287,36 @@ impl Connection {
     ///
     /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has. `23001` for an old key of `RESTRICT` that a row of the referencing table has. The errors of the statement of an action, with the statement in their context.
     pub(super) fn fire(&self, batches: Vec<Batch>) -> Result<(), Error> {
-        let tables: Vec<u32> = batches.iter().map(|b| b.table).collect();
-        self.fire_early_events(&tables)?;
-        self.fire_forced(batches, 0)
+        self.fire_in(batches, 0)
+    }
+
+    /// [`Connection::fire`] for a statement whose events start at the place `mark` of the queue. The triggers of the foreign keys fire in passes, as `AfterTriggerEndQuery` calls `afterTriggerInvokeEvents` until the queue is empty: the actions of the batches of a pass queue the batches of their writes for the next pass, and the events that were in the queue before the pass fire after the batches of the pass and before the next pass. A trigger that reads a transition table in a pass closes it, so the writes of the actions of the next pass fill a new one and fire the triggers `BEFORE ... FOR EACH STATEMENT` again.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Connection::fire`].
+    pub(super) fn fire_in(&self, batches: Vec<Batch>, mark: usize) -> Result<(), Error> {
+        let mut pass = VecDeque::from(batches);
+        loop {
+            let tables: Vec<u32> = pass.iter().map(|b| b.table).collect();
+            self.fire_early_events(&tables)?;
+            let serial = self.event_serial();
+            let mut next = VecDeque::new();
+            while let Some(batch) = pass.pop_front() {
+                let (now, later) = batch.split(&self.modes.borrow());
+                if let Some(later) = later {
+                    self.deferred.borrow_mut().push(later);
+                }
+                if let Some(now) = now {
+                    self.fire_batch(&now, &mut next)?;
+                }
+            }
+            if next.is_empty() {
+                return Ok(());
+            }
+            self.fire_events_before(mark, serial)?;
+            pass = next;
+        }
     }
 
     /// [`Connection::fire`] where the first `forced` batches fire even when their triggers are deferred, as `AfterTriggerFireDeferred` fires the queue of the transaction.
@@ -853,9 +880,14 @@ impl Connection {
         params: &[Value],
         queue: &mut VecDeque<Batch>,
     ) -> Result<bool, Error> {
-        let applied = self
-            .run_action(foreign, plan, params)
-            .map_err(|error| query::inner_error(error, &foreign.query))?;
+        let start = self.trigger_warnings.borrow().len();
+        let applied = self.run_action(foreign, plan, params);
+        // `_SPI_error_callback`: the messages of the triggers that the statement of the action fires have the statement in their context.
+        for warning in self.trigger_warnings.borrow_mut().iter_mut().skip(start) {
+            let inner = std::mem::replace(warning, Error::internal(""));
+            *warning = query::inner_error(inner, &foreign.query);
+        }
+        let applied = applied.map_err(|error| query::inner_error(error, &foreign.query))?;
         queue.extend(applied.batches);
         Ok(applied.count > 0)
     }

@@ -40,6 +40,8 @@ pub(super) struct Event {
     rows: Rc<Captured>,
     /// `ate_rolid`: the current user of the write, which the deferred trigger runs as.
     role: u32,
+    /// The place of the event in the order in which the writes queued the events, as [`Connection::event_serial`] numbers them.
+    serial: u64,
 }
 
 /// `AfterTriggersTableData`: the state of the triggers of one event of a table in one query. The writes of the query with the event on the table, as the statements of `WITH` and the actions of the foreign keys, fire the triggers `BEFORE ... FOR EACH STATEMENT` once, and the triggers `AFTER ... FOR EACH STATEMENT` once at the end, with the rows of all the writes.
@@ -844,6 +846,7 @@ impl Connection {
                     transition,
                     rows: Rc::clone(captured),
                     role: self.current_role(),
+                    serial: self.next_event_serial(),
                 });
             }
         }
@@ -882,6 +885,7 @@ impl Connection {
                     transition,
                     rows: Rc::clone(captured),
                     role: self.current_role(),
+                    serial: self.next_event_serial(),
                 });
             }
         }
@@ -1248,6 +1252,48 @@ impl Connection {
     /// The place at the end of the queue of the triggers `AFTER`.
     pub(super) fn event_mark(&self) -> usize {
         self.events.borrow().len()
+    }
+
+    /// The number of a new event of the queue.
+    fn next_event_serial(&self) -> u64 {
+        let serial = self.event_serial.get();
+        self.event_serial.set(serial + 1);
+        serial
+    }
+
+    /// The number that the next event of the queue gets. The events of the queue before it have lower numbers.
+    pub(super) fn event_serial(&self) -> u64 {
+        self.event_serial.get()
+    }
+
+    /// `afterTriggerInvokeEvents` for one pass of the queue: the events from the place `mark` that were in the queue before the event with the number `serial` fire in the order of the queue, and the later events stay in the queue for the next pass. After an error the queue goes back to the place.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn fire_events_before(&self, mark: usize, serial: u64) -> Result<(), Error> {
+        let events = {
+            let mut queue = self.events.borrow_mut();
+            let mark = mark.min(queue.len());
+            let (now, later): (Vec<Event>, Vec<Event>) =
+                queue.split_off(mark).into_iter().partition(|e| e.serial < serial);
+            queue.extend(later);
+            now
+        };
+        for event in events {
+            // `afterTriggerMarkEvents`: the event of a deferred constraint trigger goes to the queue of the transaction.
+            if event.trigger.deferrable && self.modes.borrow().trigger_deferred(&event.trigger) {
+                self.deferred_events.borrow_mut().push(event);
+                continue;
+            }
+            let rows = (event.old, event.new);
+            let fired = self.call_trigger(&event.trigger, event.event, rows, event.transition, &[]);
+            if let Err(error) = fired {
+                self.events.borrow_mut().truncate(mark);
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Runs `f` with a new reader, for the checks of the new rows after the triggers, and keeps the messages of `RAISE` of the functions of the checks after the messages of the triggers.
