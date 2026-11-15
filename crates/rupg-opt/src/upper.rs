@@ -653,8 +653,8 @@ pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
         .collect();
     let srf = |at: usize| query.targets[at].expr.first_set_call().is_some();
     if query.has_target_srfs() {
-        // `postpone_srfs`: the functions that give a set come after the sort when no key of the query gives a set, and the targets that are volatile or cost much come with them. The executor computes these targets in the same place.
-        if !query.distinct.is_empty() || keys.iter().any(|&at| srf(at)) {
+        // `postpone_srfs`: the functions that give a set come after the sort and `DISTINCT` when no key of the query gives a set, and the targets that are volatile or cost much come with them. The executor computes these targets in the same place.
+        if keys.iter().any(|&at| srf(at)) {
             return Vec::new();
         }
         return (0..query.targets.len())

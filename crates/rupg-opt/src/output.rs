@@ -394,13 +394,25 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let keys: Vec<Expr> = targets.into_iter().map(|t| level.target(t).clone()).collect();
             grouped(level, node, want, &keys, false);
         }
-        // `make_sort_input_target`: above a sort, the node computes the targets that come after it, and the sort gives the other targets and the inputs of those. Else the node below gives the columns of the targets.
+        // `make_sort_input_target`: above the sort, the node computes the targets that come after it, and the node below gives the other targets and the inputs of those. A scan of a relation below it gives the columns of the targets.
         Kind::ProjectSet => {
-            let sorted = node
-                .children
-                .first()
-                .is_some_and(|c| matches!(c.kind, Kind::Sort(_) | Kind::IncrementalSort { .. }));
-            let late = if sorted { upper::postponed(level) } else { Vec::new() };
+            let scan = node.children.first().is_some_and(|c| {
+                matches!(
+                    c.kind,
+                    Kind::SeqScan(_)
+                        | Kind::IndexScan { .. }
+                        | Kind::TidScan { .. }
+                        | Kind::BitmapHeapScan { .. }
+                        | Kind::SampleScan(_)
+                        | Kind::FunctionScan(_)
+                        | Kind::TableFunctionScan(_)
+                        | Kind::ValuesScan(_)
+                        | Kind::SubqueryScan(_)
+                        | Kind::CteScan(_)
+                        | Kind::WorkTableScan(_)
+                )
+            });
+            let late = if scan { Vec::new() } else { upper::postponed(level) };
             let is_late = |at: usize| late.get(at).copied().unwrap_or(false);
             let mut below = Vec::new();
             if late.is_empty() {
