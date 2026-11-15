@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` shows the `ProjectSet` of a function that gives a set above the sort when no key of the sort gives a set, as `make_sort_input_target` postpones it, and a scan right below a `ProjectSet` gives all the columns of its table, as `create_project_set_plan` asks for no target list. (#1589)
 - A target of a query with `ORDER BY` that calls a volatile function or a function that gives a set, and is not a key of the sort, runs after the sort for the rows that `LIMIT` reads, as `make_sort_input_target` postpones it: `nextval` no longer runs for every row of the table, and the rows of `generate_series` come after the sort. (#1588)
 - `pg_get_catalog_foreign_keys()` returns the 226 foreign keys of the system catalogs, generated from the catalog headers as `genbki.pl` writes `system_fk_info.h`, and the `pg_range` row of a range type made by `CREATE TYPE` has its five constructors. The `oidjoins` regression test passes. (#1587)
 - `pg_column_compression` and `pg_column_toast_chunk_id` read how the version of a row keeps a column: the heap keeps the method of each value that the toaster compressed and the ID of each value that it moved out of line. An update that keeps a value out of line keeps its ID, and `VACUUM FULL`, `CLUSTER` and `REPACK` keep the method of a compressed value and the ID of a value that they move again, as `toast_tuple_init` and `rd_toastoid` do. The image of a store has the version 4 (#1586)
