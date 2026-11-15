@@ -1,0 +1,34 @@
+> CREATE TABLE int8_tbl(q1 int8, q2 int8);
+CREATE TABLE
+> CREATE PROCEDURE ptest4c(INOUT comp int8_tbl) LANGUAGE SQL AS $$ SELECT ROW(1, 2); $$;
+CREATE PROCEDURE
+> CALL ptest4c(NULL);
+fields comp:16386:-1:-1
+row (1,2)
+CALL
+> CREATE PROCEDURE ptest4d(INOUT comp int8_tbl) LANGUAGE SQL AS $$ SELECT 1; SELECT ROW(3, 4); $$;
+CREATE PROCEDURE
+> CALL ptest4d(NULL);
+fields comp:16386:-1:-1
+row (3,4)
+CALL
+> CREATE FUNCTION f4e() RETURNS int8_tbl LANGUAGE SQL AS $$ SELECT ROW(5, 6); $$;
+CREATE FUNCTION
+> SELECT f4e();
+fields f4e:16386:-1:-1
+row (5,6)
+SELECT 1
+> SELECT * FROM f4e();
+fields q1:20:8:-1,q2:20:8:-1
+row 5,6
+SELECT 1
+> CREATE FUNCTION f4f(INOUT comp int8_tbl) LANGUAGE SQL AS $$ SELECT ROW(7, 8) ORDER BY 1; $$;
+ERROR 42846 cannot cast type record to int8_tbl (SQL function "f4f")
+> CREATE FUNCTION f4h(INOUT comp int8_tbl) LANGUAGE SQL AS $$ SELECT ROW(7, 8); $$;
+CREATE FUNCTION
+> SELECT * FROM f4h(NULL);
+fields q1:20:8:-1,q2:20:8:-1
+row 7,8
+SELECT 1
+> CREATE FUNCTION f4g() RETURNS int8_tbl LANGUAGE SQL AS $$ SELECT 1; $$;
+ERROR 42P13 return type mismatch in function declared to return int8_tbl (SQL function "f4g")

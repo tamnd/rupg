@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 
 use super::{Definer, Message, not_yet};
 use crate::agg::Kind;
-use crate::coerce::{AtOpt, Context};
+use crate::coerce::{AtOpt, Context, can_coerce};
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::select::{Query, Target};
@@ -561,7 +561,7 @@ fn statement_query(
         if rettype != oid::VOID && matches!(node, Node::CallStmt(_)) {
             return Err(no_final_query(rettype));
         }
-        an.result_columns(&mut query, rettype, &columns)?;
+        an.result_columns(&mut query, rettype, &columns, function.kind == b'p')?;
     }
     an.finish(query).map(Some)
 }
@@ -696,7 +696,13 @@ impl Analyzer<'_> {
     }
 
     /// The body of the statements `stmts`: a body of one `SELECT` with no locking clause is its query, as [`Analyzer::result_columns`] checks it, and the session runs the statements of another body one after the other.
-    fn list_body(&mut self, stmts: &[&Node], rettype: u32, columns: &[u32]) -> Result<Body> {
+    fn list_body(
+        &mut self,
+        stmts: &[&Node],
+        rettype: u32,
+        columns: &[u32],
+        procedure: bool,
+    ) -> Result<Body> {
         let [Node::SelectStmt(select)] = stmts else {
             return Ok(Body::Statements(columns.to_vec()));
         };
@@ -706,12 +712,18 @@ impl Analyzer<'_> {
         }
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
-        self.result_columns(&mut query, rettype, columns)?;
+        self.result_columns(&mut query, rettype, columns, procedure)?;
         Ok(Body::Query(Box::new(query)))
     }
 
-    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query, or of the `RETURNING` list of a write, must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type, and a function that returns `void` can give any columns. A write with no `RETURNING` gives no rows, so it can be the last statement only of a function that returns `void`.
-    fn result_columns(&mut self, query: &mut Query, rettype: u32, columns: &[u32]) -> Result<()> {
+    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query, or of the `RETURNING` list of a write, must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type or of a type with an assignment cast to it, but `procedure` gives its output arguments as the columns. A function that returns `void` can give any columns. A write with no `RETURNING` gives no rows, so it can be the last statement only of a function that returns `void`.
+    fn result_columns(
+        &mut self,
+        query: &mut Query,
+        rettype: u32,
+        columns: &[u32],
+        procedure: bool,
+    ) -> Result<()> {
         if rettype == oid::VOID {
             return Ok(());
         }
@@ -730,8 +742,13 @@ impl Analyzer<'_> {
         };
         let width = query.targets.iter().take_while(|t| !t.junk).count();
         let row = rettype == oid::RECORD || columns.len() != 1 || columns != [rettype];
+        // One column that has the row type, or takes an assignment cast to it, is the whole row. The output arguments of a procedure are always the columns, also one composite argument.
         let whole_row = [rettype];
-        let columns: &[u32] = if row && width == 1 && query.targets[0].expr.ty == rettype {
+        let columns: &[u32] = if row
+            && width == 1
+            && !procedure
+            && can_coerce(&[query.targets[0].expr.ty], &whole_row, Context::Assignment)
+        {
             &whole_row
         } else {
             columns
@@ -826,10 +843,12 @@ impl Analyzer<'_> {
         let (rettype, columns) = self.result_shape(function, inputs)?;
         match stmts {
             Statements::Return(value) => Ok(Body::Value(self.return_body(*value, rettype)?)),
-            Statements::Atomic(list) => self.list_body(list, rettype, &columns),
+            Statements::Atomic(list) => {
+                self.list_body(list, rettype, &columns, function.kind == b'p')
+            }
             Statements::String(list) => {
                 let list: Vec<&Node> = list.iter().map(|(node, _)| node).collect();
-                self.list_body(&list, rettype, &columns)
+                self.list_body(&list, rettype, &columns, function.kind == b'p')
             }
         }
     }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- SQL functions: one column that takes an assignment cast to the composite result type of a function is the whole row, as `check_sql_fn_retval` tests it, and the output arguments of a procedure stay its columns, so that `CALL` of a procedure with one composite `INOUT` argument gives the row of `SELECT ROW(1, 2)` as its value (#1582)
 - `substring(x from s for n)` and `substring(x from s)` with constants for `s` and `n`, as in TPC-H Q22, now cut the text of each code of a column one time in the vector scan, and the result is a column of codes. Before, the expression ran on each row (#1581).
 - Triggers: the triggers of the foreign keys fire in passes, so an `AFTER` row trigger fires between the levels of a cascade and closes its transition table, and the messages of the triggers of a cascade have its statement in their context (#1580)
 - PL/pgSQL: `EXPLAIN` of a transition table in a trigger function shows a `Named Tuplestore Scan`, and the planner sizes it by its rows (#1579)

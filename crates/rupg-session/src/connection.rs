@@ -10814,6 +10814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/procedures.test")));
     }
 
+    /// `check_sql_fn_retval`: one column that takes an assignment cast to the composite result type of a function is the whole row, but a sorted column of type `record` cannot take the cast. An output argument of a procedure is a column even when it is the only one and composite, so that `ROW(1, 2)` becomes its value. `connection/sql_function_whole_row.test` follows the case of `ptest4c` in the `create_procedure` regression test of PostgreSQL 19.
+    #[test]
+    fn sql_function_whole_row() {
+        big_stack(|| script(include_str!("connection/sql_function_whole_row.test")));
+    }
+
     /// `CALL` in PL/pgSQL: the values of `INOUT` and `OUT` arguments go back to the variables and to the fields of records, with named arguments and defaults, a `CALL` in a procedure and in a function, and the errors of an argument that is not a variable, of a `CONSTANT` and of a cast. `FOUND` does not change. `connection/plpgsql_call.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plpgsql_call() {
