@@ -638,6 +638,20 @@ fn trim_spaces(text: &[u8]) -> &[u8] {
     &text[..text.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1)]
 }
 
+/// The bytes of no more than `take` characters of the UTF-8 text `text` after its first `skip` characters, as `text_substr` cuts a text.
+fn cut_chars(text: &[u8], skip: usize, take: usize) -> &[u8] {
+    if text.is_ascii() {
+        let from = skip.min(text.len());
+        return &text[from..from.saturating_add(take).min(text.len())];
+    }
+    // The byte where the character `n` starts, or the length for a text with fewer characters.
+    let at = |t: &[u8], n: usize| {
+        t.iter().enumerate().filter(|&(_, &b)| b & 0xC0 != 0x80).nth(n).map_or(t.len(), |(i, _)| i)
+    };
+    let rest = &text[at(text, skip)..];
+    &rest[..at(rest, take)]
+}
+
 /// The value of the integer `v` of a column of the type `ty`.
 fn int_value(ty: u32, v: i64) -> Value {
     match ty {
@@ -712,6 +726,8 @@ struct Exec<'q> {
     int_sets: FxMap<*const Expr, (Option<lift::Keys>, bool)>,
     /// For each test of `bpchar` of [`Exec::padded_codes`], the dictionary of the column and the result for each code: 0 for a code that the test has not seen, 1 for a code that no element is equal to and 2 for a code that an element is equal to.
     padded: FxMap<*const Expr, (usize, Vec<u8>)>,
+    /// For each `substring` of [`Exec::substring`], the dictionary of the column, the dictionary of the results and the code of the result for each code of the column, 0 for a code that it has not seen.
+    substrings: FxMap<*const Expr, (usize, usize, Vec<u32>)>,
     /// The dictionary of each key of `GROUP BY` whose codes come from a map of [`key_map`] on the tasks.
     key_dicts: FxMap<*const Expr, usize>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
@@ -1382,6 +1398,9 @@ impl<'q> Exec<'q> {
                 {
                     return Ok(col);
                 }
+                if let Some(col) = self.substring(expr, src(func.oid), &func.args, batch, sel)? {
+                    return Ok(col);
+                }
                 if let Some(col) = self.func(expr, &func.args, src(func.oid), batch, sel)? {
                     return Ok(col);
                 }
@@ -1538,6 +1557,86 @@ impl<'q> Exec<'q> {
         let col = self.eval(column, batch, sel)?;
         let out = self.padded_codes(expr, &col, &[trim_spaces(text)], equal, Some(!equal));
         Ok(out.map(|out| Col::bools(&out)))
+    }
+
+    /// `substring(x from s for n)` and `substring(x from s)` of a column of codes of text, with integer constants for `s` and `n`, as `substring(c_phone from 1 for 2)` in TPC-H Q22. The text of each code is cut one time in the scan of a column of the table, and the result goes into a dictionary of the expression, so the result is also a column of codes. A `bpchar` column that `text` casts loses the spaces at its end first, as `rtrim1` does. `None` for other arguments and for a negative length, which gives its error in the other path.
+    fn substring(
+        &mut self,
+        expr: &Expr,
+        src: &str,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let (text, start, length) = match (src, args) {
+            ("text_substr", [text, start, length]) => (text, start, Some(length)),
+            ("text_substr_no_len", [text, start]) => (text, start, None),
+            _ => return Ok(None),
+        };
+        let constant = |e: &Expr| match &e.kind {
+            ExprKind::Const(v) => int_of(v),
+            _ => None,
+        };
+        let Some(start) = constant(start) else { return Ok(None) };
+        let length = match length.map(constant) {
+            None => None,
+            Some(Some(length)) if length >= 0 => Some(length),
+            Some(_) => return Ok(None),
+        };
+        let (column, trim) = match &text.kind {
+            ExprKind::Func(f) if !f.retset && f.args.len() == 1 && self::src(f.oid) == "rtrim1" => {
+                (&f.args[0], true)
+            }
+            _ => (text, false),
+        };
+        let col = self.eval(column, batch, sel)?;
+        let Data::Code(codes, d) = &col.data else { return Ok(None) };
+        let d = *d;
+        if !self.dicts[d].is_text() {
+            return Ok(None);
+        }
+        let key = std::ptr::from_ref(expr);
+        let stored = matches!(self.dicts[d], Dict::Stored(_));
+        let (own, mut memo) = match self.substrings.remove(&key) {
+            Some((at, own, memo)) if stored && at == d => (own, memo),
+            Some((_, own, _)) => (own, Vec::new()),
+            None => {
+                self.dicts.push(Dict::Own(Box::default()));
+                (self.dicts.len() - 1, Vec::new())
+            }
+        };
+        // The characters from `first` and before `end`, counted from 1, as `text_substr` takes them.
+        let first = start.max(1);
+        let end = length.map_or(i64::MAX, |length| start.saturating_add(length));
+        let skip = usize::try_from(first - 1).unwrap_or(usize::MAX);
+        let take =
+            if end <= first { 0 } else { usize::try_from(end - first).unwrap_or(usize::MAX) };
+        let Dict::Own(mut results) =
+            std::mem::replace(&mut self.dicts[own], Dict::Own(Box::default()))
+        else {
+            return Ok(None);
+        };
+        let dict = &self.dicts[d];
+        let mut out = Vec::with_capacity(codes.len());
+        for (i, &code) in codes.iter().enumerate() {
+            if code == 0 || col.null(i) {
+                out.push(0);
+                continue;
+            }
+            let at = code as usize;
+            if memo.len() <= at {
+                memo.resize(at + 1, 0);
+            }
+            if memo[at] == 0 {
+                let text = dict.text(code).unwrap_or_default();
+                let text = if trim { trim_spaces(text) } else { text };
+                memo[at] = results.intern(cut_chars(text, skip, take));
+            }
+            out.push(memo[at]);
+        }
+        self.dicts[own] = Dict::Own(results);
+        self.substrings.insert(key, (d, own, memo));
+        Ok(Some(Col { data: Data::Code(out, own), nulls: col.nulls.clone(), ty: expr.ty }))
     }
 
     /// The test of each row of a column of codes of `bpchar` against the texts of `wanted`, which are in order and have no spaces at their end: `equal` for a row whose text with no spaces at its end is in `wanted`, `other` for another row and `None` for a null. The bytes of each code are compared once in the scan for a column of the table, as PostgreSQL compares `bpchar` with no spaces at the end. `None` for another column.
@@ -3122,6 +3221,7 @@ pub(crate) fn run_on(
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
         padded: FxMap::default(),
+        substrings: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
@@ -3354,6 +3454,7 @@ pub(crate) fn selected(
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
         padded: FxMap::default(),
+        substrings: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),

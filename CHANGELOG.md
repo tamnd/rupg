@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `substring(x from s for n)` and `substring(x from s)` with constants for `s` and `n`, as in TPC-H Q22, now cut the text of each code of a column one time in the vector scan, and the result is a column of codes. Before, the expression ran on each row (#1581).
 - Triggers: the triggers of the foreign keys fire in passes, so an `AFTER` row trigger fires between the levels of a cascade and closes its transition table, and the messages of the triggers of a cascade have its statement in their context (#1580)
 - PL/pgSQL: `EXPLAIN` of a transition table in a trigger function shows a `Named Tuplestore Scan`, and the planner sizes it by its rows (#1579)
 - PL/pgSQL: `shadowed_variables` in `plpgsql.extra_warnings` or `plpgsql.extra_errors` makes `CREATE FUNCTION` warn or fail on a variable that has the name of an argument, of a variable of an outer block, or of `found`, with the place of the name in the statement (#1578).
