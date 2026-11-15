@@ -4177,7 +4177,7 @@ fn passes(test: &Test, null: bool, value: i64) -> bool {
         Test::Le(c) => key <= *c,
         Test::Gt(c) => key > *c,
         Test::Ge(c) => key >= *c,
-        Test::In(cs) => cs.contains(&key),
+        Test::In(cs) => cs.binary_search(&key).is_ok(),
         Test::Codes(bits) => u64::try_from(value).is_ok_and(|c| has_code(bits, c)),
     }
 }
