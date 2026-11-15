@@ -1,0 +1,194 @@
+> create function pst() returns int language plpgsql parallel safe as $$ begin return 1; end $$
+CREATE FUNCTION
+> create function pre() returns int language plpgsql parallel restricted as $$ begin return 1; end $$
+CREATE FUNCTION
+> create function pun() returns int language plpgsql as $$ begin return 1; end $$
+CREATE FUNCTION
+> create table t(a int, b text)
+CREATE TABLE
+> insert into t select g, g::text from generate_series(1, 10) g
+INSERT 0 10
+> create temp table tt(a int)
+CREATE TABLE
+> set debug_parallel_query = on
+SET
+> explain (verbose, costs off) select pst()
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Output: (pst())
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Result
+row         Output: pst()
+EXPLAIN
+> explain (verbose, costs off) select pre()
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: pre()
+EXPLAIN
+> explain (verbose, costs off) select pun()
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: pun()
+EXPLAIN
+> explain (costs off) select * from t where a = 1
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Seq Scan on t
+row         Filter: (a = 1)
+EXPLAIN
+> explain (costs off) select * from tt
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on tt
+EXPLAIN
+> explain (costs off) select (select 1)
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   InitPlan expr_1
+row     ->  Result
+row   ->  Result
+EXPLAIN
+> explain (verbose, costs off) select a, (select max(a) from t) from t
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Output: t.a, ((InitPlan expr_1).col1)
+row   Workers Planned: 1
+row   Single Copy: true
+row   InitPlan expr_1
+row     ->  Aggregate
+row           Output: max(t_1.a)
+row           ->  Seq Scan on public.t t_1
+row                 Output: t_1.a, t_1.b
+row   ->  Seq Scan on public.t
+row         Output: t.a, (InitPlan expr_1).col1
+EXPLAIN
+> explain (costs off) select * from t where a in (select a from t limit 3)
+fields QUERY PLAN:25:-1:-1
+row Hash Semi Join
+row   Hash Cond: (t.a = t_1.a)
+row   ->  Seq Scan on t
+row   ->  Hash
+row         ->  Limit
+row               ->  Seq Scan on t t_1
+EXPLAIN
+> explain (costs off) with w as materialized (select * from t) select * from w
+fields QUERY PLAN:25:-1:-1
+row CTE Scan on w
+row   CTE w
+row     ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select * from t for update
+fields QUERY PLAN:25:-1:-1
+row LockRows
+row   ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select row_number() over () from t
+fields QUERY PLAN:25:-1:-1
+row WindowAgg
+row   Window: w1 AS (ROWS UNBOUNDED PRECEDING)
+row   ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select * from t order by a limit 2
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Limit
+row         ->  Sort
+row               Sort Key: a
+row               ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select count(*) from t
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Aggregate
+row         ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select * from (select * from t limit 2) s
+fields QUERY PLAN:25:-1:-1
+row Limit
+row   ->  Seq Scan on t
+EXPLAIN
+> explain (costs off) select * from t union all select * from t
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Append
+row         ->  Seq Scan on t
+row         ->  Seq Scan on t t_1
+EXPLAIN
+> explain (costs off) select * from generate_series(1, 3)
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Function Scan on generate_series
+EXPLAIN
+> explain (costs off) values (1), (2)
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Values Scan on "*VALUES*"
+EXPLAIN
+> explain (costs off) select * from t where exists (select 1 from t t2 where t2.a = t.a)
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Hash Join
+row         Hash Cond: (t.a = t2.a)
+row         ->  Seq Scan on t
+row         ->  Hash
+row               ->  HashAggregate
+row                     Group Key: t2.a
+row                     ->  Seq Scan on t t2
+EXPLAIN
+> explain (costs off) select a, (select b from t t2 where t2.a = t.a) from t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+row   SubPlan expr_1
+row     ->  Seq Scan on t t2
+row           Filter: (a = t.a)
+EXPLAIN
+> explain (costs off) declare c cursor for select * from t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+EXPLAIN
+> explain (costs off) select * from pg_class where oid = 1
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Index Scan using pg_class_oid_index on pg_class
+row         Index Cond: (oid = '1'::oid)
+EXPLAIN
+> explain (costs off) select * from t tablesample bernoulli (50)
+fields QUERY PLAN:25:-1:-1
+row Gather
+row   Workers Planned: 1
+row   Single Copy: true
+row   ->  Sample Scan on t
+row         Sampling: bernoulli ('50'::real)
+EXPLAIN
+> set debug_parallel_query = regress
+SET
+> explain (costs off) select * from t where a = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+row   Filter: (a = 1)
+EXPLAIN
+> set debug_parallel_query = off
+SET
+> explain (costs off) select * from t where a = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t
+row   Filter: (a = 1)
+EXPLAIN

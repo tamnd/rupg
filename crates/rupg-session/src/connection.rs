@@ -10820,6 +10820,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sql_function_whole_row.test")));
     }
 
+    /// `debug_parallel_query = on`: `EXPLAIN` shows a `Gather` with one worker and `Single Copy` on top of a plan that a worker can run, with the `InitPlan` nodes of the top node, and no `Gather` for a function that is not safe, a temporary table, a subquery with `LIMIT`, a query of `WITH`, a lock of rows, a window function, a correlated subplan or a cursor. `connection/debug_parallel_gather.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn debug_parallel_gather() {
+        big_stack(|| script(include_str!("connection/debug_parallel_gather.test")));
+    }
+
     /// `CALL` in PL/pgSQL: the values of `INOUT` and `OUT` arguments go back to the variables and to the fields of records, with named arguments and defaults, a `CALL` in a procedure and in a function, and the errors of an argument that is not a variable, of a `CONSTANT` and of a cast. `FOUND` does not change. `connection/plpgsql_call.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plpgsql_call() {

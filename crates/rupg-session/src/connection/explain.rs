@@ -643,6 +643,8 @@ struct Parsed {
     query_id: i64,
     /// True for `DECLARE ... SCROLL CURSOR`, whose plan gets a `Material` node when it cannot scan backward.
     scroll: bool,
+    /// True for `DECLARE`, whose options have no `CURSOR_OPT_PARALLEL_OK`.
+    cursor: bool,
 }
 
 /// `ParseExplainOptionList`: the options of the statement and the checks of the options that need `ANALYZE`.
@@ -822,6 +824,7 @@ impl Connection {
             Node::CreateTableAsStmt(s) => s.query.as_ref(),
             Node::DeclareCursorStmt(s) => {
                 parsed.scroll = s.options & rupg_sql::nodes::CURSOR_OPT_SCROLL != 0;
+                parsed.cursor = true;
                 s.query.as_ref()
             }
             Node::ExecuteStmt(s) => return self.explain_execute(s, &parsed, notices),
@@ -960,6 +963,12 @@ impl Connection {
         // `standard_planner`: a cursor with `SCROLL` reads its rows from a `Material` node when the plan cannot scan backward.
         if parsed.scroll && !plan.backward_scan() {
             rupg_opt::materialize_finished(&mut tree);
+        }
+        // `debug_parallel_query = on` puts a `Gather` on top of a plan that a worker can run. With `regress` the `Gather` does not show, so the plan is the same with no `Gather`.
+        let debug_parallel =
+            guc::known!("debug_parallel_query").map(|p| reader.settings().setting(p));
+        if !parsed.cursor && matches!(debug_parallel, Some(guc::Setting::Enum(1))) {
+            rupg_opt::debug_gather(&mut tree, &query, &members);
         }
         let memory = parsed.memory.then(|| mark.since());
         if let Some(error) = members.error.take() {
