@@ -5,11 +5,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 
-use rupg_analyze::{Expr, ExprKind, Query, SubLink, SubLinkKind};
+use rupg_analyze::{Expr, ExprKind, Query, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Kind, Node};
 
-use crate::{Enable, cost};
+use crate::{Enable, Members, cost};
 
 /// The parallel safety of a function or of a query, as `proparallel`, in the order of `max_parallel_hazard_test`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,6 +136,53 @@ pub(crate) fn safe(expr: &Expr) -> bool {
         _ => {}
     }
     expr.children().into_iter().all(safe)
+}
+
+/// `top_plan->parallel_safe`: a worker can run the plan `root` of `query`. Each expression of the query and of the queries of its subqueries is [`safe`], each relation is one that `set_rel_consider_parallel` lets a worker read, and no node of the plan or of its subplans is one that only the leader can run: a `Gather`, a scan of a query of `WITH` or of the work table of a recursive query, or a lock of rows.
+pub(crate) fn plan_safe(query: &Query, members: &dyn Members, root: &Node<'_>) -> bool {
+    query_safe(query, members) && nodes_safe(root)
+}
+
+/// [`safe`] for each expression of the query and of the subqueries in them, and `set_rel_consider_parallel` for each relation of the query.
+fn query_safe(query: &Query, members: &dyn Members) -> bool {
+    query.exprs().into_iter().all(|expr| safe(expr) && sublinks_safe(expr, members))
+        && query.relations.iter().all(|relation| relation_safe(relation, members))
+}
+
+/// The queries of the subqueries in the expression are [`query_safe`], as the plan of an `InitPlan` must be.
+fn sublinks_safe(expr: &Expr, members: &dyn Members) -> bool {
+    if let ExprKind::SubLink(link) = &expr.kind
+        && !query_safe(&link.query, members)
+    {
+        return false;
+    }
+    expr.children().into_iter().all(|child| sublinks_safe(child, members))
+}
+
+/// `set_rel_consider_parallel`: a worker can read the relation. A query of `WITH`, a transition table and a temporary table are not, and a subquery is when it has no `LIMIT` and no `OFFSET` and its query is [`query_safe`].
+fn relation_safe(relation: &Relation, members: &dyn Members) -> bool {
+    if relation.cte.is_some() {
+        return false;
+    }
+    if let Some(sub) = &relation.subquery {
+        return sub.limit.is_none() && sub.offset.is_none() && query_safe(sub, members);
+    }
+    relation.oid == 0 || members.parallel(relation.oid).is_some()
+}
+
+/// No node of the plan or of its subplans is one that only the leader can run.
+fn nodes_safe(node: &Node<'_>) -> bool {
+    !matches!(
+        node.kind,
+        Kind::Gather { .. }
+            | Kind::GatherMerge { .. }
+            | Kind::CteScan(_)
+            | Kind::WorkTableScan(_)
+            | Kind::RecursiveUnion
+            | Kind::LockRows
+            | Kind::Modify { .. }
+    ) && node.children.iter().all(nodes_safe)
+        && node.init_plans.iter().chain(&node.sub_plans).all(|sub| nodes_safe(&sub.plan))
 }
 
 /// `compute_parallel_worker` for the heap of a base relation with `pages` pages: the `parallel_workers` option of the table when it has one, or else one worker, and one more each time that the table has three times the pages of the last threshold, from `min_parallel_table_scan_size`. A table with fewer pages than `min_parallel_table_scan_size` has no worker.

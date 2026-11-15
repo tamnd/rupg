@@ -533,6 +533,30 @@ pub fn materialize_finished(plan: &mut Plan<'_>) {
     plan.root = node;
 }
 
+/// `standard_planner` with `debug_parallel_query`: a `Gather` with one worker and `single_copy` on top of the plan `plan` of `query`, when the query can have a parallel plan and a worker can run the whole plan, as `top_plan->parallel_safe`. The `Gather` gives the target of the plan below, and the `InitPlan` nodes of the top node move to it, so that the `Gather` has their cost and the node below no longer does. The session runs the plan in one process, so the rows are the same.
+pub fn debug_gather(plan: &mut Plan<'_>, query: &Query, members: &dyn Members) {
+    let enable = members.enable();
+    if !parallel::mode_ok(&enable, query) || !parallel::plan_safe(query, members, &plan.root) {
+        return;
+    }
+    let placeholder = Node::new(Kind::Materialize, plan.root.scope, Vec::new());
+    let mut top = std::mem::replace(&mut plan.root, placeholder);
+    let c = top.cost;
+    let init_plans = std::mem::take(&mut top.init_plans);
+    let init_cost: f64 = init_plans.iter().map(|sub| sub.plan.cost.total).sum();
+    top.cost.startup -= init_cost;
+    top.cost.total -= init_cost;
+    let output = top.output.iter().map(Item::passed).collect();
+    let gather = Kind::Gather { workers: 1, single_copy: true };
+    let mut node = Node::new(gather, top.scope, vec![top]);
+    let startup = c.startup + enable.parallel_setup_cost;
+    let total = c.total + enable.parallel_setup_cost + enable.parallel_tuple_cost * c.rows;
+    node.cost = rupg_plan::Cost { startup, total, ..c };
+    node.output = output;
+    node.init_plans = init_plans;
+    plan.root = node;
+}
+
 /// The order of the rows of the joins of the plan `plan` of `query`, as `ExecNestLoop` and `ExecHashJoin` give them: the relations of the query from the outermost loop to the innermost one, each with true when its rows come in the reverse order of the scan. A nested loop gives the rows of its inner side for each row of its outer side, and a hash join gives the rows of its inner side in the reverse order, as `ExecHashTableInsert` puts each row at the head of its bucket. An index scan gives the rows in the order of the keys of its index, which `members` gives, and a bitmap heap scan gives them in the order of the heap. A scan of a function, of a `VALUES` list, of a query of `WITH` or of a subquery gives the rows in the order that they come. `None` when the plan has a node that gives its rows in another order, such as a sort or a merge join, or an index scan of an index with an expression or an operator class that is not the default one.
 pub fn join_order(plan: &Plan<'_>, query: &Query, members: &dyn Members) -> Option<Vec<Scanned>> {
     let mut node = &plan.root;
