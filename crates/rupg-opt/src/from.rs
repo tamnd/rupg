@@ -995,8 +995,14 @@ impl<'q> Builder<'q> {
                     || self.cte(&cte.name).is_some_and(|c| !c.inline) =>
             {
                 per_row += cost::CPU_TUPLE;
-                let rows = self.cte(&cte.name).map_or(1000.0, |c| c.rows);
-                cte_order = self.cte(&cte.name).map(|c| c.order.clone());
+                // `set_namedtuplestore_size_estimates`: a transition table has the rows that it had when the query was analyzed.
+                let rows = if cte.transition {
+                    cte.tuples.unwrap_or(1000.0)
+                } else {
+                    self.cte(&cte.name).map_or(1000.0, |c| c.rows)
+                };
+                cte_order =
+                    self.cte(&cte.name).filter(|_| !cte.transition).map(|c| c.order.clone());
                 (Kind::CteScan(r), 0.0, 0.0, rows)
             }
             _ => match (&relation.subquery, &relation.function, &relation.values) {

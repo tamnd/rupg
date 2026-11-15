@@ -9293,6 +9293,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/transition_query.test")));
     }
 
+    /// `EXPLAIN` of a query of a trigger function that reads transition tables shows a `Named Tuplestore Scan` with no relation name, and the planner takes the number of rows of each table as its size, so it hashes two small tables for a `FULL JOIN`, as PostgreSQL 19 does in the regression test `plpgsql`.
+    #[test]
+    fn transition_explain() {
+        big_stack(|| script(include_str!("connection/transition_explain.test")));
+    }
+
     /// The deferred check of a foreign key that a statement dropped does nothing at the commit, as `AfterTriggerExecute` skips a dropped trigger.
     #[test]
     fn deferred_dropped() {
