@@ -2,7 +2,7 @@
 //!
 //! Each table keeps the rows that pass its own conditions of `WHERE`, as [`super::selected`] finds them with the vectors. One table is the root: the other tables join it through a tree of `=` of integer keys, and the key of each `=` is unique in the rows of the table further from the root, as a primary key of a dimension table is. For each row of the root, a lookup in an array or in a hash table of the key of each table gives the one row of that table, or no row, and then the row of the root does not join. The join so gives the places of the rows of each table, and no tuple of values. The columns that the query reads are then gathered at these places into columns of the join, and the vector engine runs the groups and the aggregates on them as on the columns of one table, with the other conditions of `WHERE`.
 //!
-//! The groups of the vector engine do not depend on the order of the rows, and the query has the plan of the join, so that the groups come in the order of the hash table of the plan.
+//! The groups of the vector engine do not depend on the order of the rows, and the query has the plan of the join, so that the groups come in the order of the hash table of the plan. When the sort of the query gives the order of the rows, as [`Order`] tells, the query has no plan, and the planner does not run.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use rupg_analyze::{
 use rupg_column::builder::{self, Values};
 use rupg_column::segment::Kind;
 use rupg_column::stored::{Stored, VECTOR};
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_types::{Value, oid};
 
@@ -314,27 +314,81 @@ fn finish(
         .collect();
     let mut source = Source::new(rows, stored, places, types, tables);
     source.links = links;
-    // With no groups, the run gives one row more than `LIMIT`, so that a row equal to the last row in the keys of the sort shows.
+    let order = Order::of(query);
+    // When the rows can have ties, the run gives one row more than `LIMIT`, so that a row equal to the last row in the keys of the sort shows.
+    let check = order == Order::Ties;
     let mut limit = None;
-    if !query.grouped
-        && let Some(Expr { kind: ExprKind::Const(Value::Int8(n)), .. }) = &mut virt.limit
-    {
+    if check && let Some(Expr { kind: ExprKind::Const(Value::Int8(n)), .. }) = &mut virt.limit {
         limit = usize::try_from(*n).ok();
         *n = n.saturating_add(1);
     }
-    let want = if query.grouped { want } else { want.map(|w| w.saturating_add(1)) };
-    // The groups come in the order of the hash table of the plan of the join.
-    session.share_plan(&virt, Some(query));
+    let want = if check { want.map(|w| w.saturating_add(1)) } else { want };
+    match order {
+        // The groups come in the order of the hash table of the plan of the join.
+        Order::Plan => session.share_plan(&virt, Some(query)),
+        Order::Sorted | Order::Ties => session.no_plan(&virt),
+    }
     let out = super::run_on(&virt, params, session, cache, want, source);
     session.share_plan(&virt, None);
-    let Some(mut out) = out? else { return Ok(None) };
-    if !query.grouped {
+    let out = match out {
+        // With no plan, the run can read the groups and the tuples in another order than the plan, so that an expression can fail on another row first. The row engine then runs the query in the order of the plan and gives the error of PostgreSQL. A cancel stops the query.
+        Err(error) if order != Order::Plan && error.state() != SqlState::QUERY_CANCELED => {
+            return Ok(None);
+        }
+        out => out?,
+    };
+    let Some(mut out) = out else { return Ok(None) };
+    if check {
         if ties(query, &out, session)? {
             return Ok(None);
         }
         out.truncate(limit.unwrap_or(usize::MAX).min(want.map_or(usize::MAX, |w| w - 1)));
     }
     Ok(Some(out))
+}
+
+/// How [`finish`] gives the rows of the join in the order of the query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// The groups come in the order of the hash table of the plan of the join.
+    Plan,
+    /// The query has one group, or the sort gives one order of the groups, as each key of `GROUP BY` is a key of the sort, so that two groups have different keys of the sort. The order of the groups before the sort does not change the rows.
+    Sorted,
+    /// The sort gives the order of the rows when [`ties`] finds no two rows with equal keys of the sort. Else the row engine runs the query.
+    Ties,
+}
+
+impl Order {
+    /// The order of the rows of `query`, a query of [`shape`]. With [`Order::Sorted`] and [`Order::Ties`] the run of the vectors has no plan, so the planner does not run. The row engine can run the query again after an error of a run with no plan, so a query with groups and a volatile function keeps the plan. A query with no groups has no volatile function, as [`sorted_rows`] tells.
+    fn of(query: &Query) -> Order {
+        if !query.grouped {
+            return Order::Ties;
+        }
+        let mut exprs = query.targets.iter().map(|t| &t.expr).chain(&query.filter);
+        let volatile = exprs.any(crate::volatile)
+            || query.having.as_ref().is_some_and(crate::volatile)
+            || query.from.iter().any(|item| match item {
+                FromItem::Join(join) => join.on.as_ref().is_some_and(crate::volatile),
+                _ => false,
+            });
+        if volatile || !query.grouping_sets.is_empty() {
+            return Order::Plan;
+        }
+        if query.group.is_empty() {
+            return Order::Sorted;
+        }
+        if query.sort.is_empty() {
+            return Order::Plan;
+        }
+        if query.group.iter().all(|g| query.sort.iter().any(|s| s.target == g.target)) {
+            return Order::Sorted;
+        }
+        let limit = query
+            .limit
+            .as_ref()
+            .is_none_or(|l| matches!(l.kind, ExprKind::Const(Value::Int8(n)) if n >= 0));
+        if query.offset.is_none() && limit { Order::Ties } else { Order::Plan }
+    }
 }
 
 /// True for a query with no groups that the join of the vectors can run: a query with `ORDER BY` whose keys are columns of the result, with no `DISTINCT`, no `OFFSET`, a `LIMIT` that is a constant or no `LIMIT`, no volatile function, and no expression that can fail, as [`no_sublinks`] tells. The join of the vectors does not give the tuples in the order of the plan of the join, so [`finish`] then checks with [`ties`] that the sort gives one order of the rows.

@@ -1311,6 +1311,11 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn no_plan(&self, query: &rupg_analyze::Query) {
+        let address = std::ptr::from_ref(query) as usize;
+        self.plans.borrow_mut().insert(address, Some((None, Rc::default())));
+    }
+
     fn tasks(&self) -> Option<&dyn rupg_platform::Tasks> {
         self.activity.and_then(|(_, store)| store.tasks())
     }
