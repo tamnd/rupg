@@ -220,6 +220,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
         Kind::Result { replaces: None, one_time }
             if one_time.is_empty()
+                && !level.query.has_target_srfs()
                 && node.children.first().is_some_and(|c| {
                     !from::append_rel(level.query, c) && !from::inheritance_append(level.query, c)
                 }) =>
@@ -393,16 +394,42 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let keys: Vec<Expr> = targets.into_iter().map(|t| level.target(t).clone()).collect();
             grouped(level, node, want, &keys, false);
         }
+        // `make_sort_input_target`: above a sort, the node computes the targets that come after it, and the sort gives the other targets and the inputs of those. Else the node below gives the columns of the targets.
         Kind::ProjectSet => {
+            let sorted = node
+                .children
+                .first()
+                .is_some_and(|c| matches!(c.kind, Kind::Sort(_) | Kind::IncrementalSort { .. }));
+            let late = if sorted { upper::postponed(level) } else { Vec::new() };
+            let is_late = |at: usize| late.get(at).copied().unwrap_or(false);
             let mut below = Vec::new();
-            for w in &want {
-                add_columns(&w.expr, 0, &mut below);
-            }
-            if let Some(child) = node.children.first_mut() {
-                set(level, child, below, false);
+            if late.is_empty() {
+                for w in &want {
+                    add_columns(&w.expr, 0, &mut below);
+                }
+            } else {
+                below.extend(
+                    want.iter().enumerate().filter(|&(at, _)| !is_late(at)).map(|(_, w)| w.clone()),
+                );
+                for (at, w) in want.iter().enumerate() {
+                    if is_late(at) {
+                        add_inputs(&w.expr, &mut below);
+                    }
+                }
             }
             node.cost.width = width(level, node.scope, &want);
-            node.output = want;
+            node.output = if late.is_empty() {
+                want
+            } else {
+                want.iter()
+                    .enumerate()
+                    .map(|(at, w)| if is_late(at) { w.clone() } else { w.passed() })
+                    .collect()
+            };
+            // `create_project_set_plan` asks its input for no target list, so a scan below it gives all the columns of its relation, and the node computes the targets that a projection below it would compute.
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, true);
+            }
         }
         Kind::NestedLoop { join_filter, .. } => {
             let mut parts: Vec<Expr> =
