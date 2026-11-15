@@ -335,6 +335,10 @@ pub trait Session {
     fn share_plan(&self, query: &rupg_analyze::Query, other: Option<&rupg_analyze::Query>) {
         let _ = (query, other);
     }
+    /// Gives `query` no plan, so that [`Session::join_order`] and [`Session::hash_tables`] of `query` are those of a plan with no index scan and no hash table, and the planner does not run for it. The executor does this for a copy of a query whose rows do not depend on the plan. [`Session::share_plan`] with `None` then forgets it.
+    fn no_plan(&self, query: &rupg_analyze::Query) {
+        let _ = query;
+    }
     /// The ID of the transaction: `GetTopFullTransactionId` when `assign` is true, which gives an ID to a transaction that has none, and `GetTopFullTransactionIdIfAny` when it is false. `None` when the transaction has no ID or the session has no server.
     fn transaction_id(&self, assign: bool) -> Option<u64> {
         let _ = assign;

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A join of the vectors whose `ORDER BY` gives the order of its rows, or that has no groups, now runs with no plan, so the planner does not run for it, as in TPC-H Q3, Q7, Q8, Q9, Q13, Q14, Q18 and Q21. When the sort finds ties or a run gives an error, the row engine runs the query with the plan, as before (#1585).
 - `collate`: a comparison, sort, aggregate or hash of strings with conflicting implicit collations fails with "could not determine which collation to use" when a row reaches it, as in PostgreSQL (#1584)
 - `debug_parallel_query = on`: `EXPLAIN` shows a `Gather` with one worker and `Single Copy` on top of a plan that a worker can run, with the `InitPlan` nodes of the top node and the costs of `standard_planner`, and none for a cursor or a plan with a restricted function, a temporary table, a subquery with `LIMIT`, a query of `WITH`, a lock of rows, a window function or a correlated subplan (#1583)
 - SQL functions: one column that takes an assignment cast to the composite result type of a function is the whole row, as `check_sql_fn_retval` tests it, and the output arguments of a procedure stay its columns, so that `CALL` of a procedure with one composite `INOUT` argument gives the row of `SELECT ROW(1, 2)` as its value (#1582)
