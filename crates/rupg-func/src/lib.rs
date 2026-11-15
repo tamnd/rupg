@@ -216,6 +216,15 @@ pub struct AdvisoryLock {
     pub session: bool,
 }
 
+/// How the toaster stored a value of a column, for `pg_column_compression` and `pg_column_toast_chunk_id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToastForm {
+    /// The name of the compression method of a compressed value: `pglz` or `lz4`.
+    pub method: Option<&'static str>,
+    /// The OID of the chunks of a value out of line in the TOAST table.
+    pub chunk: Option<u32>,
+}
+
 /// The size of the heap of a table and of its forks, `RelationGetNumberOfBlocks`, and `relpages`, `reltuples`, `relallvisible` and `relallfrozen` of the table, which `VACUUM`, `ANALYZE` and `CREATE INDEX` set.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeapSize {
@@ -818,6 +827,11 @@ pub trait Session {
     fn latest_tid(&self, relation: u32, tid: i64) -> i64 {
         let _ = relation;
         tid
+    }
+    /// The form of the value of the column `attnum` of the table `relation` in the version `tid` of the table `leaf`, which is `relation` or a partition of it, as `toast_tuple_init` and `toast_save_datum` stored it: the name of the method of a compressed value for `pg_column_compression`, and the OID of the chunks of a value out of line for `pg_column_toast_chunk_id`, or `None` for a value stored as it is.
+    fn toast_form(&self, relation: u32, leaf: u32, tid: i64, attnum: i16) -> Option<ToastForm> {
+        let _ = (relation, leaf, tid, attnum);
+        None
     }
     /// The rows of `pg_statistic` of a table of the database of the session, in the order of `staattnum` and `stainherit`.
     fn statistics(&self, relation: u32) -> Vec<Statistic> {

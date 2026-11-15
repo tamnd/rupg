@@ -204,7 +204,36 @@ enum Slot {
         incompressible: bool,
         /// `TOASTCOL_IGNORE`: the value of a `p` column, or a value in the TOAST table that the update keeps.
         ignore: bool,
+        /// The method that compressed the value, also when the value is then in the TOAST table.
+        method: Option<Method>,
+        /// `va_valueid` of the value in the TOAST table: the ID that a rewrite gives again to a value that it moves, [`NEW_CHUNK`] for a value that takes a new ID, or 0.
+        chunk: u32,
     },
+}
+
+/// [`Slot::Varlena::chunk`] of a value that the toaster moves to the TOAST table with a new ID.
+const NEW_CHUNK: u32 = u32::MAX;
+
+/// A value of a version that the toaster compressed or moved to the TOAST table, as `pg_column_compression` and `pg_column_toast_chunk_id` read it. rupg keeps each value as it is, so only the form that PostgreSQL gives the value is kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Toast {
+    /// The place of the column in the version.
+    pub(crate) column: u16,
+    /// The method that compressed the value, or `None` for a value that is not compressed.
+    pub(crate) method: Option<Method>,
+    /// `va_valueid` of the value in the TOAST table, or 0 for a value in the version.
+    pub(crate) chunk: u32,
+}
+
+/// The values of the version that a new version takes the place of, for [`toast`].
+#[derive(Clone, Copy)]
+pub(super) enum Prior<'a> {
+    /// The version of a new row.
+    None,
+    /// The old version of an `UPDATE`, with its values that the toaster compressed or moved. A value that is the same as the old value keeps its form, and a value in the TOAST table stays there with no new OID, as `toast_tuple_init` finds the pointer of the old version.
+    Update(&'a [Value], &'a [Toast]),
+    /// The values of the old version of a row of `CLUSTER`, `REPACK` or `VACUUM FULL` that the toaster compressed or moved. A compressed value stays compressed with its method, and a value that the rewrite moves to the TOAST table takes again the ID that it had there, as `toast_save_datum` keeps `va_valueid` for `rd_toastoid`.
+    Rewrite(&'a [Toast]),
 }
 
 /// The values of a version after `heap_toast_insert_or_update`.
@@ -217,9 +246,24 @@ pub(super) struct Toasted {
 }
 
 impl Toasted {
-    /// True when the value at `at` is in the TOAST table.
-    fn external(&self, at: usize) -> bool {
-        matches!(self.slots.get(at), Some(Slot::Varlena { held: Held::External, .. }))
+    /// The values that the toaster compressed or moved, or `None` when it kept each value as it is. A value that moved with a new ID takes the next ID after `last`.
+    pub(super) fn forms(&self, last: &mut u32) -> Option<Box<[Toast]>> {
+        let mut forms = Vec::new();
+        for (at, slot) in self.slots.iter().enumerate() {
+            let Slot::Varlena { held, method, chunk, .. } = *slot else { continue };
+            let Ok(column) = u16::try_from(at) else { continue };
+            let chunk = match held {
+                Held::Raw => continue,
+                Held::Compressed => 0,
+                Held::External if chunk == NEW_CHUNK => {
+                    *last = last.wrapping_add(1).max(1);
+                    *last
+                }
+                Held::External => chunk,
+            };
+            forms.push(Toast { column, method, chunk });
+        }
+        (!forms.is_empty()).then(|| forms.into_boxed_slice())
     }
 }
 
@@ -268,35 +312,47 @@ fn biggest(slots: &[Slot], storage: &[Storage], compress: bool, main: bool) -> O
 
 /// `toast_tuple_try_compression`.
 fn try_compress(slot: &mut Slot, value: &Value, method: Method) {
-    let Slot::Varlena { size, held, incompressible, .. } = slot else { return };
-    match plain_bytes(value).and_then(|bytes| rupg_encode::toast_compress(method, bytes)) {
+    let Slot::Varlena { size, held, incompressible, method: used, .. } = slot else { return };
+    match compressed_size(value, method) {
         Some(compressed) => {
             *size = compressed;
             *held = Held::Compressed;
+            *used = Some(method);
         }
         None => *incompressible = true,
     }
 }
 
-/// `toast_tuple_externalize`.
+/// `VARSIZE` of the value compressed with `method`, or `None` when the method does not make it shorter.
+fn compressed_size(value: &Value, method: Method) -> Option<usize> {
+    plain_bytes(value).and_then(|bytes| rupg_encode::toast_compress(method, bytes))
+}
+
+/// `toast_tuple_externalize`. A value that had an ID in the TOAST table before a rewrite takes it again, with no new OID.
 fn externalize(slot: &mut Slot, moved: &mut u32) {
-    if let Slot::Varlena { size, held, .. } = slot {
+    if let Slot::Varlena { size, held, chunk, .. } = slot {
         *size = TOAST_POINTER;
         *held = Held::External;
-        *moved += 1;
+        if *chunk == 0 {
+            *chunk = NEW_CHUNK;
+            *moved += 1;
+        }
     }
 }
 
-/// `heap_form_tuple` and then `heap_toast_insert_or_update` of a version with the values `values`: the header with the null bitmap, then the data. A value of a column with a type of fixed length in `fixed` has the length and the alignment of the type. When the version is longer than `TOAST_TUPLE_THRESHOLD`, the toaster compresses its longest values and moves them to the TOAST table in four rounds, with the storage of each column in `storage`. `prior` has the values of the version that an update replaces: a value that is the same as a value of `prior` in the TOAST table stays there, and takes no new OID.
+/// `heap_form_tuple` and then `heap_toast_insert_or_update` of a version with the values `values`: the header with the null bitmap, then the data. A value of a column with a type of fixed length in `fixed` has the length and the alignment of the type. When the version is longer than `TOAST_TUPLE_THRESHOLD`, the toaster compresses its longest values and moves them to the TOAST table in four rounds, with the storage of each column in `storage`. `prior` has the old version that the new version takes the place of, whose values can keep their forms.
 pub(super) fn toast(
     values: &[Value],
     fixed: &[Fixed],
     storage: &[Storage],
-    prior: Option<&[Value]>,
+    prior: Prior<'_>,
 ) -> Toasted {
     let nulls = values.iter().any(Value::is_null);
     let header = max_align(TUPLE_HEADER + if nulls { values.len().div_ceil(8) } else { 0 });
-    let kept = prior.map(|prior| (toast(prior, fixed, storage, None), prior));
+    let forms = match prior {
+        Prior::None => &[][..],
+        Prior::Update(_, forms) | Prior::Rewrite(forms) => forms,
+    };
     let mut slots: Vec<Slot> = values
         .iter()
         .enumerate()
@@ -314,13 +370,24 @@ pub(super) fn toast(
                 Layout::Varlena(data, align) => (data, align),
             };
             let kind = storage.get(at).copied().unwrap_or(DEFAULT_STORAGE);
-            let same = kept.as_ref().is_some_and(|(old, prior)| {
-                old.external(at) && prior.get(at).is_some_and(|p| p == value)
-            });
+            let old = forms.iter().find(|form| usize::from(form.column) == at).copied();
+            let old = match prior {
+                Prior::Update(prior, _) => old.filter(|_| prior.get(at) == Some(value)),
+                Prior::Rewrite(_) => old,
+                Prior::None => None,
+            };
+            let same = matches!(prior, Prior::Update(..)) && old.is_some_and(|old| old.chunk != 0);
+            // A compressed value stays compressed, but a value of a `p` column is not compressed.
+            let compressed = old
+                .and_then(|old| old.method)
+                .filter(|_| !same && kind != Storage::Plain)
+                .and_then(|method| Some((method, compressed_size(value, method)?)));
             let short = kind != Storage::Plain && data < 127;
             Slot::Varlena {
                 size: if same {
                     TOAST_POINTER
+                } else if let Some((_, size)) = compressed {
+                    size
                 } else if short {
                     data + 1
                 } else {
@@ -328,9 +395,21 @@ pub(super) fn toast(
                 },
                 raw: data + 4,
                 align,
-                held: if same { Held::External } else { Held::Raw },
+                held: if same {
+                    Held::External
+                } else if compressed.is_some() {
+                    Held::Compressed
+                } else {
+                    Held::Raw
+                },
                 incompressible: false,
                 ignore: same || kind == Storage::Plain,
+                method: if same {
+                    old.and_then(|old| old.method)
+                } else {
+                    compressed.map(|(m, _)| m)
+                },
+                chunk: old.map_or(0, |old| old.chunk),
             }
         })
         .collect();
@@ -411,7 +490,7 @@ pub(crate) fn stored_widths(
     fixed: &[Fixed],
     storage: &[Storage],
 ) -> Vec<(usize, usize)> {
-    let toasted = toast(values, fixed, storage, None);
+    let toasted = toast(values, fixed, storage, Prior::None);
     (0..values.len())
         .map(|at| match toasted.slots.get(at) {
             Some(&Slot::Varlena { size, raw, .. }) => (size, raw),
@@ -958,6 +1037,28 @@ impl Persist for Storage {
     }
 }
 
+impl Persist for Toast {
+    fn put(&self, out: &mut Vec<u8>) {
+        self.column.put(out);
+        out.push(match self.method {
+            None => 0,
+            Some(Method::Pglz) => 1,
+            Some(Method::Lz4) => 2,
+        });
+        self.chunk.put(out);
+    }
+    fn take(input: &mut Reader<'_>) -> rupg_common::Result<Self> {
+        let column = Persist::take(input)?;
+        let method = match u8::take(input)? {
+            0 => None,
+            1 => Some(Method::Pglz),
+            2 => Some(Method::Lz4),
+            _ => return Err(corrupt("a TOAST value has a bad method")),
+        };
+        Ok(Toast { column, method, chunk: Persist::take(input)? })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,17 +1079,33 @@ mod tests {
         let text = |text: String| [Value::Text(text)];
         let lz4 = [Storage::Extended(Method::Lz4)];
         // A value that does not compress moves to the TOAST table, and the tuple keeps a pointer of 18 bytes.
-        let moved = toast(&text(noise(3200)), &[None], &lz4, None);
+        let moved = toast(&text(noise(3200)), &[None], &lz4, Prior::None);
         assert_eq!((moved.moved, moved.len), (1, 24 + 18));
+        let mut last = 7;
+        let forms = moved.forms(&mut last);
+        assert_eq!(forms.as_deref(), Some(&[Toast { column: 0, method: None, chunk: 8 }][..]));
         // A value that compresses stays in the tuple with a header of 8 bytes.
-        let compressed = toast(&text("ab".repeat(3000)), &[None], &lz4, None);
+        let compressed = toast(&text("ab".repeat(3000)), &[None], &lz4, Prior::None);
         assert_eq!((compressed.moved, compressed.len), (0, 24 + 43));
+        let lz4_form = Toast { column: 0, method: Some(Method::Lz4), chunk: 0 };
+        assert_eq!(compressed.forms(&mut last).as_deref(), Some(&[lz4_form][..]));
         // `main` keeps the value in the tuple while the tuple is shorter than a page.
-        let main = toast(&text(noise(3200)), &[None], &[Storage::Main(Method::Lz4)], None);
+        let main = toast(&text(noise(3200)), &[None], &[Storage::Main(Method::Lz4)], Prior::None);
         assert_eq!((main.moved, main.len), (0, 24 + 3204));
-        // An update that keeps a value that is in the TOAST table uses no new OID.
+        assert_eq!(main.forms(&mut last), None);
+        // An update that keeps a value that is in the TOAST table uses no new OID, and the value keeps its ID.
         let old = text(noise(3200));
-        let kept = toast(&old, &[None], &lz4, Some(&old));
+        let kept = toast(&old, &[None], &lz4, Prior::Update(&old, forms.as_deref().unwrap()));
         assert_eq!((kept.moved, kept.len), (0, 24 + 18));
+        assert_eq!(kept.forms(&mut last), forms);
+        // A rewrite keeps the method of a compressed value, and a value that it moves takes again its ID.
+        let pglz = [Storage::Extended(Method::Pglz)];
+        let ab = text("ab".repeat(3000));
+        let rewritten = toast(&ab, &[None], &pglz, Prior::Rewrite(&[lz4_form]));
+        assert_eq!(rewritten.forms(&mut last).as_deref(), Some(&[lz4_form][..]));
+        let external = [Storage::External];
+        let rewritten = toast(&old, &[None], &external, Prior::Rewrite(forms.as_deref().unwrap()));
+        assert_eq!((rewritten.moved, rewritten.forms(&mut last)), (0, forms));
+        assert_eq!(last, 8);
     }
 }

@@ -652,6 +652,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_collation_for" => pg_collation_for,
         "pg_basetype" => pg_basetype,
         "pg_column_size" => crate::datumsize::pg_column_size,
+        // A value that is not a column of a table is neither compressed nor out of line: the executor answers for a column of a table from its version.
+        "pg_column_compression" | "pg_column_toast_chunk_id" => |_, _| Ok(Value::Null),
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,

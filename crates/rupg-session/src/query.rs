@@ -2084,6 +2084,36 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn toast_form(
+        &self,
+        relation: u32,
+        leaf: u32,
+        tid: i64,
+        attnum: i16,
+    ) -> Option<rupg_func::ToastForm> {
+        let (Some((_, store)), Some(view)) = (self.activity, &self.view) else { return None };
+        let at = usize::try_from(attnum).ok()?.checked_sub(1)?;
+        // A partition can place its columns elsewhere than its parent does.
+        let column = if leaf == relation {
+            at
+        } else {
+            let name = &self.catalog.relation(relation)?.columns.get(at)?.name;
+            self.catalog
+                .relation(leaf)?
+                .columns
+                .iter()
+                .position(|c| !c.dropped && c.name == *name)?
+        };
+        let form = store.heap().toast_of((view.database, leaf), tid.cast_unsigned(), column)?;
+        Some(rupg_func::ToastForm {
+            method: form.method.map(|method| match method {
+                rupg_encode::Method::Pglz => "pglz",
+                rupg_encode::Method::Lz4 => "lz4",
+            }),
+            chunk: (form.chunk != 0).then_some(form.chunk),
+        })
+    }
+
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         self.statements.map_or_else(Vec::new, |statements| {
             let hash = |name: &[u8]| {

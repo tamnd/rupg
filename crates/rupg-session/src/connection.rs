@@ -6742,6 +6742,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/absent.test")));
     }
 
+    /// `pg_column_compression` and `pg_column_toast_chunk_id` of the columns of tables: the method of a compressed value and whether a value is out of line, which an update of another column keeps and `VACUUM FULL` carries to the new versions with the same chunk, as `toast_tuple_init` and `rd_toastoid` do. A value that is not a column of a table gives null. `connection/toast_forms.test` is the output of PostgreSQL 19 for the same script, with the chunks only compared with each other.
+    #[test]
+    fn toast_forms() {
+        big_stack(|| script(include_str!("connection/toast_forms.test")));
+    }
+
     /// The views of the statistics of the whole server: `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_wal`, `pg_stat_io`, `pg_stat_archiver`, `pg_stat_slru`, `pg_stat_recovery_prefetch` and `pg_stat_lock`. The script checks the columns and their types, the rows and the null cells of `pg_stat_io`, and that each counter is not negative and each `stats_reset` is not null. `connection/shared.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn shared_statistics() {

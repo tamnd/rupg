@@ -20,8 +20,8 @@ use rupg_types::{Value, oid};
 
 pub(crate) use btree::{Shape, Size as BtreeSize};
 pub(crate) use cells::{Cells, Values};
-pub(crate) use pages::{Fixed, Skip, Storage, datum_width, stored_widths};
-use pages::{Pages, Pruned, generation_of, max_align, page_of, slot_of, toast};
+pub(crate) use pages::{Fixed, Skip, Storage, Toast, datum_width, stored_widths};
+use pages::{Pages, Prior, Pruned, generation_of, max_align, page_of, slot_of, toast};
 
 /// `MAX_BUFFERED_TUPLES`: the rows of a batch of a copy.
 const BUFFERED_TUPLES: usize = 1000;
@@ -1151,6 +1151,12 @@ struct Table {
     unfrozen: usize,
     /// The frozen columns that a read thawed, which the next freeze takes back when the versions did not change.
     kept: Option<Kept>,
+    /// The values that the toaster compressed or moved to the TOAST table, by the ID of the version. A version with no entry keeps each value as it is.
+    toasts: BTreeMap<u64, Box<[Toast]>>,
+    /// The last ID of a value in the TOAST table, `va_valueid`.
+    chunks: u32,
+    /// The values of the old versions of the rows of a rewrite that the toaster compressed or moved, last row first, which the next inserts take, one for each row.
+    carried: Vec<Option<Box<[Toast]>>>,
 }
 
 /// The frozen columns of a table that a read by rows or by key thawed. A write drops them. When the table has the same versions at the next freeze, the freeze takes the columns back and does not make them again.
@@ -1840,19 +1846,46 @@ impl Table {
         old: Option<u64>,
         moved: &mut u32,
     ) -> u64 {
-        let prior = old.and_then(|old| self.find(old)).map(|at| &*self.versions[at].values);
+        let carried = if old.is_none() { self.carried.pop().flatten() } else { None };
+        let prior = match (old, &carried) {
+            (Some(old), _) => match self.find(old) {
+                Some(at) => Prior::Update(
+                    &self.versions[at].values,
+                    self.toasts.get(&old).map_or(&[][..], |forms| forms),
+                ),
+                None => Prior::None,
+            },
+            (None, Some(forms)) => Prior::Rewrite(forms),
+            (None, None) => Prior::None,
+        };
         let toasted = toast(&values, &self.fixed, &self.storage, prior);
         // A write that waited makes its versions again in the place that the first try took. The first try took the OIDs of the TOAST values.
         if kept.is_none() {
             *moved += toasted.moved;
         }
+        let forms = toasted.forms(&mut self.chunks);
         let len = max_align(toasted.len);
         let tid = kept.unwrap_or_else(|| {
             let bulk = self.bulk.filter(|&made| made == (xmin, cmin));
             let (page, slot) = self.pages.place(len, old.map(page_of), bulk, self.save_free);
             pages::tid(self.pages.generation, page, slot)
         });
-        self.put(tid, (xmin, cmin), values, (unique, fresh), len)
+        let tid = self.put(tid, (xmin, cmin), values, (unique, fresh), len);
+        self.keep_toasts(tid, forms);
+        tid
+    }
+
+    /// The values of the new version `tid` that the toaster compressed or moved. An ID that comes back after `VACUUM` loses the values of the version that had it.
+    fn keep_toasts(&mut self, tid: u64, forms: Option<Box<[Toast]>>) {
+        match forms {
+            Some(forms) => {
+                self.toasts.insert(tid, forms);
+            }
+            None if !self.toasts.is_empty() => {
+                self.toasts.remove(&tid);
+            }
+            None => {}
+        }
     }
 
     /// The places of the new versions of the rows `rows` of a copy, each with the length of its line in `lines`, and the length of each version, as `heap_multi_insert` places them. `ahead` has the lengths and the lines of the rows of the copy after `rows`, for the rest of their batch. The toaster takes the OIDs of the values that it moves.
@@ -1864,19 +1897,25 @@ impl Table {
         use_fsm: bool,
         moved: &mut u32,
     ) -> Vec<(u64, usize)> {
+        let mut forms = Vec::with_capacity(rows.len());
         let sized: Vec<(usize, usize)> = rows
             .iter()
             .enumerate()
             .map(|(at, values)| {
-                let toasted = toast(values, &self.fixed, &self.storage, None);
+                let toasted = toast(values, &self.fixed, &self.storage, Prior::None);
                 *moved += toasted.moved;
+                forms.push(toasted.forms(&mut self.chunks));
                 (max_align(toasted.len), lines.get(at).copied().unwrap_or(0))
             })
             .collect();
         let places = self.pages.place_copy((&sized, ahead), made, use_fsm, self.save_free);
         let generation = self.pages.generation;
-        let tids = places.into_iter().map(|(page, slot)| pages::tid(generation, page, slot));
-        tids.zip(sized).map(|(tid, (len, _))| (tid, len)).collect()
+        let tids: Vec<u64> =
+            places.into_iter().map(|(page, slot)| pages::tid(generation, page, slot)).collect();
+        for (&tid, forms) in tids.iter().zip(forms) {
+            self.keep_toasts(tid, forms);
+        }
+        tids.into_iter().zip(sized).map(|(tid, (len, _))| (tid, len)).collect()
     }
 
     /// The new version `tid` of `len` bytes with the values `values`, in the maps of the unique keys and in the order of the versions.
@@ -2174,11 +2213,15 @@ impl Table {
         self.forget_combos();
     }
 
-    /// Removes the combo command IDs of the versions that went.
+    /// Removes the combo command IDs and the forms of the TOAST values of the versions that went.
     fn forget_combos(&mut self) {
+        let versions = &self.versions;
         if !self.combos.is_empty() {
-            let versions = &self.versions;
             self.combos.retain(|tid, _| versions.binary_search_by_key(tid, |v| v.tid).is_ok());
+        }
+        // A cold table has no list of its versions, and keeps the forms.
+        if !self.toasts.is_empty() && self.cold.is_none() {
+            self.toasts.retain(|tid, _| versions.binary_search_by_key(tid, |v| v.tid).is_ok());
         }
     }
 
@@ -3143,7 +3186,25 @@ impl Heap {
     pub(crate) fn toasted_len(&self, key: (u32, u32), values: &[Value]) -> Option<usize> {
         let state = self.state();
         let table = state.tables.meta(&key)?;
-        Some(max_align(toast(values, &table.fixed, &table.storage, None).len))
+        Some(max_align(toast(values, &table.fixed, &table.storage, Prior::None).len))
+    }
+
+    /// How the version `tid` of the table `key` keeps the value of its column at `column`: the method that compressed it and its ID in the TOAST table, as `pg_column_compression` and `pg_column_toast_chunk_id` read them. `None` for a value that the version keeps as it is.
+    pub(crate) fn toast_of(&self, key: (u32, u32), tid: u64, column: usize) -> Option<Toast> {
+        let state = self.state();
+        let forms = state.tables.meta(&key)?.toasts.get(&tid)?;
+        forms.iter().find(|form| usize::from(form.column) == column).copied()
+    }
+
+    /// The rewrite of `CLUSTER`, `REPACK` and `VACUUM FULL` of the table `key` inserts next the rows of the old versions `tids`, in their order: each new version takes the forms of the TOAST values of its old version. No `tids` drops the forms that the inserts did not take.
+    pub(crate) fn carry_toasts(&self, key: (u32, u32), tids: &[u64]) {
+        let mut state = self.state();
+        let table = state.tables.settings(key);
+        table.carried = if table.toasts.is_empty() {
+            Vec::new()
+        } else {
+            tids.iter().rev().map(|tid| table.toasts.get(tid).cloned()).collect()
+        };
     }
 
     /// [`Heap::insert`] that gives in `ids` the ID of the new version of each row, for `ctid` of `RETURNING`.
@@ -4839,6 +4900,8 @@ impl Heap {
             table.storage.put(out);
             table.save_free.put(out);
             table.combos.put(out);
+            table.toasts.put(out);
+            table.chunks.put(out);
             // The cold headers are all the versions, and they come before the versions of the list.
             table.cold.put(out);
             let end = table.cold.as_ref().map_or(end, |cold| cold.rows);
@@ -4939,6 +5002,8 @@ impl Heap {
                 storage: Persist::take(input)?,
                 save_free: Persist::take(input)?,
                 combos: Persist::take(input)?,
+                toasts: Persist::take(input)?,
+                chunks: Persist::take(input)?,
                 ..Table::default()
             };
             table.cold = Persist::take(input)?;
@@ -5068,11 +5133,13 @@ impl Heap {
                 table.pages = Pages::of_generation(generation);
                 table.versions.retain(|v| generation_of(v.tid) == generation);
                 table.combos.clear();
+                table.toasts.clear();
                 table.lp_dead.clear();
             }
             (table.fixed, table.storage, table.save_free) = Persist::take(input)?;
             for _ in 0..input.count()? {
                 let version = Version::take(input)?;
+                table.toasts.remove(&version.tid);
                 table.pages.occupy(version.tid, usize::from(version.len));
                 table.made = table.made.max(version.made);
                 match table.versions.binary_search_by_key(&version.tid, |v| v.tid) {
@@ -5090,6 +5157,12 @@ impl Heap {
                 if next != 0 && next != MOVED {
                     updated.push((key, tid, next));
                 }
+            }
+            for _ in 0..input.count()? {
+                let (tid, forms): (u64, Box<[Toast]>) = Persist::take(input)?;
+                let last = forms.iter().map(|form| form.chunk).max().unwrap_or(0);
+                table.chunks = table.chunks.max(last);
+                table.toasts.insert(tid, forms);
             }
         }
         // The new version of an update keeps the row locks of the prepared transactions, as `compute_new_xmax_infomask` kept them when the update ran.
@@ -5170,12 +5243,29 @@ impl State {
             table.storage.put(out);
             table.save_free.put(out);
             inserted.len().put(out);
-            for version in inserted {
+            for version in &inserted {
                 version.put(out);
             }
             deleted.len().put(out);
             for v in deleted {
                 (v.tid, v.xmax, v.cmax, v.next).put(out);
+            }
+            // The forms of the TOAST values of the new versions.
+            let toasts: Vec<(u64, &[Toast])> = if table.toasts.is_empty() {
+                Vec::new()
+            } else {
+                inserted
+                    .iter()
+                    .filter_map(|v| Some((v.tid, &**table.toasts.get(&v.tid)?)))
+                    .collect()
+            };
+            toasts.len().put(out);
+            for (tid, forms) in toasts {
+                tid.put(out);
+                forms.len().put(out);
+                for form in forms {
+                    form.put(out);
+                }
             }
         }
         true
