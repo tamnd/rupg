@@ -1809,6 +1809,18 @@ fn run_query(
         return Ok(if tuples.is_empty() { Vec::new() } else { vec![Vec::new()] });
     }
     let none = vec![scan::NONE; query.relations.len()];
+    let late = late_targets(query);
+    if !late.is_empty() {
+        let rows = postponed_rows(&mut eval, query, &tuples, &late, (offset, count), session)?;
+        let width = query.targets.iter().take_while(|t| !t.junk).count();
+        return Ok(rows
+            .into_iter()
+            .map(|mut row| {
+                row.truncate(width);
+                row
+            })
+            .collect());
+    }
     let rows = if query.grouped {
         // With no sort and no window, `Limit` stops after the groups that it gives.
         let needed = match count {
@@ -1886,6 +1898,99 @@ fn run_query(
             row
         })
         .collect())
+}
+
+/// `make_sort_input_target`: for each target of a query with `ORDER BY` and no groups, no window and no `DISTINCT`, true when it runs above the sort, or an empty list when none does. A target that is not a key of the sort and calls a volatile function or a function that gives a set runs above the sort, in a `Result` or a `ProjectSet`. A function that gives a set in a key of the sort keeps them all below the sort here, and so does `WITH TIES` with a function that gives a set.
+fn late_targets(query: &Query) -> Vec<bool> {
+    if query.sort.is_empty()
+        || query.grouped
+        || query.set_op.is_some()
+        || query.write.is_some()
+        || !query.distinct.is_empty()
+        || !window::calls(query).is_empty()
+        || query.with_ties && query.has_target_srfs()
+    {
+        return Vec::new();
+    }
+    let mut set_key = false;
+    let late: Vec<bool> = query
+        .targets
+        .iter()
+        .enumerate()
+        .map(|(at, target)| {
+            let set = target.expr.first_set_call().is_some();
+            if query.sort.iter().any(|s| s.target == at) {
+                set_key |= set;
+                return false;
+            }
+            set || volatile(&target.expr)
+        })
+        .collect();
+    if set_key || !late.contains(&true) { Vec::new() } else { late }
+}
+
+/// The rows of a query whose targets in `late` run above the sort, as [`late_targets`] finds them. The sort reads the other targets, then the targets of the rows that `Limit` reads run in the order of the sort, also for the rows that `OFFSET` skips, as `Limit` reads them through the `Result` or the `ProjectSet` above the `Sort`.
+fn postponed_rows<'a>(
+    eval: &mut Eval<'a>,
+    query: &Query,
+    tuples: &'a [Vec<usize>],
+    late: &[bool],
+    (offset, count): (usize, Option<usize>),
+    session: &dyn Session,
+) -> Result<Vec<Vec<Value>>> {
+    // Each row of the sort has the number of its tuple last.
+    let mut rows = Vec::with_capacity(tuples.len());
+    for (n, tuple) in tuples.iter().enumerate() {
+        interrupt(session, n)?;
+        eval.tuple = tuple;
+        let mut row = query
+            .targets
+            .iter()
+            .zip(late)
+            .map(|(t, &l)| if l { Ok(Value::Null) } else { eval.eval(&t.expr) })
+            .collect::<Result<Vec<_>>>()?;
+        row.push(Value::Int8(i64::try_from(n).unwrap_or(i64::MAX)));
+        rows.push(row);
+    }
+    let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+    let mut needed = count.map_or(usize::MAX, |c| offset.saturating_add(c));
+    // A function that gives a set gives rows after the sort, and `WITH TIES` reads the rows after the window, so the sort has no bound for them.
+    let bound = (!query.has_target_srfs() && !query.with_ties).then_some(count).flatten();
+    let sorted = order(query, rows, &types, 0, bound.map(|_| needed), session)?;
+    // `LIMIT_WINDOWEND_TIES`: the rows equal to the last row of the window on the items of `ORDER BY` come too, and `Limit` reads the row after them to see that it is not equal.
+    let mut reads = needed;
+    if query.with_ties && needed < sorted.len() && needed > offset {
+        let keys = sort::Keys::new(&query.sort, &types, session)?;
+        let last = needed - 1;
+        while needed < sorted.len() && keys.equal(&sorted[last], &sorted[needed])? {
+            needed += 1;
+        }
+        reads = needed.saturating_add(1);
+    }
+    let levels = set_levels(&query.targets);
+    let mut out = Vec::new();
+    for (n, row) in sorted.iter().take(reads).enumerate() {
+        if out.len() >= reads {
+            break;
+        }
+        interrupt(session, n)?;
+        let tuple = match row.last() {
+            Some(Value::Int8(at)) => usize::try_from(*at).ok().and_then(|at| tuples.get(at)),
+            _ => None,
+        };
+        eval.tuple = tuple.ok_or_else(|| Error::internal("a sorted row with no tuple"))?;
+        let from = out.len();
+        eval.project(&query.targets, &levels, &mut out, reads)?;
+        // The targets below the sort keep the values that the sort read.
+        for new in &mut out[from..] {
+            for (at, _) in late.iter().enumerate().filter(|(_, l)| !**l) {
+                new[at] = row[at].clone();
+            }
+        }
+    }
+    out.truncate(needed);
+    out.drain(..offset.min(out.len()));
+    Ok(out)
 }
 
 /// True when `expr` is the parameter `$n`, or the length cast of `$n` to the type modifier of its own type, for [`Plan::passes_params`].

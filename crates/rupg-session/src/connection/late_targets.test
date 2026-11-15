@@ -1,0 +1,44 @@
+> CREATE TEMP SEQUENCE late_seq
+CREATE SEQUENCE
+> CREATE TABLE late_t AS SELECT g AS a, (g * 7) % 10 AS b FROM generate_series(1, 20) g
+SELECT 20
+> SELECT a, b, nextval('late_seq') AS n FROM late_t ORDER BY b, a LIMIT 3 OFFSET 2
+fields a@late_t.1:23:4:-1,b@late_t.2:23:4:-1,n:20:8:-1
+row 3,1,3
+row 13,1,4
+row 6,2,5
+SELECT 3
+> SELECT currval('late_seq')
+fields currval:20:8:-1
+row 5
+SELECT 1
+> SELECT a, b, nextval('late_seq') AS n FROM late_t ORDER BY b DESC FETCH FIRST 1 ROW WITH TIES
+fields a@late_t.1:23:4:-1,b@late_t.2:23:4:-1,n:20:8:-1
+row 7,9,6
+row 17,9,7
+SELECT 2
+> SELECT currval('late_seq')
+fields currval:20:8:-1
+row 8
+SELECT 1
+> SELECT a, nextval('late_seq') AS n FROM late_t WHERE a <= 4 ORDER BY a DESC
+fields a@late_t.1:23:4:-1,n:20:8:-1
+row 4,9
+row 3,10
+row 2,11
+row 1,12
+SELECT 4
+> SELECT a, generate_series(1, 3) AS g FROM late_t ORDER BY b, a LIMIT 5
+fields a@late_t.1:23:4:-1,g:23:4:-1
+row 10,1
+row 10,2
+row 10,3
+row 20,1
+row 20,2
+SELECT 5
+> SELECT a, generate_series(1, 2) AS g FROM late_t ORDER BY b DESC, a LIMIT 3 OFFSET 2
+fields a@late_t.1:23:4:-1,g:23:4:-1
+row 17,1
+row 17,2
+row 4,1
+SELECT 3
