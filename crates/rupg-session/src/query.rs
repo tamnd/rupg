@@ -2353,7 +2353,7 @@ impl Env for Reader<'_> {
         }
     }
 
-    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<Vec<Error>> {
         rupg_plpgsql::validate(self, self, function)
     }
 

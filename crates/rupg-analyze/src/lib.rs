@@ -336,14 +336,14 @@ pub trait Env {
     fn command_counter_increment(&self, catalog: &rupg_catalog::Catalog) {
         let _ = catalog;
     }
-    /// The validator of the language of a new function in a procedural language, such as `plpgsql_validator`, which compiles the body. A session with no language passes the function.
+    /// The validator of the language of a new function in a procedural language, such as `plpgsql_validator`, which compiles the body. A session with no language passes the function. The result is the warnings of the compile, which have their places in the body.
     ///
     /// # Errors
     ///
     /// The errors of the compile of the body.
-    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<Vec<Error>> {
         let _ = function;
-        Ok(())
+        Ok(Vec::new())
     }
     /// `ExtractSetVariableArgs` and `validate_option_array_item` for a clause `SET` or `RESET` of a function: the name of the parameter as the stored setting spells it, and the value, or `None` for `RESET`. `SET ... FROM CURRENT` takes the current value.
     ///

@@ -14,7 +14,7 @@ use rupg_sql::nodes::{
 use rupg_types::oid;
 use std::sync::OnceLock;
 
-use super::{Definer, not_yet};
+use super::{Definer, Message, not_yet};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
@@ -1376,8 +1376,12 @@ impl Definer<'_, '_> {
         if function.lang == PLPGSQL_LANGUAGE {
             // `plpgsql_validator` compiles the body only when `check_function_bodies` is on.
             if self.an.env.check_function_bodies() {
-                self.with_settings(&function.config, |d| d.check_plpgsql(stmt, &function))
+                let warnings = self
+                    .with_settings(&function.config, |d| d.check_plpgsql(stmt, &function))
                     .map_err(transpose)?;
+                // `plpgsql_compile_error_callback`: a warning of the compile has its place in the query text too.
+                self.flush();
+                self.messages.extend(warnings.into_iter().map(|w| Message::Warning(transpose(w))));
             }
             return self.store_function(old, function, &defaults, support, Vec::new());
         }
@@ -1652,7 +1656,7 @@ impl Definer<'_, '_> {
     }
 
     /// `plpgsql_validator`: a function in PL/pgSQL has a body in a string, and the only pseudo-types that it can take are the polymorphic types and `record`. It can also return `void`, `trigger` and `event_trigger`. Then the session compiles the body.
-    fn check_plpgsql(&self, stmt: &CreateFunctionStmt, function: &Function) -> Result<()> {
+    fn check_plpgsql(&self, stmt: &CreateFunctionStmt, function: &Function) -> Result<Vec<Error>> {
         if stmt.sql_body.is_some() {
             return Err(Error::new(
                 SqlState::INVALID_FUNCTION_DEFINITION,

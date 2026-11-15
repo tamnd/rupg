@@ -24,7 +24,7 @@ use rupg_func::Session;
 use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::{Value, oid};
 
-use crate::compile::{Arg, Settings, Signature, compile};
+use crate::compile::{Arg, Settings, Signature, compile, compile_warned, extra_level};
 use crate::exec::{Compiled, Frame};
 
 /// The OID of the language `plpgsql`.
@@ -331,16 +331,18 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
 
 /// `plpgsql_validator`: the compile of the body of a new function, with the check of the syntax of its queries. A polymorphic type compiles as a type of its kind, as `plpgsql_resolve_polymorphic_argtypes` does for the validator. A trigger function compiles as a trigger, and an event trigger function compiles as an event trigger.
 ///
+/// The warnings of the check `shadowed_variables` of `plpgsql.extra_warnings` have their places in the body.
+///
 /// # Errors
 ///
-/// The syntax errors of the body.
+/// The syntax errors of the body, and the errors of the check `shadowed_variables` of `plpgsql.extra_errors`.
 pub fn validate(
     env: &dyn Env,
     session: &dyn Session,
     function: &rupg_catalog::Function,
-) -> Result<()> {
+) -> Result<Vec<Error>> {
     if function.lang != PLPGSQL_LANGUAGE {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let dummy = |ty: u32| match ty {
         oid::ANYELEMENT
@@ -361,7 +363,9 @@ pub fn validate(
     sig.trigger = function.rettype == oid::TRIGGER;
     sig.event_trigger = function.rettype == oid::EVENT_TRIGGER;
     sig.name.clone_from(&function.name);
-    compile(&function.src, env, &sig, true).map(drop)
+    // `do_compile`: only the compile of the validator makes the checks of `plpgsql.extra_warnings` and `plpgsql.extra_errors`.
+    sig.settings.shadowed = extra_level(session, "shadowed_variables");
+    compile_warned(&function.src, env, &sig, true).map(|(_, warnings)| warnings)
 }
 
 /// True for a polymorphic type whose actual type is the element type of the call.
