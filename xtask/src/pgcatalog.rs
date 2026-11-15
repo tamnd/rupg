@@ -126,6 +126,22 @@ struct Catalog {
     toast: Option<(u32, u32)>,
     /// The indexes, from `DECLARE_INDEX` and its variants, in the order of the header.
     indexes: Vec<Index>,
+    /// The foreign keys, from `BKI_LOOKUP` columns and `DECLARE_FOREIGN_KEY` lines, in the order of the header, as `Catalog.pm` reads them.
+    foreign_keys: Vec<ForeignKey>,
+}
+
+/// One foreign key of a catalog, a row of `system_fk_info.h`.
+#[derive(Debug)]
+struct ForeignKey {
+    /// The referencing columns, such as `conrelid, conkey`.
+    fk_cols: String,
+    /// The referenced catalog, or `encoding` for the encodings that are no catalog.
+    pk_table: String,
+    pk_cols: String,
+    /// True if the last referencing column is an array.
+    is_array: bool,
+    /// True if the referencing column can be zero.
+    is_opt: bool,
 }
 
 /// One index of a catalog.
@@ -391,7 +407,18 @@ fn parse_header(name: &str, text: &str) -> Result<Catalog, String> {
             declaring = false;
             continue;
         }
-        catalog.columns.push(parse_column(&file, &line)?);
+        let column = parse_column(&file, &line)?;
+        if let Some(pk_table) = &column.lookup {
+            // A BKI_LOOKUP column is a foreign key to the OID of the catalog.
+            catalog.foreign_keys.push(ForeignKey {
+                fk_cols: column.name.clone(),
+                pk_table: pk_table.clone(),
+                pk_cols: "oid".into(),
+                is_array: column.ty == "oidvector" || column.ty == "_oid",
+                is_opt: column.lookup_opt,
+            });
+        }
+        catalog.columns.push(column);
     }
     if catalog.name.is_empty() {
         return Err(format!("{file}: no CATALOG line"));
@@ -399,7 +426,7 @@ fn parse_header(name: &str, text: &str) -> Result<Catalog, String> {
     Ok(catalog)
 }
 
-/// Reads the arguments of a `DECLARE_TOAST` or `DECLARE_INDEX` line of `Catalog.pm`. The other `DECLARE_` lines give foreign keys and OID macros, and the bootstrap mode does not use them.
+/// Reads the arguments of a `DECLARE_TOAST`, `DECLARE_INDEX` or `DECLARE_FOREIGN_KEY` line of `Catalog.pm`. The other `DECLARE_` lines give OID macros, and the bootstrap mode does not use them.
 fn parse_declare(
     catalog: &mut Catalog,
     file: &str,
@@ -437,6 +464,25 @@ fn parse_declare(
                 unique: macro_name != "INDEX",
                 pkey: macro_name == "UNIQUE_INDEX_PKEY",
                 keys,
+            });
+        }
+        "FOREIGN_KEY" | "FOREIGN_KEY_OPT" | "ARRAY_FOREIGN_KEY" | "ARRAY_FOREIGN_KEY_OPT" => {
+            // The arguments are `(fk_cols), pk_table, (pk_cols)`.
+            let (fk_cols, rest) =
+                args.strip_prefix('(').and_then(|a| a.split_once(')')).ok_or_else(bad)?;
+            let (pk_table, pk_cols) =
+                rest.trim_start_matches([',', ' ']).split_once(',').ok_or_else(bad)?;
+            let pk_cols = pk_cols
+                .trim()
+                .strip_prefix('(')
+                .and_then(|c| c.strip_suffix(')'))
+                .ok_or_else(bad)?;
+            catalog.foreign_keys.push(ForeignKey {
+                fk_cols: fk_cols.trim().to_string(),
+                pk_table: pk_table.trim().to_string(),
+                pk_cols: pk_cols.trim().to_string(),
+                is_array: macro_name.starts_with("ARRAY_"),
+                is_opt: macro_name.ends_with("_OPT"),
             });
         }
         _ => {}
@@ -2061,7 +2107,7 @@ fn catalogs_file(
 ) -> Result<String, String> {
     let mut out = String::new();
     writeln!(out, "//! The schemas of the {} system catalogs, in the order of `genbki.pl`.\n//!\n//! {HEAD}\n", catalogs.len()).unwrap();
-    out.push_str("use crate::{Catalog, Column};\n\n");
+    out.push_str("use crate::{Catalog, Column, ForeignKey};\n\n");
     writeln!(
         out,
         "/// The system catalogs.\npub(crate) static CATALOGS: [Catalog; {}] = [",
@@ -2097,6 +2143,30 @@ fn catalogs_file(
             }
         }
         writeln!(out, "    }},").unwrap();
+    }
+    out.push_str("];\n");
+    // genbki.pl skips the lookups of the encodings, which are no catalog.
+    let mut keys = Vec::new();
+    for catalog in catalogs {
+        for fk in catalog.foreign_keys.iter().filter(|fk| fk.pk_table != "encoding") {
+            let pk = catalogs
+                .iter()
+                .find(|c| c.name == fk.pk_table)
+                .ok_or_else(|| format!("{}.h: no catalog {}", catalog.name, fk.pk_table))?;
+            keys.push(format!(
+                "    ForeignKey {{ table: {}, columns: {:?}, pk_table: {}, pk_columns: {:?}, is_array: {}, is_opt: {} }}, // {} => {}",
+                catalog.oid, fk.fk_cols, pk.oid, fk.pk_cols, fk.is_array, fk.is_opt, catalog.name, pk.name
+            ));
+        }
+    }
+    writeln!(
+        out,
+        "\n/// The foreign keys of the system catalogs, the rows of `system_fk_info.h`.\npub(crate) static FOREIGN_KEYS: [ForeignKey; {}] = [",
+        keys.len()
+    )
+    .unwrap();
+    for key in keys {
+        writeln!(out, "{key}").unwrap();
     }
     out.push_str("];\n");
     Ok(out)

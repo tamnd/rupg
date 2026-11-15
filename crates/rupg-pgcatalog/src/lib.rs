@@ -53,6 +53,23 @@ pub struct Column {
     pub not_null: bool,
 }
 
+/// One foreign key of the system catalogs, a row of `pg_get_catalog_foreign_keys()`.
+#[derive(Debug)]
+pub struct ForeignKey {
+    /// The OID of the referencing catalog.
+    pub table: u32,
+    /// The referencing columns, separated by `, `, such as `conrelid, conkey`.
+    pub columns: &'static str,
+    /// The OID of the referenced catalog.
+    pub pk_table: u32,
+    /// The referenced columns, separated by `, `.
+    pub pk_columns: &'static str,
+    /// True if the last referencing column is an array.
+    pub is_array: bool,
+    /// True if the referencing column can be zero.
+    pub is_opt: bool,
+}
+
 /// The values of one column of the static rows. A null row has the zero value of the kind.
 #[derive(Debug)]
 pub enum Values {
@@ -129,6 +146,11 @@ impl Catalog {
 /// The 64 system catalogs, in the order of `genbki.pl`.
 pub fn catalogs() -> &'static [Catalog] {
     &generated::catalogs::CATALOGS
+}
+
+/// The foreign keys of the system catalogs, in the order of `system_fk_info.h` of `genbki.pl`.
+pub fn foreign_keys() -> &'static [ForeignKey] {
+    &generated::catalogs::FOREIGN_KEYS
 }
 
 /// A system catalog by name.

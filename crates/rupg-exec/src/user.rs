@@ -1826,6 +1826,12 @@ fn ranges<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             .set("rngsubopc", oid(info.subopc))
             .set("rngcanonical", oid(info.canonical))
             .set("rngsubdiff", oid(info.subdiff));
+        let [two, three, multi0, multi1, multi2] = info.constructors;
+        row.set("rngconstruct2", oid(two))
+            .set("rngconstruct3", oid(three))
+            .set("rngmltconstruct0", oid(multi0))
+            .set("rngmltconstruct1", oid(multi1))
+            .set("rngmltconstruct2", oid(multi2));
         rows.push(row);
     }
     rows
