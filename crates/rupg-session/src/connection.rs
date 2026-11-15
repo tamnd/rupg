@@ -6742,6 +6742,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/absent.test")));
     }
 
+    /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn catalog_foreign_keys() {
+        big_stack(|| script(include_str!("connection/catalog_foreign_keys.test")));
+    }
+
     /// `pg_column_compression` and `pg_column_toast_chunk_id` of the columns of tables: the method of a compressed value and whether a value is out of line, which an update of another column keeps and `VACUUM FULL` carries to the new versions with the same chunk, as `toast_tuple_init` and `rd_toastoid` do. A value that is not a column of a table gives null. `connection/toast_forms.test` is the output of PostgreSQL 19 for the same script, with the chunks only compared with each other.
     #[test]
     fn toast_forms() {

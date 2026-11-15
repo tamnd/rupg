@@ -1,0 +1,40 @@
+> SELECT count(*) AS keys, count(*) FILTER (WHERE is_array) AS arrays, count(*) FILTER (WHERE is_opt) AS opts FROM pg_get_catalog_foreign_keys()
+fields keys:20:8:-1,arrays:20:8:-1,opts:20:8:-1
+row 226,19,85
+SELECT 1
+> SELECT fktable, fkcols, pktable, pkcols, is_array, is_opt FROM pg_get_catalog_foreign_keys() WHERE array_length(fkcols, 1) > 1 ORDER BY fktable::oid, fkcols::text
+fields fktable:2205:4:-1,fkcols:1009:-1:-1,pktable:2205:4:-1,pkcols:1009:-1:-1,is_array:16:1:-1,is_opt:16:1:-1
+row pg_attrdef,{adrelid,adnum},pg_attribute,{attrelid,attnum},f,f
+row pg_constraint,{confrelid,confkey},pg_attribute,{attrelid,attnum},t,f
+row pg_constraint,{conrelid,conkey},pg_attribute,{attrelid,attnum},t,t
+row pg_index,{indrelid,indkey},pg_attribute,{attrelid,attnum},t,t
+row pg_statistic,{starelid,staattnum},pg_attribute,{attrelid,attnum},f,f
+row pg_trigger,{tgrelid,tgattr},pg_attribute,{attrelid,attnum},t,f
+row pg_partitioned_table,{partrelid,partattrs},pg_attribute,{attrelid,attnum},t,t
+row pg_statistic_ext,{stxrelid,stxkeys},pg_attribute,{attrelid,attnum},t,f
+SELECT 8
+> SELECT fktable, fkcols, pktable, pkcols, is_array, is_opt FROM pg_get_catalog_foreign_keys() WHERE fktable = 'pg_range'::regclass
+fields fktable:2205:4:-1,fkcols:1009:-1:-1,pktable:2205:4:-1,pkcols:1009:-1:-1,is_array:16:1:-1,is_opt:16:1:-1
+row pg_range,{rngtypid},pg_type,{oid},f,f
+row pg_range,{rngsubtype},pg_type,{oid},f,f
+row pg_range,{rngmultitypid},pg_type,{oid},f,f
+row pg_range,{rngcollation},pg_collation,{oid},f,t
+row pg_range,{rngsubopc},pg_opclass,{oid},f,f
+row pg_range,{rngconstruct2},pg_proc,{oid},f,f
+row pg_range,{rngconstruct3},pg_proc,{oid},f,f
+row pg_range,{rngmltconstruct0},pg_proc,{oid},f,f
+row pg_range,{rngmltconstruct1},pg_proc,{oid},f,f
+row pg_range,{rngmltconstruct2},pg_proc,{oid},f,f
+row pg_range,{rngcanonical},pg_proc,{oid},f,t
+row pg_range,{rngsubdiff},pg_proc,{oid},f,t
+SELECT 12
+> CREATE TYPE fkrange AS RANGE (subtype = float8)
+CREATE TYPE
+> SELECT rngconstruct2::regprocedure, rngconstruct3::regprocedure, rngmltconstruct0::regprocedure, rngmltconstruct1::regprocedure, rngmltconstruct2::regprocedure FROM pg_range WHERE rngtypid = 'fkrange'::regtype
+fields rngconstruct2:2202:4:-1,rngconstruct3:2202:4:-1,rngmltconstruct0:2202:4:-1,rngmltconstruct1:2202:4:-1,rngmltconstruct2:2202:4:-1
+row fkrange(double precision,double precision),fkrange(double precision,double precision,text),fkmultirange(),fkmultirange(fkrange),fkmultirange(fkrange[])
+SELECT 1
+> SELECT count(*) AS dangling FROM pg_range r WHERE NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = r.rngconstruct2) OR NOT EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid = r.rngmltconstruct2)
+fields dangling:20:8:-1
+row 0
+SELECT 1
