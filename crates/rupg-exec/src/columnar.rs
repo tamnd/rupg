@@ -15,7 +15,10 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
 use rupg_summary::zone::{Test, Verdict, Zone, has_code};
-use rupg_types::{DateUnit, Numeric, POSTGRES_EPOCH_JDATE, Value, date2j, j2date, oid};
+use rupg_types::{
+    DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateUnit, Numeric, POSTGRES_EPOCH_JDATE,
+    TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, USECS_PER_DAY, Value, date2j, j2date, oid,
+};
 
 use crate::agg;
 use crate::{Cache, Eval, Group, hashed, lift, scan, sort};
@@ -396,23 +399,42 @@ fn dense_math(
     my: i64,
     op: impl Fn(i64, i64) -> (i64, bool),
 ) -> Option<Vec<i64>> {
-    let one = |a: i64, b: i64, bad: &mut bool| {
-        let (a, o1) = a.overflowing_mul(mx);
-        let (b, o2) = b.overflowing_mul(my);
-        let (v, o3) = op(a, b);
-        *bad |= o1 | o2 | o3;
-        v
-    };
-    let mut bad = false;
-    let out: Vec<i64> = match (x, y) {
-        (Dense::Vector(a), Dense::Vector(b)) => {
-            a.iter().zip(b).map(|(&a, &b)| one(a, b, &mut bad)).collect()
+    // A constant takes its scale once, so a vector of the scale of the result needs no product for its scale, as each side of `*` and `l_discount` in `1 - l_discount`.
+    fn scaled(side: Dense<'_>, m: i64) -> Option<(Dense<'_>, i64)> {
+        match side {
+            Dense::Const(c) => c.checked_mul(m).map(|c| (Dense::Const(c), 1)),
+            vector @ Dense::Vector(_) => Some((vector, m)),
         }
-        (Dense::Vector(a), Dense::Const(b)) => a.iter().map(|&a| one(a, b, &mut bad)).collect(),
-        (Dense::Const(a), Dense::Vector(b)) => b.iter().map(|&b| one(a, b, &mut bad)).collect(),
-        (Dense::Const(_), Dense::Const(_)) => return None,
-    };
+    }
+    let ((x, mx), (y, my)) = (scaled(x, mx)?, scaled(y, my)?);
+    let mut bad = false;
+    let out = if mx == 1 && my == 1 {
+        dense_each(x, y, |a, b| {
+            let (v, o) = op(a, b);
+            bad |= o;
+            v
+        })
+    } else {
+        dense_each(x, y, |a, b| {
+            let (a, o1) = a.overflowing_mul(mx);
+            let (b, o2) = b.overflowing_mul(my);
+            let (v, o3) = op(a, b);
+            bad |= o1 | o2 | o3;
+            v
+        })
+    }?;
     (!bad).then_some(out)
+}
+
+/// The values of `f` for each row of two sides with no null, or `None` for two constants.
+#[inline]
+fn dense_each(x: Dense<'_>, y: Dense<'_>, mut f: impl FnMut(i64, i64) -> i64) -> Option<Vec<i64>> {
+    Some(match (x, y) {
+        (Dense::Vector(a), Dense::Vector(b)) => a.iter().zip(b).map(|(&a, &b)| f(a, b)).collect(),
+        (Dense::Vector(a), Dense::Const(b)) => a.iter().map(|&a| f(a, b)).collect(),
+        (Dense::Const(a), Dense::Vector(b)) => b.iter().map(|&b| f(a, b)).collect(),
+        (Dense::Const(_), Dense::Const(_)) => return None,
+    })
 }
 
 /// A comparison `cmp` of two sides with no null, with the scales `mx` and `my`, as 0 and 1. The scaled values are `i64` when the scales fit, so most comparisons have no `i128`. `None` for two constants, for a vector with a scale that is not 1 and for a scale that does not fit, and then the caller compares with `i128`.
@@ -562,6 +584,60 @@ impl Col {
     }
 }
 
+/// Puts the words of the key `k` of each row of the column `col` into `words`, which has `width` words for each row. A null gives the word 0 and sets the bit of the key in the last word of the row. It gives `false` when a row that is not null has a value with no word, as [`Col::word`] does.
+fn put_key_words(col: &Col, k: usize, width: usize, words: &mut [u64]) -> bool {
+    fn fill(words: &mut [u64], k: usize, width: usize, f: impl Fn(usize) -> u64) {
+        for (i, row) in words.chunks_exact_mut(width).enumerate() {
+            row[k] = f(i);
+        }
+    }
+    let bit = 1_u64 << (k % 64);
+    let all_null = |words: &mut [u64]| {
+        for row in words.chunks_exact_mut(width) {
+            row[k] = 0;
+            row[width - 1] |= bit;
+        }
+    };
+    match &col.data {
+        Data::Int(v) | Data::Dec(v, _) => fill(words, k, width, |i| v[i] as u64),
+        Data::Float(v) => fill(words, k, width, |i| float_word(v[i])),
+        Data::Code(v, _) => fill(words, k, width, |i| u64::from(v[i])),
+        Data::Const(v) if v.is_null() => {
+            all_null(words);
+            return true;
+        }
+        Data::Const(v) => {
+            let w = int_of(v).map_or(0, |v| v as u64);
+            fill(words, k, width, |_| w);
+            return true;
+        }
+        Data::Values(v) => {
+            for (row, v) in words.chunks_exact_mut(width).zip(v) {
+                if !v.is_null() {
+                    return false;
+                }
+                row[k] = 0;
+                row[width - 1] |= bit;
+            }
+            return true;
+        }
+    }
+    if let Some(nulls) = &col.nulls {
+        for (row, &null) in words.chunks_exact_mut(width).zip(nulls) {
+            if null {
+                row[k] = 0;
+                row[width - 1] |= bit;
+            }
+        }
+    }
+    true
+}
+
+/// The bytes of a text with no spaces at its end, which a comparison of `bpchar` does not read.
+fn trim_spaces(text: &[u8]) -> &[u8] {
+    &text[..text.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1)]
+}
+
 /// The value of the integer `v` of a column of the type `ty`.
 fn int_value(ty: u32, v: i64) -> Value {
     match ty {
@@ -634,6 +710,8 @@ struct Exec<'q> {
     lengths: FxMap<usize, Vec<u32>>,
     /// For each `x IN (c, ...)` of integers, the set of the elements, or `None` for no element, and true when an element is null.
     int_sets: FxMap<*const Expr, (Option<lift::Keys>, bool)>,
+    /// For each test of `bpchar` of [`Exec::padded_codes`], the dictionary of the column and the result for each code: 0 for a code that the test has not seen, 1 for a code that no element is equal to and 2 for a code that an element is equal to.
+    padded: FxMap<*const Expr, (usize, Vec<u8>)>,
     /// The dictionary of each key of `GROUP BY` whose codes come from a map of [`key_map`] on the tasks.
     key_dicts: FxMap<*const Expr, usize>,
     /// The parameters of the query, then the values of the columns of a [`Generic`].
@@ -937,6 +1015,7 @@ fn dec_scale(expr: &Expr) -> Option<u8> {
         }
         ExprKind::Const(Value::Numeric(n)) => u8::try_from(n.dscale()).ok()?,
         ExprKind::Func(func) => match (src(func.oid), func.args.as_slice()) {
+            ("int2_numeric" | "int4_numeric" | "int8_numeric", [_]) => 0,
             ("numeric_add" | "numeric_sub", [a, b]) => dec_scale(a)?.max(dec_scale(b)?),
             ("numeric_mul", [a, b]) => dec_scale(a)?.checked_add(dec_scale(b)?)?,
             _ => return None,
@@ -1011,6 +1090,37 @@ fn int_compare(src: &str) -> Option<fn(i64, i64) -> bool> {
         "ge" => |a, b| a >= b,
         _ => return None,
     })
+}
+
+/// The comparison of a `date` and a `timestamp`, as `l_shipdate <= date '1998-12-01' - interval '90' day` in TPC-H Q1. The name of the function tells if the `date` is the first argument.
+fn date_timestamp_compare(src: &str) -> Option<fn(i64, i64) -> bool> {
+    let op = match src.strip_prefix("date_").and_then(|s| s.strip_suffix("_timestamp")) {
+        Some(op) => op,
+        None => src.strip_prefix("timestamp_")?.strip_suffix("_date")?,
+    };
+    let compare: fn(i64, i64) -> bool = match op {
+        "eq" => |a, b| a == b,
+        "ne" => |a, b| a != b,
+        "lt" => |a, b| a < b,
+        "le" => |a, b| a <= b,
+        "gt" => |a, b| a > b,
+        "ge" => |a, b| a >= b,
+        _ => return None,
+    };
+    Some(compare)
+}
+
+/// The microseconds of a `date` for a comparison with a `timestamp`, in the order of `date_cmp_timestamp`. The infinities stay infinite. A date after the range of `timestamp` comes after each finite timestamp and before infinity.
+fn date_micros(date: i64) -> i64 {
+    match i32::try_from(date) {
+        Ok(DATE_INFINITY) => TIMESTAMP_INFINITY,
+        Ok(DATE_NEGATIVE_INFINITY) => TIMESTAMP_NEGATIVE_INFINITY,
+        _ => date.checked_mul(USECS_PER_DAY).unwrap_or(if date > 0 {
+            TIMESTAMP_INFINITY - 1
+        } else {
+            TIMESTAMP_NEGATIVE_INFINITY + 1
+        }),
+    }
 }
 
 /// The arithmetic of a function of integers.
@@ -1266,6 +1376,12 @@ impl<'q> Exec<'q> {
                 }
             }
             ExprKind::Func(func) if !func.retset => {
+                if plain(func.collation)
+                    && let Some(col) =
+                        self.bpchar_equal(expr, src(func.oid), &func.args, batch, sel)?
+                {
+                    return Ok(col);
+                }
                 if let Some(col) = self.func(expr, &func.args, src(func.oid), batch, sel)? {
                     return Ok(col);
                 }
@@ -1276,7 +1392,7 @@ impl<'q> Exec<'q> {
                 }
             }
             ExprKind::ScalarArrayOp { func, any, args, collation } if plain(*collation) => {
-                if let Some(col) = self.text_in(*func, *any, args, batch, sel)? {
+                if let Some(col) = self.text_in(expr, *func, *any, args, batch, sel)? {
                     return Ok(col);
                 }
                 if let Some(col) = self.int_in(expr, *func, *any, args, batch, sel)? {
@@ -1333,9 +1449,10 @@ impl<'q> Exec<'q> {
         Ok(Some(Col::bools(&out)))
     }
 
-    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
+    /// `x IN (c, ...)` and `x NOT IN (c, ...)` of `text` or `bpchar`, which `eval_const_expressions` makes `x = ANY (array)` and `x <> ALL (array)`, on a column of codes, as in TPC-H Q12, Q19 and Q22. For `text`, the codes of the constants are found once in the dictionary of the column. A `bpchar` does not compare the spaces at its end, so its bytes are compared with no spaces at the end, in [`Exec::padded_codes`]. A null element makes the test null for a row that no element is equal to. `None` for another test or another column.
     fn text_in(
         &mut self,
+        expr: &Expr,
         func: u32,
         any: bool,
         args: &[Expr],
@@ -1366,23 +1483,17 @@ impl<'q> Exec<'q> {
         if !dict.is_text() {
             return Ok(None);
         }
-        let trim = |t: &[u8]| -> usize { t.iter().rposition(|&c| c != b' ').map_or(0, |n| n + 1) };
         // The test of a row whose value is equal to no element.
         let other = (!null_element).then_some(!equal);
         let mut out: Vec<Option<bool>> = Vec::with_capacity(sel.len());
         if padded {
-            let mut wanted: Vec<&[u8]> = texts.iter().map(|t| &t[..trim(t)]).collect();
+            let mut wanted: Vec<&[u8]> = texts.iter().map(|t| trim_spaces(t)).collect();
             wanted.sort_unstable();
             wanted.dedup();
-            for (i, &code) in codes.iter().enumerate() {
-                if code == 0 || col.null(i) {
-                    out.push(None);
-                    continue;
-                }
-                let Some(text) = dict.text(code) else { return Ok(None) };
-                let found = wanted.binary_search(&&text[..trim(text)]).is_ok();
-                out.push(if found { Some(equal) } else { other });
-            }
+            let Some(out) = self.padded_codes(expr, &col, &wanted, equal, other) else {
+                return Ok(None);
+            };
+            return Ok(Some(Col::bools(&out)));
         } else {
             let mut wanted: Vec<u32> =
                 texts.iter().map(|t| dict.find(t)).filter(|&c| c != 0 && c != MISSING).collect();
@@ -1398,6 +1509,77 @@ impl<'q> Exec<'q> {
             }
         }
         Ok(Some(Col::bools(&out)))
+    }
+
+    /// `x = c` and `x <> c` of `bpchar`, of a column of codes and a constant, as `p_brand = 'Brand#12'` in TPC-H Q19, in [`Exec::padded_codes`]. `None` for other arguments.
+    fn bpchar_equal(
+        &mut self,
+        expr: &Expr,
+        src: &str,
+        args: &[Expr],
+        batch: &mut Batch,
+        sel: &[u32],
+    ) -> Result<Option<Col>> {
+        let equal = match src {
+            "bpchareq" => true,
+            "bpcharne" => false,
+            _ => return Ok(None),
+        };
+        let [a, b] = args else { return Ok(None) };
+        let (column, constant) = match (&a.kind, &b.kind) {
+            (_, ExprKind::Const(c)) => (a, c),
+            (ExprKind::Const(c), _) => (b, c),
+            _ => return Ok(None),
+        };
+        let text = match constant {
+            Value::Text(text) => text.as_bytes(),
+            _ => return Ok(None),
+        };
+        let col = self.eval(column, batch, sel)?;
+        let out = self.padded_codes(expr, &col, &[trim_spaces(text)], equal, Some(!equal));
+        Ok(out.map(|out| Col::bools(&out)))
+    }
+
+    /// The test of each row of a column of codes of `bpchar` against the texts of `wanted`, which are in order and have no spaces at their end: `equal` for a row whose text with no spaces at its end is in `wanted`, `other` for another row and `None` for a null. The bytes of each code are compared once in the scan for a column of the table, as PostgreSQL compares `bpchar` with no spaces at the end. `None` for another column.
+    fn padded_codes(
+        &mut self,
+        expr: &Expr,
+        col: &Col,
+        wanted: &[&[u8]],
+        equal: bool,
+        other: Option<bool>,
+    ) -> Option<Vec<Option<bool>>> {
+        let Data::Code(codes, d) = &col.data else { return None };
+        let dict = &self.dicts[*d];
+        if !dict.is_text() {
+            return None;
+        }
+        let key = std::ptr::from_ref(expr);
+        let stored = matches!(dict, Dict::Stored(_));
+        let mut memo = match self.padded.remove(&key) {
+            Some((at, memo)) if stored && at == *d => memo,
+            _ => Vec::new(),
+        };
+        let mut out = Vec::with_capacity(codes.len());
+        for (i, &code) in codes.iter().enumerate() {
+            if code == 0 || col.null(i) {
+                out.push(None);
+                continue;
+            }
+            let at = code as usize;
+            if memo.len() <= at {
+                memo.resize(at + 1, 0);
+            }
+            if memo[at] == 0 {
+                let text = trim_spaces(dict.text(code)?);
+                memo[at] = 1 + u8::from(wanted.binary_search(&text).is_ok());
+            }
+            out.push(if memo[at] == 2 { Some(equal) } else { other });
+        }
+        if stored {
+            self.padded.insert(key, (*d, memo));
+        }
+        Some(out)
     }
 
     /// The subquery of `self.links[link]` for each row: the `EXISTS` that [`lift::Probe::tests`] gives for the key of the row and its other column, or the value that [`lift::Scalar::value`] gives for the keys of the row.
@@ -1627,6 +1809,29 @@ impl<'q> Exec<'q> {
             }
             return Ok(None);
         }
+        if let (Some(compare), [a, b]) = (date_timestamp_compare(src), args) {
+            let first = src.starts_with("date_");
+            let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
+            let (Some(a), Some(b)) = (a.ints(), b.ints()) else { return Ok(None) };
+            // Two sides with no null give the booleans with no `Option` for each row.
+            if let (Some(x), Some(y)) = (Dense::of(a, sel.len()), Dense::of(b, sel.len()))
+                && let Some(out) = dense_each(x, y, |x, y| {
+                    i64::from(if first {
+                        compare(date_micros(x), y)
+                    } else {
+                        compare(x, date_micros(y))
+                    })
+                })
+            {
+                return Ok(Some(Col { data: Data::Int(out), nulls: None, ty: oid::BOOL }));
+            }
+            let out: Vec<Option<bool>> = if first {
+                (0..sel.len()).map(|i| Some(compare(date_micros(a.get(i)?), b.get(i)?))).collect()
+            } else {
+                (0..sel.len()).map(|i| Some(compare(a.get(i)?, date_micros(b.get(i)?)))).collect()
+            };
+            return Ok(Some(Col::bools(&out)));
+        }
         if let (Some(compare), [a, b]) = (float_compare(src), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             if let (Some(a), Some(b)) = (Floats::of(&a), Floats::of(&b)) {
@@ -1806,7 +2011,7 @@ impl<'q> Exec<'q> {
         Ok(Some(Col { data, nulls, ty: expr.ty }))
     }
 
-    /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression.
+    /// The comparisons, `+`, `-` and `*` of `numeric` columns of [`Data::Dec`] and `numeric` constants, with no `Numeric` for each row. The result of `+`, `-` and `*` has the scale of [`dec_scale`]. `None` for other arguments, and for a result that does not fit in a `bigint`, for which the row engine evaluates the expression. A cast of an integer vector to `numeric` gives the same integers with the scale 0, as `ps_availqty` in `ps_supplycost * ps_availqty`.
     fn decimal(
         &mut self,
         src: &str,
@@ -1814,6 +2019,16 @@ impl<'q> Exec<'q> {
         batch: &mut Batch,
         sel: &[u32],
     ) -> Result<Option<Col>> {
+        if matches!(src, "int2_numeric" | "int4_numeric" | "int8_numeric") {
+            let [a] = args else { return Ok(None) };
+            let col = self.eval(a, batch, sel)?;
+            return Ok(match col.data {
+                Data::Int(v) => {
+                    Some(Col { data: Data::Dec(v, 0), nulls: col.nulls, ty: oid::NUMERIC })
+                }
+                _ => None,
+            });
+        }
         let compare: Option<fn(i128, i128) -> bool> = match src {
             "numeric_eq" => Some(|a, b| a == b),
             "numeric_ne" => Some(|a, b| a != b),
@@ -2226,6 +2441,59 @@ fn data_len(data: &DecodedData) -> usize {
 /// An expression that the scan cannot run: a subquery, a column of another query or a system column, a call that is volatile, or an aggregate that the scan does not make.
 ///
 /// With `links`, an `EXISTS`, a subquery of one value and an `IN` are supported, and the scan gets their values from the run once of [`links_of`]. The columns of the query in a subquery are then columns of the query outside it.
+/// True for a subquery of `EXISTS` or of one value that reads no column and no aggregate of a query outside it and calls no volatile function, so that it gives the same rows each time, as an `InitPlan` of PostgreSQL.
+pub(super) fn once(sub: &rupg_analyze::SubLink) -> bool {
+    matches!(sub.kind, SubLinkKind::Expr | SubLinkKind::Exists)
+        && !sub.query.all_exprs(0).iter().any(|(e, depth)| {
+            crate::volatile(e)
+                || e.find(*depth, &mut |e, depth| match &e.kind {
+                    ExprKind::Var(var) if var.levels_up > depth => Some(()),
+                    ExprKind::Agg(agg) if agg.levels_up > depth => Some(()),
+                    _ => None,
+                })
+                .is_some()
+        })
+}
+
+/// A copy of `having` with the value of each subquery that [`once`] tells in the place of the subquery, or `None` when a subquery gives an error. PostgreSQL runs such a subquery as an `InitPlan` when the first group tests `HAVING`, so after an error the row engine runs the query, which runs the subquery only then. The subqueries run in `having` and not in the copy, as the cache keeps their rows by the address of the subquery.
+pub(super) fn having_once(
+    having: &Expr,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+) -> Option<Expr> {
+    let mut subs = Vec::new();
+    having.find(0, &mut |e, depth| {
+        if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+            subs.push(e);
+        }
+        None::<()>
+    });
+    let mut copy = having.clone();
+    if subs.is_empty() {
+        return Some(copy);
+    }
+    let empty = scan::Tables::default();
+    let mut eval = Eval::new(params, session, &empty, cache, &[]);
+    let mut values = Vec::with_capacity(subs.len());
+    for sub in subs {
+        values.push(eval.eval(sub).ok()?);
+    }
+    let mut values = values.into_iter();
+    let mut missing = false;
+    copy.each_mut(0, &mut |e, depth| {
+        if depth == 0 && matches!(e.kind, ExprKind::SubLink(_)) {
+            match values.next() {
+                Some(value) => e.kind = ExprKind::Const(value),
+                None => missing = true,
+            }
+            return true;
+        }
+        false
+    });
+    (!missing && values.next().is_none()).then_some(copy)
+}
+
 fn unsupported(expr: &Expr, links: bool) -> bool {
     // The columns of the subquery in the test of an `IN`, which [`in_set`] reads.
     let mut tested: Vec<*const Expr> = Vec::new();
@@ -2473,6 +2741,110 @@ impl Results<'_> {
             },
             _ => return Err(Error::internal("an aggregate has another state")),
         })
+    }
+}
+
+/// A `HAVING` that is one comparison of a `count` or a `sum` of integers or of `numeric` with a constant, as `sum(l_quantity) > 300` in TPC-H Q18. It tests the state of each group, with no `Value` for the result of the call and no [`Eval`].
+struct QuickHaving<'r> {
+    states: QuickStates<'r>,
+    /// The constant as an integer count of `10^-scale` for the scale of the result of the call, rounded down, and true when the constant has no rest.
+    floor: i128,
+    exact: bool,
+    /// True when the constant is the first argument of the comparison.
+    flip: bool,
+    /// The test of the order of the first argument against the second argument.
+    test: fn(std::cmp::Ordering) -> bool,
+}
+
+/// The states of the groups of the call of a [`QuickHaving`].
+enum QuickStates<'r> {
+    Count(&'r [i64]),
+    /// The sums of a call whose result is a `bigint`, which gives an error when the sum does not fit.
+    Int8(&'r [(i64, i128)]),
+    /// The sums of a call whose result is a `numeric`.
+    Numeric(&'r [(i64, i128)]),
+}
+
+impl<'r> QuickHaving<'r> {
+    /// The quick test of `having`, or `None` when `having` is not a comparison of one call of `results` with a constant.
+    fn of(having: &Expr, results: &'r Results<'_>) -> Option<Self> {
+        let ExprKind::Func(func) = &having.kind else { return None };
+        let [a, b] = func.args.as_slice() else { return None };
+        let (agg, constant, flip) = match (&a.kind, &b.kind) {
+            (ExprKind::Agg(agg), ExprKind::Const(c)) => (agg, c, false),
+            (ExprKind::Const(c), ExprKind::Agg(agg)) => (agg, c, true),
+            _ => return None,
+        };
+        let key = std::ptr::from_ref(&**agg);
+        let call = results.calls.iter().find(|c| c.key == key)?;
+        let name = src(func.oid);
+        let (head, op) = name.split_at_checked(name.len().checked_sub(2)?)?;
+        let test: fn(std::cmp::Ordering) -> bool = match op {
+            "eq" => std::cmp::Ordering::is_eq,
+            "ne" => std::cmp::Ordering::is_ne,
+            "lt" => std::cmp::Ordering::is_lt,
+            "le" => std::cmp::Ordering::is_le,
+            "gt" => std::cmp::Ordering::is_gt,
+            "ge" => std::cmp::Ordering::is_ge,
+            _ => return None,
+        };
+        let (states, floor, exact) = match (&call.method, &call.states, constant) {
+            (Method::Count | Method::CountArg | Method::Distinct, States::Count(states), _) => {
+                let c = matches!(constant, Value::Int2(_) | Value::Int4(_) | Value::Int8(_))
+                    .then(|| int_of(constant))
+                    .flatten()?;
+                int_compare(name).filter(|_| head.starts_with("int"))?;
+                (QuickStates::Count(states), i128::from(c), true)
+            }
+            (
+                Method::SumInt,
+                States::Sum(states),
+                Value::Int2(_) | Value::Int4(_) | Value::Int8(_),
+            ) => {
+                int_compare(name).filter(|_| head.starts_with("int"))?;
+                (QuickStates::Int8(states), i128::from(int_of(constant)?), true)
+            }
+            (
+                Method::Int128 { avg: false } | Method::Dec { avg: false, .. },
+                States::Sum(states),
+                Value::Numeric(c),
+            ) if head == "numeric_" => {
+                let scale = match call.method {
+                    Method::Dec { scale, .. } => u32::from(scale),
+                    _ => 0,
+                };
+                let scaled = c.to_decimal(scale)?;
+                let (floor, exact) = match Numeric::from_decimal(scaled, scale).compare(c) {
+                    std::cmp::Ordering::Equal => (scaled, true),
+                    std::cmp::Ordering::Greater => (scaled - 1, false),
+                    std::cmp::Ordering::Less => (scaled, false),
+                };
+                (QuickStates::Numeric(states), floor, exact)
+            }
+            _ => return None,
+        };
+        Some(QuickHaving { states, floor, exact, flip, test })
+    }
+
+    /// The result of the test for the group `g`: false for a null result of the call, or `None` when the row engine must evaluate `HAVING`, for a sum that does not fit in a `bigint`.
+    fn test(&self, g: usize) -> Option<bool> {
+        let v = match self.states {
+            QuickStates::Count(counts) => i128::from(counts[g]),
+            QuickStates::Int8(sums) => match sums[g] {
+                (0, _) => return Some(false),
+                (_, sum) => i128::from(i64::try_from(sum).ok()?),
+            },
+            QuickStates::Numeric(sums) => match sums[g] {
+                (0, _) => return Some(false),
+                (_, sum) => sum,
+            },
+        };
+        let order = match (self.exact, v <= self.floor) {
+            (true, _) => v.cmp(&self.floor),
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => std::cmp::Ordering::Greater,
+        };
+        Some((self.test)(if self.flip { order.reverse() } else { order }))
     }
 }
 
@@ -2749,6 +3121,7 @@ pub(crate) fn run_on(
         likes: FxMap::default(),
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
+        padded: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
@@ -2980,6 +3353,7 @@ pub(crate) fn selected(
         likes: FxMap::default(),
         lengths: FxMap::default(),
         int_sets: FxMap::default(),
+        padded: FxMap::default(),
         key_dicts: FxMap::default(),
         slots: params.to_vec(),
         empty: scan::Tables::default(),
@@ -3803,7 +4177,7 @@ fn passes(test: &Test, null: bool, value: i64) -> bool {
         Test::Le(c) => key <= *c,
         Test::Gt(c) => key > *c,
         Test::Ge(c) => key >= *c,
-        Test::In(cs) => cs.contains(&key),
+        Test::In(cs) => cs.binary_search(&key).is_ok(),
         Test::Codes(bits) => u64::try_from(value).is_ok_and(|c| has_code(bits, c)),
     }
 }
@@ -4213,6 +4587,8 @@ fn grouped(
     let mut bail = false;
     let mut words: Vec<u64> = Vec::with_capacity(VECTOR * (keys.len() + 1));
     let mut row_hashes: Vec<u64> = Vec::with_capacity(VECTOR);
+    let mut starts: Vec<usize> = Vec::with_capacity(VECTOR);
+    let mut direct = Direct::new(keys.len());
     let mut ids: Vec<u32> = Vec::with_capacity(VECTOR);
     let params = scan.exec.params;
     let session = scan.exec.session;
@@ -4494,76 +4870,94 @@ fn grouped(
             } else {
                 let cols =
                     keys.iter().map(|k| exec.eval(k, batch, sel)).collect::<Result<Vec<_>>>()?;
-                let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
                 new_rows.clear();
-                // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row.
-                let width = keys.len() + 1;
-                words.clear();
-                for i in 0..sel.len() {
-                    let mut mask = 0_u64;
+                // Keys of a few dictionary codes find their groups in an array of the codes, with no words and no probe of the map, after the first rows of the groups.
+                let codes = direct.as_mut().and_then(|d| d.codes(&cols));
+                if let (Some(direct), Some(codes)) = (&direct, &codes)
+                    && !sel.is_empty()
+                    && direct.find(codes, sel.len(), &mut ids)
+                {
+                    trailing = true;
+                } else {
+                    let batch_shapes: Option<Vec<Shape>> = cols.iter().map(Shape::of).collect();
+                    // The words of the keys of each row, and their hashes, come first, so that a probe can start the read of the slot of a later row. The words of a key go in for all the rows of the batch at one time.
+                    let width = keys.len() + 1;
+                    words.clear();
+                    words.resize(sel.len() * width, 0);
                     for (k, col) in cols.iter().enumerate() {
-                        if col.null(i) {
-                            mask |= 1 << (k % 64);
-                            words.push(0);
-                        } else {
-                            let Some(w) = col.word(i) else {
-                                bail = true;
-                                return Ok(false);
-                            };
-                            words.push(w);
+                        if !put_key_words(col, k, width, &mut words) {
+                            bail = true;
+                            return Ok(false);
                         }
                     }
-                    words.push(mask);
-                }
-                row_hashes.clear();
-                row_hashes.extend(words.chunks_exact(width).map(|w| map.hash(w)));
-                for (i, &row_at) in sel.iter().enumerate() {
-                    if let Some(&ahead) = row_hashes.get(i + PREFETCH_ROWS) {
-                        map.prefetch(ahead);
-                    }
-                    let word = &words[i * width..(i + 1) * width];
-                    let (id, new) = match last_id {
-                        Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => (id, false),
-                        _ => {
-                            let next = u32::try_from(groups)
-                                .map_err(|_| Error::internal("too many groups"))?;
-                            let found = map.id(word, row_hashes[i], next);
-                            last_word.copy_from_slice(word);
-                            last_id = Some(found.0);
-                            found
+                    // A row with the same words as the row before it is in the same group, so only the first row of each run of equal words gets a hash and a probe of the map. The rows of a table in the order of its keys make long runs.
+                    starts.clear();
+                    let mut before: Option<&[u64]> = None;
+                    for (i, w) in words.chunks_exact(width).enumerate() {
+                        if before != Some(w) {
+                            starts.push(i);
                         }
-                    };
-                    trailing = !new;
-                    if new {
-                        groups += 1;
-                        new_rows.push(row_at);
-                        // The keys of the groups go into the words with no hash, and also with a hash for `key_top`, which reads them.
-                        let mut keep = hashing.is_none() || key_top.is_some();
-                        if let Some(places) = &hashing
-                            && hash_error.is_none()
-                        {
-                            match key_hash(places, &cols, i, &exec.dicts) {
-                                Ok(h) => hashes.push(h),
-                                // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
-                                Err(_) if hashes.is_empty() => {
-                                    hashing = None;
-                                    keep = true;
+                        before = Some(w);
+                    }
+                    row_hashes.clear();
+                    row_hashes.extend(
+                        starts.iter().map(|&i| map.hash(&words[i * width..(i + 1) * width])),
+                    );
+                    for (run, &i) in starts.iter().enumerate() {
+                        if let Some(&ahead) = row_hashes.get(run + PREFETCH_ROWS) {
+                            map.prefetch(ahead);
+                        }
+                        let end = starts.get(run + 1).copied().unwrap_or(sel.len());
+                        let row_at = sel[i];
+                        let word = &words[i * width..(i + 1) * width];
+                        let (id, new) = match last_id {
+                            Some(id) if word.iter().zip(&last_word).all(|(a, b)| a == b) => {
+                                (id, false)
+                            }
+                            _ => {
+                                let next = u32::try_from(groups)
+                                    .map_err(|_| Error::internal("too many groups"))?;
+                                let found = map.id(word, row_hashes[run], next);
+                                last_word.copy_from_slice(word);
+                                last_id = Some(found.0);
+                                found
+                            }
+                        };
+                        trailing = !new || end - i > 1;
+                        if new {
+                            groups += 1;
+                            new_rows.push(row_at);
+                            // The keys of the groups go into the words with no hash, and also with a hash for `key_top`, which reads them.
+                            let mut keep = hashing.is_none() || key_top.is_some();
+                            if let Some(places) = &hashing
+                                && hash_error.is_none()
+                            {
+                                match key_hash(places, &cols, i, &exec.dicts) {
+                                    Ok(h) => hashes.push(h),
+                                    // A key that the hash of the plan cannot read: the groups go in the order of a sort, as before the hash.
+                                    Err(_) if hashes.is_empty() => {
+                                        hashing = None;
+                                        keep = true;
+                                    }
+                                    Err(error) => hash_error = Some(error),
                                 }
-                                Err(error) => hash_error = Some(error),
+                            }
+                            if keep {
+                                key_words.keep(
+                                    word,
+                                    batch_shapes.as_deref(),
+                                    &cols,
+                                    i,
+                                    &exec.dicts,
+                                    &mut key_values,
+                                );
                             }
                         }
-                        if keep {
-                            key_words.keep(
-                                word,
-                                batch_shapes.as_deref(),
-                                &cols,
-                                i,
-                                &exec.dicts,
-                                &mut key_values,
-                            );
-                        }
+                        ids.extend(std::iter::repeat_n(id, end - i));
                     }
-                    ids.push(id);
+                    if let (Some(direct), Some(codes)) = (&mut direct, &codes) {
+                        direct.learn(codes, &ids);
+                    }
                 }
                 // The rows of the table up to the end of this batch, also the rows that the conditions or the zones took out, so that the rate of new groups is a rate for each row of the table and not for each row that passes.
                 seen = batch.segment * ROWS + batch.vector * VECTOR + batch.rows;
@@ -4754,6 +5148,14 @@ fn grouped(
                                 let state = &mut states[0];
                                 state.0 += i64::try_from(v.len()).unwrap_or(i64::MAX);
                                 state.1 += v.iter().map(|&x| i128::from(x)).sum::<i128>();
+                            }
+                            // A vector with no null needs no test of a null for each row.
+                            Ints::Vector(v, None) => {
+                                for (&v, &id) in v.iter().zip(ids.iter()) {
+                                    let state = &mut states[id as usize];
+                                    state.0 += 1;
+                                    state.1 += i128::from(v);
+                                }
                             }
                             _ => {
                                 for (i, &id) in ids.iter().enumerate() {
@@ -4956,11 +5358,18 @@ fn grouped(
         let mut eval = Eval::new(params, session, &empty, cache, &[]);
         eval.tuple = &[scan::NONE];
         let mut passed = Vec::new();
+        let quick = QuickHaving::of(having, &results);
         for (n, g) in order.enumerate() {
             if passed.len() >= needed {
                 break;
             }
             crate::interrupt(session, n)?;
+            if let Some(pass) = quick.as_ref().and_then(|q| q.test(g)) {
+                if pass {
+                    passed.push(g);
+                }
+                continue;
+            }
             eval.group = Group { aggs: results.group(g, Some(&having_read))?, ..Group::default() };
             if eval.eval(having)? == Value::Bool(true) {
                 passed.push(g);
@@ -6113,6 +6522,82 @@ impl Shape {
             Shape::Code(d) => dicts[d].value(word as u32),
             Shape::Dec(scale) => {
                 Value::Numeric(Numeric::from_decimal(i128::from(word as i64), u32::from(scale)))
+            }
+        }
+    }
+}
+
+/// The groups of the keys of the rows by the dictionary codes of the keys, for at most three keys of small codes, as `l_returnflag` and `l_linestatus` in TPC-H Q1. The codes of a dictionary do not change during a scan, and they are the words of the keys in the map, so a slot of the array keeps the group that the map gave for its codes.
+struct Direct {
+    /// The dictionaries of the keys of the slots.
+    dicts: Vec<usize>,
+    /// The bits of the code of each key in a slot.
+    bits: u32,
+    /// The group of each slot, or `u32::MAX` for no group yet.
+    ids: Vec<u32>,
+}
+
+impl Direct {
+    const SLOT_BITS: u32 = 12;
+
+    fn new(keys: usize) -> Option<Direct> {
+        let keys = u32::try_from(keys).ok().filter(|k| (1..=3).contains(k))?;
+        Some(Direct { dicts: Vec::new(), bits: Direct::SLOT_BITS / keys, ids: Vec::new() })
+    }
+
+    /// The codes of the keys of a batch, or `None` when a key has no codes or has a vector of nulls. When the dictionaries change, the slots are empty again.
+    fn codes<'c>(&mut self, cols: &'c [Col]) -> Option<Vec<&'c [u32]>> {
+        let mut codes = Vec::with_capacity(cols.len());
+        let mut dicts = Vec::with_capacity(cols.len());
+        for col in cols {
+            let Data::Code(v, d) = &col.data else { return None };
+            if col.nulls.is_some() {
+                return None;
+            }
+            codes.push(v.as_slice());
+            dicts.push(*d);
+        }
+        if dicts != self.dicts || self.ids.is_empty() {
+            self.ids.clear();
+            self.ids.resize(1 << Direct::SLOT_BITS, u32::MAX);
+            self.dicts = dicts;
+        }
+        Some(codes)
+    }
+
+    /// The slot of the codes of a row, or `None` for a code that does not fit in its bits.
+    #[inline]
+    fn slot(&self, codes: &[&[u32]], i: usize) -> Option<usize> {
+        let mut slot = 0_usize;
+        for code in codes {
+            let code = code[i];
+            if code >> self.bits != 0 {
+                return None;
+            }
+            slot = (slot << self.bits) | code as usize;
+        }
+        Some(slot)
+    }
+
+    /// The groups of the rows of a batch in `ids`, or false with no groups when a row has no group in a slot.
+    fn find(&self, codes: &[&[u32]], rows: usize, ids: &mut Vec<u32>) -> bool {
+        for i in 0..rows {
+            match self.slot(codes, i).map(|slot| self.ids[slot]) {
+                Some(id) if id != u32::MAX => ids.push(id),
+                _ => {
+                    ids.clear();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Keeps the groups that the map gave for the rows of a batch.
+    fn learn(&mut self, codes: &[&[u32]], ids: &[u32]) {
+        for (i, &id) in ids.iter().enumerate() {
+            if let Some(slot) = self.slot(codes, i) {
+                self.ids[slot] = id;
             }
         }
     }

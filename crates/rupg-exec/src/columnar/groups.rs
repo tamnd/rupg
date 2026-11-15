@@ -830,9 +830,13 @@ pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
                 let k = c(k);
                 compare(v, n, sel, |x| x >= k);
             }
-            Test::In(keys) => {
+            Test::In(keys) if keys.len() <= 16 => {
                 let values: Vec<i64> = keys.iter().map(c).collect();
                 compare(v, n, sel, |x| values.contains(&x));
+            }
+            // The keys are in ascending order, so a long list finds a value with a binary search.
+            Test::In(keys) => {
+                compare(v, n, sel, |x| keys.binary_search(&rupg_summary::key::int(x)).is_ok());
             }
             Test::Codes(bits) => {
                 compare(v, n, sel, |x| u64::try_from(x).is_ok_and(|x| has_code(bits, x)));

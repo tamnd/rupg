@@ -19,8 +19,8 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, kind_of,
-    numeric_kind, plain, unsupported,
+    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, having_once,
+    kind_of, numeric_kind, once, plain, unsupported,
 };
 use crate::{Cache, reduce, scan, sort};
 
@@ -60,42 +60,64 @@ pub(crate) fn run(
     let all: Vec<&Expr> = conds.iter().copied().chain(&derived).collect();
     let Some(plan) = reduce::plan(query, &all, session) else { return Ok(None) };
     let width = query.relations.len();
-    let mut selected = Vec::with_capacity(width);
-    for (index, relation) in query.relations.iter().enumerate() {
-        // A condition `x IN (SELECT ...)` of the table: the subquery runs one time, and its integers then select the rows that pass the other conditions.
-        let (semi, mut own): (Vec<&Expr>, Vec<&Expr>) =
-            plan.own[index].iter().copied().partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
-        own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
-        let mut keys = plan.keys[index].clone();
-        let mut sets = Vec::with_capacity(semi.len());
-        for cond in semi {
-            let Some((column, set)) = semi_set(cond, index, params, session, cache)? else {
-                return Ok(None);
-            };
-            sets.push((keys.len(), set));
-            keys.push(column);
-        }
-        match super::selected(relation, &own, &keys, params, session, cache, true)? {
-            Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
-                if !sets.is_empty() {
-                    let keep: Vec<bool> = (0..found.places.len())
-                        .map(|row| {
-                            sets.iter().all(|(at, set)| {
-                                found.keys[*at][row].is_some_and(|key| set.contains(&key))
-                            })
-                        })
-                        .collect();
-                    found.keys.truncate(plan.keys[index].len());
-                    retain(&mut found.places, &keep);
-                    for key in &mut found.keys {
-                        retain(key, &keep);
-                    }
-                }
-                selected.push(found);
+    // A table with a condition with a subquery, as `lineitem l1` of TPC-H Q21, is read after the other tables. The other tables first lose the rows that join no row of a table next to them, as [`semi_reduce`] gives them, and then the keys of their rows select the rows of the table before its subqueries run, as [`key_filters`] gives them. So the subqueries run only on the rows that can join, as in a plan of PostgreSQL that joins the tables before it tests the subqueries.
+    let late: Vec<bool> =
+        (0..width).map(|i| links.iter().any(|c| reduce::relations_of(c) == [i])).collect();
+    let mut tables: Vec<Option<Selected>> = (0..width).map(|_| None).collect();
+    for pass in [false, true] {
+        if pass {
+            if !late.contains(&true) {
+                break;
             }
-            _ => return Ok(None),
+            semi_reduce(&plan.edges, &late, &mut tables);
+        }
+        for (index, relation) in query.relations.iter().enumerate() {
+            if late[index] != pass {
+                continue;
+            }
+            let filters =
+                if pass { key_filters(index, &plan, &conds, &tables) } else { Vec::new() };
+            // A condition `x IN (SELECT ...)` of the table: the subquery runs one time, and its integers then select the rows that pass the other conditions.
+            let (semi, mut own): (Vec<&Expr>, Vec<&Expr>) = plan.own[index]
+                .iter()
+                .copied()
+                .partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
+            own.extend(filters.iter());
+            own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
+            let mut keys = plan.keys[index].clone();
+            let mut sets = Vec::with_capacity(semi.len());
+            for cond in semi {
+                let Some((column, set)) = semi_set(cond, index, params, session, cache)? else {
+                    return Ok(None);
+                };
+                sets.push((keys.len(), set));
+                keys.push(column);
+            }
+            match super::selected(relation, &own, &keys, params, session, cache, true)? {
+                Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
+                    if !sets.is_empty() {
+                        let keep: Vec<bool> = (0..found.places.len())
+                            .map(|row| {
+                                sets.iter().all(|(at, set)| {
+                                    found.keys[*at][row].is_some_and(|key| set.contains(&key))
+                                })
+                            })
+                            .collect();
+                        found.keys.truncate(plan.keys[index].len());
+                        retain(&mut found.places, &keep);
+                        for key in &mut found.keys {
+                            retain(key, &keep);
+                        }
+                    }
+                    tables[index] = Some(found);
+                }
+                _ => return Ok(None),
+            }
         }
     }
+    let Some(selected) = tables.into_iter().collect::<Option<Vec<Selected>>>() else {
+        return Ok(None);
+    };
     let Some(tree) = Tree::of(&plan.edges, &selected) else { return Ok(None) };
     let pos = tree.join(&selected);
     // The conditions of `WHERE` that the vectors test on the rows of the join: the conditions of two or more tables, except the `=` of the tree, and the conditions of no table.
@@ -138,7 +160,15 @@ fn finish(
     residual: Vec<Expr>,
     mut links: Vec<Ran>,
 ) -> Result<Option<Vec<Vec<Value>>>> {
-    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having);
+    // A subquery of `HAVING` that runs one time, as the `InitPlan` of TPC-H Q11, gives a constant.
+    let having = match &query.having {
+        Some(having) => match having_once(having, params, session, cache) {
+            Some(having) => Some(having),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+    let exprs = query.targets.iter().map(|t| &t.expr).chain(&having);
     if exprs.chain(&query.offset).chain(&query.limit).any(|e| unsupported(e, false))
         || residual.iter().any(|e| unsupported(e, true))
     {
@@ -147,7 +177,7 @@ fn finish(
     // The columns of each table that the query reads after the join.
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
-    let exprs = query.targets.iter().map(|t| &t.expr).chain(&query.having).chain(&residual);
+    let exprs = query.targets.iter().map(|t| &t.expr).chain(&having).chain(&residual);
     for expr in exprs {
         // A column of a table in a subquery is a column of the query just outside the subquery.
         expr.find(0, &mut |e, depth| {
@@ -207,6 +237,7 @@ fn finish(
         }
     }
     let mut virt = query.clone();
+    virt.having = having;
     let mut root = query.relations[base].clone();
     root.columns = columns;
     virt.relations = vec![root];
@@ -509,6 +540,97 @@ fn retain<T>(items: &mut Vec<T>, keep: &[bool]) {
     });
 }
 
+/// Removes from the rows of each table that is not `late` the rows whose key of an `=` of `edges` with another table that is not `late` is not the key of a row of that table, until no row goes. The joins are inner joins, so these rows are in no tuple.
+fn semi_reduce(edges: &[[(usize, usize); 2]], late: &[bool], tables: &mut [Option<Selected>]) {
+    loop {
+        let mut removed = false;
+        for &[(a, x), (b, y)] in edges {
+            if late[a] || late[b] {
+                continue;
+            }
+            for (to, at, from, key) in [(a, x, b, y), (b, y, a, x)] {
+                let (Some(source), Some(target)) = (&tables[from], &tables[to]) else { continue };
+                let set: FxSet<i64> = source.keys[key].iter().flatten().copied().collect();
+                let keep: Vec<bool> =
+                    target.keys[at].iter().map(|k| k.is_some_and(|k| set.contains(&k))).collect();
+                if keep.iter().all(|k| *k) {
+                    continue;
+                }
+                if let Some(target) = &mut tables[to] {
+                    retain(&mut target.places, &keep);
+                    for keys in &mut target.keys {
+                        retain(keys, &keep);
+                    }
+                    removed = true;
+                }
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+}
+
+/// The conditions `column = ANY (array)` of the table `index`, which is read after the other tables of `tables`: for each `=` of the table with a table that keeps fewer rows than the relation has, the keys of the rows that it keeps, which a row of the table must have to join. The conditions with the fewest keys come first. An `=` with more than 65536 keys gives no condition, as the test of a key then costs more than it saves.
+fn key_filters(
+    index: usize,
+    plan: &reduce::Plan<'_>,
+    conds: &[&Expr],
+    tables: &[Option<Selected>],
+) -> Vec<Expr> {
+    const MOST: usize = 1 << 16;
+    let mut out: Vec<(usize, Expr)> = Vec::new();
+    for &[(a, x), (b, y)] in &plan.edges {
+        let (at, other, key) = match (a == index, b == index) {
+            (true, false) => (x, b, y),
+            (false, true) => (y, a, x),
+            _ => continue,
+        };
+        let Some(source) = &tables[other] else { continue };
+        if source.places.len() >= source.rows {
+            continue;
+        }
+        let column = plan.keys[index][at];
+        let Some(inner) = conds.iter().find_map(|c| key_column(c, index, column)) else {
+            continue;
+        };
+        let mut keys: Vec<i64> = source.keys[key].iter().flatten().copied().collect();
+        keys.sort_unstable();
+        keys.dedup();
+        if keys.len() > MOST {
+            continue;
+        }
+        let n = keys.len();
+        if let Some(cond) = crate::lift::any_of(inner.clone(), keys) {
+            out.push((n, cond));
+        }
+    }
+    out.sort_by_key(|(n, _)| *n);
+    out.into_iter().map(|(_, cond)| cond).collect()
+}
+
+/// The column `column` of the relation `relation` in the `=` `cond` of the columns of two relations, with no `Relabel`, or `None` when `cond` does not have it.
+fn key_column(cond: &Expr, relation: usize, column: usize) -> Option<&Expr> {
+    reduce::equal_columns(cond)?;
+    let ExprKind::Func(f) = &cond.kind else { return None };
+    f.args.iter().find_map(|arg| {
+        let mut e = arg;
+        while let ExprKind::Relabel(inner, _) = &e.kind {
+            e = inner;
+        }
+        match e.kind {
+            ExprKind::Var(var)
+                if var.levels_up == 0
+                    && var.relation == relation
+                    && usize::try_from(var.attnum - 1).ok() == Some(column) =>
+            {
+                Some(e)
+            }
+            _ => None,
+        }
+    })
+}
+
 /// True when the query has groups over a list of relations in `FROM`, with no set operation, no window and no write, and reads only the columns of its own relations. The only subqueries are the conditions `x IN (SELECT ...)` of `WHERE` that [`reduce::semi_join`] tests on the rows of one table, and the conditions of one table with an `EXISTS` that [`link`] tells.
 fn shape(query: &Query, session: &dyn Session) -> bool {
     if query.relations.len() < 2
@@ -552,14 +674,23 @@ fn shape(query: &Query, session: &dyn Session) -> bool {
     if let [FromItem::Join(join)] = query.from.as_slice() {
         conds.extend(&join.on);
     }
-    let exprs = query
-        .targets
-        .iter()
-        .map(|t| &t.expr)
-        .chain(conds)
-        .chain(&query.having)
-        .chain(&query.offset)
-        .chain(&query.limit);
+    // `HAVING` can have a subquery that runs one time, which [`finish`] runs before the groups.
+    if let Some(having) = &query.having
+        && having
+            .find(0, &mut |e, depth| match &e.kind {
+                ExprKind::SubLink(sub) if depth == 0 => (!once(sub)).then_some(()),
+                ExprKind::Var(var) if depth == 0 && (var.levels_up != 0 || var.attnum <= 0) => {
+                    Some(())
+                }
+                ExprKind::Agg(agg) if depth == 0 && agg.levels_up != 0 => Some(()),
+                _ => None,
+            })
+            .is_some()
+    {
+        return false;
+    }
+    let exprs =
+        query.targets.iter().map(|t| &t.expr).chain(conds).chain(&query.offset).chain(&query.limit);
     for expr in exprs {
         let other = expr.find(0, &mut |e, depth| match &e.kind {
             ExprKind::SubLink(_) => Some(()),
@@ -611,6 +742,11 @@ enum Index {
 impl Index {
     /// The index of the key `keys`, one vector of the rows for each column of the key, or `None` when two rows have the same key or the key has more than two columns. A row with a null in its key is not in the index, because it joins no row.
     fn of(keys: &[&[Option<i64>]]) -> Option<Index> {
+        Index::probed(keys, 0)
+    }
+
+    /// [`Index::of`] for a join that looks up the keys of `probes` rows. A key of one column whose values span no more than two slots for each lookup gets an array, as the cost to fill the array is less than the cost of the lookups in a hash table, as the `l_orderkey` of the orders of a year in TPC-H Q5. The array then has at most 2^24 slots.
+    fn probed(keys: &[&[Option<i64>]], probes: usize) -> Option<Index> {
         match keys {
             [one] => {
                 let (mut min, mut max, mut count) = (i64::MAX, i64::MIN, 0usize);
@@ -621,8 +757,8 @@ impl Index {
                 }
                 let span = max.checked_sub(min).and_then(|s| usize::try_from(s).ok());
                 if let Some(span) = span
-                    && span < (count * 8).max(1 << 16)
-                    && span < 1 << 27
+                    && ((span < (count * 8).max(1 << 16) && span < 1 << 27)
+                        || span < probes.saturating_mul(2).min(1 << 24))
                 {
                     let mut rows = vec![NONE; span + 1];
                     for (row, k) in one.iter().enumerate() {
@@ -742,7 +878,8 @@ impl Tree {
                         };
                     let keys: Vec<&[Option<i64>]> =
                         child_keys.iter().map(|&k| selected[child].keys[k].as_slice()).collect();
-                    let Some(index) = Index::of(&keys) else { continue };
+                    let probes = selected[parent].places.len();
+                    let Some(index) = Index::probed(&keys, probes) else { continue };
                     links.push(Link { parent, child, parent_keys, index });
                     done[child] = true;
                     grew = true;
