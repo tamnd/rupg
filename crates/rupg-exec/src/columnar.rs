@@ -4534,6 +4534,36 @@ impl Exec<'_> {
         (zones.len() == vectors).then_some(zones.as_slice())
     }
 
+    /// The test of the stored column `place` of codes whose text with no spaces at its end is in `wanted` (`equal`) or is not in `wanted` (not `equal`), as `bpchareq` and `bpcharne` compare. The codes that pass are found in one read of the dictionary, so the scan tests the code of each row and makes no vector of booleans. One code that is equal is a test of the code, which the zones also read. `None` for a column of another kind, or for a dictionary of more than [`PADDED_CODES`] strings, whose rows [`Exec::padded_codes`] tests with only the codes that the scan sees.
+    fn padded_test(&self, place: usize, wanted: &[&[u8]], equal: bool) -> Option<Test> {
+        let stored = &self.stored[place];
+        if stored.kind != Kind::Text || stored.kind.store() != Store::Code {
+            return None;
+        }
+        let dict = stored.dict.as_ref()?;
+        let codes = dict.len();
+        if codes > PADDED_CODES {
+            return None;
+        }
+        let mut wanted = wanted.to_vec();
+        wanted.sort_unstable();
+        wanted.dedup();
+        // The bit of the code `c` is the bit `c % 64` of the word `c / 64`, and the code 0 is the code of no text.
+        let mut bits = vec![0u64; codes / 64 + 1];
+        let mut found = Vec::new();
+        let strings = dict.strings();
+        for code in 1..=u32::try_from(codes).ok()? {
+            if wanted.binary_search(&trim_spaces(strings.get(code))).is_ok() == equal {
+                bits[code as usize / 64] |= 1 << (code % 64);
+                found.push(code);
+            }
+        }
+        if equal && let [code] = found[..] {
+            return Some(Test::Eq(rupg_summary::key::int(i64::from(code))));
+        }
+        Some(Test::Codes(Arc::from(bits)))
+    }
+
     /// The place of the column of `cond` and the test of its zones, for a comparison of an integer column with a constant that is not null, or a null test of a column (spec/12 section 12.6.1). `None` is a condition that the zones do not test.
     fn zone_test(&self, cond: &Expr) -> Option<(usize, Test)> {
         let place = |e: &Expr| match &e.kind {
@@ -4552,6 +4582,57 @@ impl Exec<'_> {
             ExprKind::NullTest(arg, is_null) => {
                 let place = place(arg)?;
                 Some((place, if *is_null { Test::IsNull } else { Test::IsNotNull }))
+            }
+            // `x = c` and `x <> c` of `bpchar` on a column of codes, as `l_returnflag = 'R'` in TPC-H Q10: the test is on the set of the codes that pass, from one read of the dictionary of the column.
+            ExprKind::Func(func)
+                if !func.retset
+                    && plain(func.collation)
+                    && matches!(src(func.oid), "bpchareq" | "bpcharne") =>
+            {
+                let [a, b] = func.args.as_slice() else { return None };
+                fn text<'a>(e: &'a Expr, params: &'a [Value]) -> Option<&'a [u8]> {
+                    let value = match &e.kind {
+                        ExprKind::Const(value) => value,
+                        ExprKind::Param(n) => params.get(n.wrapping_sub(1))?,
+                        _ => return None,
+                    };
+                    match value {
+                        Value::Text(t) => Some(t.as_bytes()),
+                        _ => None,
+                    }
+                }
+                let (place, text) = match (place(a), text(b, self.params)) {
+                    (Some(p), Some(t)) => (p, t),
+                    _ => (place(b)?, text(a, self.params)?),
+                };
+                let test =
+                    self.padded_test(place, &[trim_spaces(text)], src(func.oid) == "bpchareq")?;
+                Some((place, test))
+            }
+            // `x IN (c, ...)` and `x NOT IN (c, ...)` of `bpchar` on a column of codes, as `l_shipmode IN ('MAIL', 'SHIP')` in TPC-H Q12. For `NOT IN`, a null element makes the test null for each row that no element is equal to, so no row passes.
+            ExprKind::ScalarArrayOp { func, any, args, collation }
+                if plain(*collation)
+                    && matches!((src(*func), *any), ("bpchareq", true) | ("bpcharne", false)) =>
+            {
+                let [a, b] = args.as_slice() else { return None };
+                let place = place(a)?;
+                let ExprKind::Const(Value::Array(array)) = &b.kind else { return None };
+                let mut null_element = false;
+                let mut wanted: Vec<&[u8]> = Vec::with_capacity(array.values.len());
+                for value in &array.values {
+                    match value {
+                        None | Some(Value::Null) => null_element = true,
+                        Some(Value::Text(text)) => wanted.push(trim_spaces(text.as_bytes())),
+                        Some(_) => return None,
+                    }
+                }
+                if !*any && null_element {
+                    wanted.clear();
+                    let test = self.padded_test(place, &wanted, true)?;
+                    return Some((place, test));
+                }
+                let test = self.padded_test(place, &wanted, *any)?;
+                Some((place, test))
             }
             // A text column of codes equal or not equal to a constant text: the test is on the code of the text, as in the vector `texteq` of the scan. The zones of codes hold ranks of the sorted base, and the rank of a base code is the code, so the zones test the code. A text that is not in the dictionary has the code `MISSING`, which no row has.
             ExprKind::Func(func)
@@ -6212,6 +6293,9 @@ fn unlabel(expr: &Expr) -> &Expr {
         _ => expr,
     }
 }
+
+/// The most strings of a dictionary that [`Exec::padded_test`] reads to find the codes of a test of `bpchar`.
+const PADDED_CODES: usize = 1 << 16;
 
 /// The number of the words of the set of codes that one task of [`code_test`] fills, which is 16384 codes.
 const CODE_WORDS: usize = 256;
