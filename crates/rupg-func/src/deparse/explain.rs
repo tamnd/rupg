@@ -199,7 +199,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
     }
 }
 
-/// `set_rtable_names` with the `rels_used` of `ExplainPreScanNode`: the subqueries of `FROM` of the scope `s` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out, take no name, because no node of the plan scans them. `kept` has the scope and the relation of each `Subquery Scan`. A subquery that is a set operation keeps its name. A `SELECT` of a set operation takes a name only when a `Subquery Scan` scans it or a `Result` takes its place.
+/// `set_rtable_names` with the `rels_used` of `ExplainPreScanNode`: the subqueries of `FROM` of the scope `s` whose `Subquery Scan` the plan does not keep, as `trivial_subqueryscan` takes it out, take no name, because no node of the plan scans them. A subquery that a `Result` takes the place of keeps its name. `kept` has the scope and the relation of each `Subquery Scan`. A subquery that is a set operation keeps its name. A `SELECT` of a set operation takes a name only when a `Subquery Scan` scans it or a `Result` takes its place.
 fn unscanned(plan: &Plan<'_>, s: usize, kept: &[(usize, usize)]) -> Vec<usize> {
     let outer = plan.scopes[s].query;
     if outer.set_op.is_some() {
@@ -209,6 +209,8 @@ fn unscanned(plan: &Plan<'_>, s: usize, kept: &[(usize, usize)]) -> Vec<usize> {
             .filter(|r| !kept.contains(&(s, *r)) && !used.contains(r))
             .collect();
     }
+    let mut used = Vec::new();
+    replaced(&plan.root, s, &mut used);
     plan.scopes
         .iter()
         .filter(|scope| {
@@ -220,7 +222,7 @@ fn unscanned(plan: &Plan<'_>, s: usize, kept: &[(usize, usize)]) -> Vec<usize> {
                 .iter()
                 .position(|rel| rel.subquery.as_deref().is_some_and(|q| ptr::eq(q, scope.query)))
         })
-        .filter(|r| !kept.contains(&(s, *r)))
+        .filter(|r| !kept.contains(&(s, *r)) && !used.contains(r))
         .collect()
 }
 
@@ -251,7 +253,10 @@ fn removed_scans(plan: &Plan<'_>, spaces: &mut [Namespace]) {
             rel.subquery.as_deref().is_some_and(|q| ptr::eq(q, scope.query))
         };
         let Some(r) = outer.relations.iter().position(of) else { continue };
-        if kept.contains(&(parent, r)) {
+        // A subquery that is empty has a `Result` in the place of its scan, which keeps its name.
+        let mut used = Vec::new();
+        replaced(&plan.root, parent, &mut used);
+        if kept.contains(&(parent, r)) || used.contains(&r) {
             continue;
         }
         // `set_deparse_plan`: the columns of a set operation show as the targets of its leftmost `SELECT` that the plan keeps, which is the first member of its `Append`. An empty `SELECT` that `generate_union_paths` leaves out has no node in the plan, and with all of them empty the leftmost `SELECT` gives the names.

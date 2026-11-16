@@ -1,0 +1,45 @@
+> CREATE TABLE srfd_t (id int, dataa text, datab text)
+CREATE TABLE
+> INSERT INTO srfd_t VALUES (1, 'a', 'foo'), (2, 'a', 'bar'), (3, 'b', 'bar')
+INSERT 0 3
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM srfd_t f1, (SELECT unnest(ARRAY[1, 2]) FROM srfd_t f2 WHERE false OFFSET 0) ss
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: f1.id, f1.dataa, f1.datab, ss.unnest
+row   Replaces: Join on f1, ss
+row   One-Time Filter: false
+EXPLAIN
+> SELECT * FROM srfd_t f1, (SELECT unnest(ARRAY[1, 2]) FROM srfd_t f2 WHERE false OFFSET 0) ss
+fields id@srfd_t.1:23:4:-1,dataa@srfd_t.2:25:-1:-1,datab@srfd_t.3:25:-1:-1,unnest:23:4:-1
+SELECT 0
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM srfd_t f1, (SELECT f2.id + 1 AS x FROM srfd_t f2 WHERE false OFFSET 0) ss
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: f1.id, f1.dataa, f1.datab, ss.x
+row   Replaces: Join on f1, ss
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM srfd_t f1 LEFT JOIN (SELECT generate_series(1, f2.id) AS g FROM srfd_t f2 WHERE false OFFSET 0) ss ON true
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   ->  Seq Scan on srfd_t f1
+row   ->  Result
+row         Replaces: Scan on ss
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM srfd_t f1, (SELECT unnest(ARRAY[1, 2]) AS u FROM srfd_t f2 WHERE false LIMIT 3) ss
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on srfd_t f1
+row   ->  Limit
+row         ->  ProjectSet
+row               ->  Result
+row                     Replaces: Scan on f2
+row                     One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM (SELECT generate_series(1, 3) AS g FROM srfd_t WHERE false OFFSET 0) ss
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ss
+row   One-Time Filter: false
+EXPLAIN

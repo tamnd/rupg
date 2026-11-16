@@ -1024,8 +1024,8 @@ impl<'q> Builder<'q> {
                     let child = self.query(sub, Some(level.scope));
                     appended = std::mem::replace(&mut self.append, outer);
                     sub_paths = self.sub_paths.take();
-                    // `set_subquery_pathlist`: a set operation whose result is empty makes the relation dummy, and its relations take no names. The other subqueries that are empty here are those that `pull_up_subqueries` merges into the query.
-                    if sub.set_op.is_some() && setop::is_dummy(&child) {
+                    // `set_subquery_pathlist`: a subquery whose result is empty makes the relation dummy, and its relations take no names. `is_dummy_rel` finds the result empty through the `ProjectSet` nodes and the projections above it.
+                    if setop::is_dummy(through_sets(&child)) {
                         self.current.truncate(start);
                         let rels = BTreeSet::from([r]);
                         return vec![Rel {
@@ -2142,6 +2142,17 @@ fn result<'q>(scope: usize, parts: Vec<&'q Expr>) -> Node<'q> {
     let mut node = Node::new(Kind::Result { replaces: None, one_time }, scope, Vec::new());
     node.cost = Cost { startup: 0.0, total: cost::CPU_TUPLE + cost, rows: 1.0, width: 0 };
     node
+}
+
+/// The node below the `ProjectSet` nodes and the `Result` nodes that only compute targets at the top of a plan, as `is_dummy_rel` looks through a `ProjectSetPath` and a `ProjectionPath`.
+fn through_sets<'a, 'q>(node: &'a Node<'q>) -> &'a Node<'q> {
+    match (&node.kind, node.children.as_slice()) {
+        (Kind::ProjectSet, [child]) => through_sets(child),
+        (Kind::Result { replaces: None, one_time }, [child]) if one_time.is_empty() => {
+            through_sets(child)
+        }
+        _ => node,
+    }
 }
 
 /// The `Result` with no rows that takes the place of the relations when a condition of `WHERE` is never true, as `mark_dummy_rel`. `kept` is true when the `Result` of one relation keeps the width of its columns.

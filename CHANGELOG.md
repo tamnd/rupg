@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A subquery in FROM whose result is empty is empty for the query above also when it has set-returning functions in its targets, and EXPLAIN keeps its name (#1602)
 - EXPLAIN shows the set-returning functions of `GROUP BY` items in `ProjectSet` nodes below the aggregate, as PostgreSQL plans them, and a `Values Scan` of a query with grouping sets gives only the columns it reads (#1601)
 - A dictionary chunk of integers decodes its codes into the vector of the values, with one check of all the codes first, so the loop has no branch and no push for each value. A negative code is now an error as a code past the end of the dictionary. (#1600)
 - A function that gives a set in an item of `GROUP BY` runs before the groups, as the `ProjectSet` below the `Agg` runs it: each of its rows goes to a group, and the targets, `HAVING` and the grouping sets of `ROLLUP` and `CUBE` read the value of the group. (#1599)
