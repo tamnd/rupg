@@ -1018,6 +1018,20 @@ fn wide_compare(src: &str, a: &Col, b: &Col, rows: usize) -> Option<Col> {
     Some(Col::bools(&out))
 }
 
+/// Keeps the rows `i` of `sel` for which `test(u[i], v[i])` is true. Each row is written to the next free place and the place moves on only for a row that passes, so the loop has no branch on the result of the test.
+#[inline]
+fn keep_pairs(sel: &mut Vec<u32>, u: &[i64], v: &[i64], test: impl Fn(i64, i64) -> bool) {
+    let mut kept = 0;
+    let mut k = 0;
+    while k < sel.len() {
+        let i = sel[k];
+        sel[kept] = i;
+        kept += usize::from(test(u[i as usize], v[i as usize]));
+        k += 1;
+    }
+    sel.truncate(kept);
+}
+
 /// True for a stored column whose integers are the values of its type, which is not true of a `numeric` column.
 fn int_column(stored: &Stored) -> bool {
     stored.kind.store() == Store::Int && !matches!(stored.kind, Kind::Numeric(_))
@@ -1349,6 +1363,46 @@ impl<'q> Exec<'q> {
             (data, _) => data,
         };
         Ok(Col { data, nulls, ty })
+    }
+
+    /// A comparison of two integer columns of the scan, as `l_commitdate < l_receiptdate` in TPC-H Q4, Q12 and Q21, keeps the rows of `sel` that pass. It reads the decoded values of the two columns, so it makes no copy of the values of the rows and no vector of booleans, and the loop of each operator has no call and no branch for each row. A row with a null on a side does not pass, as the comparison is null. False for another condition, and then the caller evaluates it.
+    fn keep_compare(&self, cond: &Expr, batch: &mut Batch, sel: &mut Vec<u32>) -> bool {
+        let ExprKind::Func(func) = &cond.kind else { return false };
+        let [a, b] = func.args.as_slice() else { return false };
+        let (ExprKind::Var(x), ExprKind::Var(y)) = (&a.kind, &b.kind) else { return false };
+        let name = src(func.oid);
+        if func.retset || x.levels_up != 0 || y.levels_up != 0 || int_compare(name).is_none() {
+            return false;
+        }
+        let place = |var: &Var| {
+            let column = usize::try_from(var.attnum).ok()?.checked_sub(1)?;
+            self.places.get(column).copied().filter(|&p| int_column(&self.stored[p]))
+        };
+        let (Some(px), Some(py)) = (place(x), place(y)) else { return false };
+        if self.decode(batch, px).is_err() || self.decode(batch, py).is_err() {
+            return false;
+        }
+        let (
+            Some(Decoded { data: DecodedData::Int(u), nulls: nu }),
+            Some(Decoded { data: DecodedData::Int(v), nulls: nv }),
+        ) = (&batch.decoded[px], &batch.decoded[py])
+        else {
+            return false;
+        };
+        for nulls in [nu, nv].into_iter().flatten() {
+            sel.retain(|&i| !nulls[i as usize]);
+        }
+        let (u, v) = (u.as_slice(), v.as_slice());
+        match name.get(name.len() - 2..) {
+            Some("eq") => keep_pairs(sel, u, v, |a, b| a == b),
+            Some("ne") => keep_pairs(sel, u, v, |a, b| a != b),
+            Some("lt") => keep_pairs(sel, u, v, |a, b| a < b),
+            Some("le") => keep_pairs(sel, u, v, |a, b| a <= b),
+            Some("gt") => keep_pairs(sel, u, v, |a, b| a > b),
+            Some("ge") => keep_pairs(sel, u, v, |a, b| a >= b),
+            _ => {}
+        }
+        true
     }
 
     fn decode(&self, batch: &mut Batch, place: usize) -> Result<()> {
@@ -1902,6 +1956,12 @@ impl<'q> Exec<'q> {
         if let (Some(compare), [a, b]) = (int_compare(src), args) {
             let (a, b) = (self.eval(a, batch, sel)?, self.eval(b, batch, sel)?);
             if let (Some(a), Some(b)) = (a.ints(), b.ints()) {
+                // Two sides with no null give the booleans with no `Option` for each row.
+                if let (Some(x), Some(y)) = (Dense::of(a, sel.len()), Dense::of(b, sel.len()))
+                    && let Some(out) = dense_each(x, y, |x, y| i64::from(compare(x, y)))
+                {
+                    return Ok(Some(Col { data: Data::Int(out), nulls: None, ty: oid::BOOL }));
+                }
                 let out: Vec<Option<bool>> =
                     (0..sel.len()).map(|i| Some(compare(a.get(i)?, b.get(i)?))).collect();
                 return Ok(Some(Col::bools(&out)));
@@ -4404,17 +4464,27 @@ impl Scan<'_, '_> {
                             continue;
                         }
                     }
+                    if self.exec.keep_compare(cond, &mut batch, &mut sel) {
+                        continue;
+                    }
                     let Ok(col) = self.exec.eval(cond, &mut batch, &sel) else {
                         failed = Some(at);
                         break;
                     };
                     next.clear();
-                    next.extend(
-                        sel.iter()
-                            .enumerate()
-                            .filter(|(k, _)| col.truth(*k) == Some(true))
-                            .map(|(_, &i)| i),
-                    );
+                    if let (Data::Int(values), None) = (&col.data, &col.nulls) {
+                        // A boolean with no null, the common result of a condition.
+                        next.extend(
+                            sel.iter().zip(values).filter(|&(_, &b)| b != 0).map(|(&i, _)| i),
+                        );
+                    } else {
+                        next.extend(
+                            sel.iter()
+                                .enumerate()
+                                .filter(|(k, _)| col.truth(*k) == Some(true))
+                                .map(|(_, &i)| i),
+                        );
+                    }
                     std::mem::swap(&mut sel, &mut next);
                 }
                 // A condition with an error on a row of the vector runs again on each row in turn, from that condition on. PostgreSQL tests the rows one at a time, so it raises the error of the first row that has one, and a limit can stop the scan before a row with an error.
@@ -7243,6 +7313,21 @@ mod tests {
         for i in 0..2 {
             assert_eq!(shape.value(col.word(i).unwrap(), &[]), col.value(i, &[]));
         }
+    }
+
+    #[test]
+    fn a_compare_of_two_columns_keeps_the_rows_that_pass_in_order() {
+        let u = [1, 5, 3, 9, 2, 7];
+        let v = [2, 5, 1, 9, 8, 6];
+        let mut sel = vec![0, 1, 2, 3, 4, 5];
+        keep_pairs(&mut sel, &u, &v, |a, b| a < b);
+        assert_eq!(sel, vec![0, 4]);
+        let mut sel = vec![5, 3, 1];
+        keep_pairs(&mut sel, &u, &v, |a, b| a >= b);
+        assert_eq!(sel, vec![5, 3, 1]);
+        let mut sel = vec![2, 3];
+        keep_pairs(&mut sel, &u, &v, |a, b| a == b);
+        assert_eq!(sel, vec![3]);
     }
 
     #[test]
