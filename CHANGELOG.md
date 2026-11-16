@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The messages that a function of a check constraint raises during `COPY ... FROM` reach the client, with the line of the row in their context, also when the copy routes the row to a partition (#1605)
 - The condition of `COPY ... FROM ... WHERE` gives the errors of PostgreSQL for aggregates, grouping operations, subqueries, set-returning functions, window functions and system columns (#1604)
 - An operator whose function returns a set is a set-returning call: `ProjectSet` computes it in the targets, and in WHERE, CASE, JOIN conditions and the other places where such a call is not allowed it gives the errors of PostgreSQL (#1603)
 - A subquery in FROM whose result is empty is empty for the query above also when it has set-returning functions in its targets, and EXPLAIN keeps its name (#1602)
