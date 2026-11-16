@@ -437,7 +437,8 @@ impl Connection {
                 let node = rupg_analyze::copy_filter(&target, rv, condition);
                 let params =
                     Params { types: types.iter().map(|&(ty, _)| ty).collect(), variable: false };
-                let plan = query::plan(&node, &reader, &params)?.fold(None, &reader)?;
+                let query = rupg_analyze::analyze_copy_filter(&node, &reader, &params)?;
+                let plan = rupg_exec::prepare(query, &reader)?.fold(None, &reader)?;
                 Some(plan.unchecked())
             }
             _ => None,

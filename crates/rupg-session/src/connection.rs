@@ -6784,6 +6784,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srf_operator.test")));
     }
 
+    /// The condition of `COPY FROM ... WHERE` is an expression of a part of the query that has its own errors: no aggregates, grouping operations, subqueries, set-returning or window functions, and no system columns. `connection/copy_where.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn copy_where() {
+        big_stack(|| script(include_str!("connection/copy_where.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

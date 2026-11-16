@@ -1090,6 +1090,9 @@ impl Analyzer<'_> {
             | Kind::Generated => {
                 format!("set-returning functions are not allowed in {}", self.kind.name())
             }
+            Kind::CopyWhere => {
+                "set-returning functions are not allowed in COPY FROM WHERE conditions".to_owned()
+            }
             Kind::ValuesSingle | Kind::Other => {
                 format!("set-returning function {signature} is not supported yet")
             }
