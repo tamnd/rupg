@@ -6814,6 +6814,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/stale_subclass.test")));
     }
 
+    /// A write to a table with children of `INHERITS` whose condition is never true reads null row identity columns, as `fix_scan_expr` makes them, and `RETURNING` of a write to a table with members shows the columns of its first member. `connection/dummy_target.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn dummy_target() {
+        big_stack(|| script(include_str!("connection/dummy_target.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

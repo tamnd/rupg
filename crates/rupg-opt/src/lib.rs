@@ -1329,6 +1329,20 @@ impl<'q> Builder<'q> {
         if node.scope != level.scope {
             return;
         }
+        // `expand_inherited_rtentry` puts the members of a table with children of `INHERITS` in the range table before `set_rel_size` finds the relation dummy, and their entries stay in the plan with no scan.
+        if let Kind::Result { replaces: Some(rupg_plan::Replaced::Scan(r, _)), .. } = node.kind
+            && let Some(relation) = level.query.relations.get(r)
+            && relation.subquery.is_none()
+            && let Some(members) = self.members
+            && members.is_table(relation.oid)
+            && members.members(level.query, r, &[]).is_some()
+        {
+            let leaf = Leaf { of: level.scope, relation: r, renamed: true };
+            let parent = self.scopes[level.scope].parent;
+            self.scopes.push(Scope { query: level.query, parent, target: None, leaf: Some(leaf) });
+            self.current.push(self.scopes.len() - 1);
+            return;
+        }
         if let (Some(_), Some(r)) = (node.member, from::scanned(&node.kind)) {
             let write = level.write;
             let target = r == 0

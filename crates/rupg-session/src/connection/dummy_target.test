@@ -1,0 +1,154 @@
+> CREATE TABLE w (a int, b text)
+CREATE TABLE
+> CREATE TABLE wc () INHERITS (w)
+CREATE TABLE
+> CREATE TABLE p (a int, b text) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN (2)
+CREATE TABLE
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE w SET a = a + 1 WHERE false
+fields QUERY PLAN:25:-1:-1
+row Update on public.w
+row   ->  Result
+row         Output: (w.a + 1), NULL::oid, NULL::tid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE w SET a = a + 1 WHERE false RETURNING b, a
+fields QUERY PLAN:25:-1:-1
+row Update on public.w
+row   Output: w.b, w.a
+row   ->  Result
+row         Output: (w.a + 1), NULL::oid, NULL::tid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) DELETE FROM w WHERE false RETURNING *
+fields QUERY PLAN:25:-1:-1
+row Delete on public.w
+row   Output: w.a, w.b
+row   ->  Result
+row         Output: NULL::oid, NULL::tid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE w SET a = a + 1 WHERE false
+fields QUERY PLAN:25:-1:-1
+row Update on public.w  (cost=0.00..0.00 rows=0 width=0)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=14)
+row         Output: (w.a + 1), NULL::oid, NULL::tid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE ONLY w SET a = a + 1 WHERE false RETURNING a
+fields QUERY PLAN:25:-1:-1
+row Update on public.w
+row   Output: a
+row   ->  Result
+row         Output: (a + 1), ctid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM w WHERE false
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: w.a, w.b
+row   Replaces: Scan on w
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT a FROM w WHERE a = 1 AND a = 2
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: w.a
+row   Replaces: Scan on w
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM p WHERE false
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: a, b
+row   Replaces: Scan on p
+row   One-Time Filter: false
+EXPLAIN
+> UPDATE w SET a = a + 1 WHERE false
+UPDATE 0
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE w SET b = 'q' WHERE a = 1 RETURNING a, tableoid::regclass
+fields QUERY PLAN:25:-1:-1
+row Update on public.w
+row   Output: w_1.a, (w_1.tableoid)::regclass
+row   Update on public.w w_1
+row   Update on public.wc w_2
+row   ->  Result
+row         Output: 'q'::text, w.tableoid, w.ctid
+row         ->  Append
+row               ->  Seq Scan on public.w w_1
+row                     Output: w_1.tableoid, w_1.ctid
+row                     Filter: (w_1.a = 1)
+row               ->  Seq Scan on public.wc w_2
+row                     Output: w_2.tableoid, w_2.ctid
+row                     Filter: (w_2.a = 1)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) DELETE FROM w RETURNING *
+fields QUERY PLAN:25:-1:-1
+row Delete on public.w
+row   Output: w_1.a, w_1.b
+row   Delete on public.w w_1
+row   Delete on public.wc w_2
+row   ->  Append
+row         ->  Seq Scan on public.w w_1
+row               Output: w_1.tableoid, w_1.ctid
+row         ->  Seq Scan on public.wc w_2
+row               Output: w_2.tableoid, w_2.ctid
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE p SET b = 'x' RETURNING tableoid::regclass, *
+fields QUERY PLAN:25:-1:-1
+row Update on public.p
+row   Output: (p_1.tableoid)::regclass, p_1.a, p_1.b
+row   Update on public.p1 p_1
+row   Update on public.p2 p_2
+row   ->  Append
+row         ->  Seq Scan on public.p1 p_1
+row               Output: 'x'::text, p_1.tableoid, p_1.ctid
+row         ->  Seq Scan on public.p2 p_2
+row               Output: 'x'::text, p_2.tableoid, p_2.ctid
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE p SET b = 'x' WHERE a = 2 RETURNING old.b, new.b
+fields QUERY PLAN:25:-1:-1
+row Update on public.p
+row   Output: old.b, new.b
+row   Update on public.p2 p_1
+row   ->  Seq Scan on public.p2 p_1
+row         Output: 'x'::text, p_1.tableoid, p_1.ctid
+row         Filter: (p_1.a = 2)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) DELETE FROM p WHERE a = 7 RETURNING *
+fields QUERY PLAN:25:-1:-1
+row Delete on public.p
+row   Output: a, b
+row   ->  Result
+row         Output: ctid
+row         Replaces: Scan on p
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE p SET a = a + 1 WHERE false RETURNING *
+fields QUERY PLAN:25:-1:-1
+row Update on public.p
+row   Output: a, b
+row   ->  Result
+row         Output: (a + 1), ctid
+row         Replaces: Scan on p
+row         One-Time Filter: false
+EXPLAIN
+> DROP TABLE wc
+DROP TABLE
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE w SET a = a + 1 WHERE false RETURNING a
+fields QUERY PLAN:25:-1:-1
+row Update on public.w
+row   Output: w.a
+row   ->  Result
+row         Output: (w.a + 1), NULL::oid, NULL::tid
+row         Replaces: Scan on w
+row         One-Time Filter: false
+EXPLAIN
