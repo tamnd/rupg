@@ -182,19 +182,30 @@ impl rupg_opt::Members for Members<'_, '_> {
                     table.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect();
                 let size = rupg_opt::Members::size(self, oid);
                 // `make_inh_translation_list`: the column of the child with the name of each column of the parent.
-                let attnums = parent
+                let found: Vec<Option<usize>> = parent
                     .columns
                     .iter()
                     .map(|p| {
-                        let found = (!p.dropped)
+                        (!p.dropped)
                             .then(|| {
                                 table.columns.iter().position(|c| !c.dropped && c.name == p.name)
                             })
-                            .flatten();
-                        found.and_then(|at| i16::try_from(at + 1).ok()).unwrap_or(0)
+                            .flatten()
                     })
                     .collect();
-                Some(Member { oid, columns, size, attnums })
+                let attnums = found
+                    .iter()
+                    .map(|f| f.and_then(|at| i16::try_from(at + 1).ok()).unwrap_or(0))
+                    .collect();
+                let not_null = (1..)
+                    .zip(&found)
+                    .filter(|(_, f)| {
+                        f.and_then(|at| table.columns.get(at))
+                            .is_some_and(|c| c.not_null && !c.not_null_invalid)
+                    })
+                    .map(|(attnum, _)| attnum)
+                    .collect();
+                Some(Member { oid, columns, size, attnums, not_null })
             })
             .collect();
         Some(members)

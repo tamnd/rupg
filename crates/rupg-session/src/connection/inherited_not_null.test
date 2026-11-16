@@ -1,0 +1,144 @@
+> CREATE TABLE pp (a int, b int)
+CREATE TABLE
+> CREATE TABLE pc () INHERITS (pp)
+CREATE TABLE
+> ALTER TABLE ONLY pp ALTER a SET NOT NULL
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on pp pp_1
+row   ->  Seq Scan on pc pp_2
+row         Filter: (a IS NOT NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pc pp
+row   Filter: (a IS NULL)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT COALESCE(a, 0), b FROM pp
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: COALESCE(pp.a, 0), pp.b
+row   ->  Append
+row         ->  Seq Scan on public.pp pp_1
+row               Output: pp_1.a, pp_1.b
+row         ->  Seq Scan on public.pc pp_2
+row               Output: pp_2.a, pp_2.b
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE pp SET b = 1 WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Update on public.pp
+row   Update on public.pc pp_1
+row   ->  Result
+row         Output: 1, pp_1.tableoid, pp_1.ctid
+row         ->  Seq Scan on public.pc pp_1
+row               Output: pp_1.tableoid, pp_1.ctid
+row               Filter: (pp_1.a IS NULL)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) DELETE FROM pp WHERE a IS NOT NULL AND b = 2
+fields QUERY PLAN:25:-1:-1
+row Delete on public.pp
+row   Delete on public.pp pp_1
+row   Delete on public.pc pp_2
+row   ->  Append
+row         ->  Seq Scan on public.pp pp_1
+row               Output: pp_1.tableoid, pp_1.ctid
+row               Filter: (pp_1.b = 2)
+row         ->  Seq Scan on public.pc pp_2
+row               Output: pp_2.tableoid, pp_2.ctid
+row               Filter: ((pp_2.a IS NOT NULL) AND (pp_2.b = 2))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY pp WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on pp
+row   One-Time Filter: false
+EXPLAIN
+> INSERT INTO pc VALUES (2, 2)
+INSERT 0 1
+> INSERT INTO pp VALUES (3, 3)
+INSERT 0 1
+> ALTER TABLE pp ALTER a DROP NOT NULL
+ALTER TABLE
+> ALTER TABLE pc ALTER a SET NOT NULL
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on pp pp_1
+row         Filter: (a IS NOT NULL)
+row   ->  Seq Scan on pc pp_2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pp
+row   Filter: (a IS NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NULL AND b IS NULL
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pp
+row   Filter: ((a IS NULL) AND (b IS NULL))
+EXPLAIN
+> ALTER TABLE pp ALTER a SET NOT NULL
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on pp
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE pp SET b = 1 WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Update on public.pp
+row   ->  Result
+row         Output: 1, NULL::oid, NULL::tid
+row         Replaces: Scan on pp
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pp WHERE a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on pp pp_1
+row   ->  Seq Scan on pc pp_2
+EXPLAIN
+> CREATE TABLE q (a int NOT NULL, b int) PARTITION BY LIST (b)
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES IN (2)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM q WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on q
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM q WHERE a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on q1 q_1
+row   ->  Seq Scan on q2 q_2
+EXPLAIN
+> CREATE TABLE r (a int, b int)
+CREATE TABLE
+> CREATE TABLE rc () INHERITS (r)
+CREATE TABLE
+> ALTER TABLE rc ADD CONSTRAINT rc_a NOT NULL a NOT VALID
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on r r_1
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on rc r_2
+row         Filter: (a IS NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on r r_1
+row         Filter: (a IS NOT NULL)
+row   ->  Seq Scan on rc r_2
+row         Filter: (a IS NOT NULL)
+EXPLAIN

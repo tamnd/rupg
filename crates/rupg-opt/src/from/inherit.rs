@@ -92,8 +92,6 @@ pub(super) fn scan<'q>(
 ) -> (Vec<Rel<'q>>, Vec<MemberBase<'q>>, Vec<(Rel<'q>, i32)>) {
     let relation = &level.query.relations[r];
     let enable = crate::enable();
-    let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
-    let per_row = cost::CPU_TUPLE + qual_cost;
     let unique = stats.unique.columns.clone();
     let (mut tuples, mut rows, mut size) = (0.0, 0.0, 0.0);
     let mut sizes: BTreeMap<i16, f64> = BTreeMap::new();
@@ -102,6 +100,16 @@ pub(super) fn scan<'q>(
     let mut bases = Vec::with_capacity(members.len());
     let mut partials = Vec::with_capacity(members.len());
     for member in &members {
+        // `apply_child_basequals`: a condition `IS NOT NULL` of a column with a not-null constraint in the member is true for each row of the member, as `restriction_is_always_true` finds it.
+        let always = |q: &&Qual<'q>| {
+            matches!(&q.expr.kind, ExprKind::NullTest(arg, false)
+                if matches!(arg.kind, ExprKind::Var(v) if v.relation == r && v.levels_up == 0 && member.not_null.contains(&v.attnum)))
+        };
+        let base: Vec<Qual<'q>> = base.iter().filter(|q| !always(q)).cloned().collect();
+        let base = base.as_slice();
+        let quals: Vec<Qual<'q>> = quals.iter().filter(|q| !always(q)).cloned().collect();
+        let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
+        let per_row = cost::CPU_TUPLE + qual_cost;
         let columns = Columns::new(member);
         let indexes: Vec<Index> = hooks
             .map(|m| m.indexes(member.oid))
@@ -251,6 +259,9 @@ pub(super) fn scan<'q>(
             stats.set_width(r, *attnum, width);
             crate::set_width(relation, *attnum, width);
         }
+    }
+    if hooks.is_some_and(|m| m.is_table(relation.oid)) {
+        crate::set_inheritance_parent(relation.oid);
     }
     match lists.len() {
         0 => {

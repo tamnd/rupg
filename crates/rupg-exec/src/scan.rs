@@ -549,7 +549,35 @@ pub fn members(
     }
     let own = session.temp_number();
     let other = |&child: &u32| session.catalog().is_some_and(|c| c.is_other_temp(child, own));
-    Ok(Some(std::iter::once(from.oid).chain(children.into_iter().filter(|c| !other(c))).collect()))
+    // `restriction_is_always_false` in `apply_child_basequals`: a condition `IS NULL` of a column with a valid not-null constraint in a member is false for each row of the member, which the planner leaves out.
+    let null_tested: Vec<&str> = conds
+        .iter()
+        .filter_map(|cond| match &cond.kind {
+            ExprKind::NullTest(arg, true) => match arg.kind {
+                ExprKind::Var(var) if var.relation == index && var.levels_up == 0 => {
+                    let at = usize::try_from(var.attnum).ok()?.checked_sub(1)?;
+                    Some(relation.columns.get(at)?.name.as_str())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let excluded = |oid: &u32| {
+        let Some(member) = session.catalog().and_then(|c| c.relation(*oid)) else { return false };
+        null_tested.iter().any(|name| {
+            member
+                .columns
+                .iter()
+                .any(|c| !c.dropped && c.name == *name && c.not_null && !c.not_null_invalid)
+        })
+    };
+    Ok(Some(
+        std::iter::once(from.oid)
+            .chain(children.into_iter().filter(|c| !other(c)))
+            .filter(|oid| !excluded(oid))
+            .collect(),
+    ))
 }
 
 /// The value of a condition of `WHERE` for a tuple of rows of some [`Tables`].

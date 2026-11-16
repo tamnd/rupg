@@ -585,6 +585,8 @@ struct Fold<'a> {
     nulled: Vec<bool>,
     /// For each relation, true for a subquery that the planner pulls up into the query.
     pulled: Vec<bool>,
+    /// For each relation, true for a table with children of `INHERITS` that the planner expands. The not-null constraints of the table do not hold for its children, so the planner tests them on each member, as `apply_child_basequals` does.
+    inherited: Vec<bool>,
     /// True when the planner pulls up a `VALUES` of one row, which it does not in the query of a write.
     values: bool,
     /// `REPLACE_WRAP_ALL`: the query has grouping sets, so a column of a subquery that the planner pulls up keeps its place, and a grouping set can make it null.
@@ -868,12 +870,20 @@ impl<'a> Fold<'a> {
             })
             .collect();
         let values = query.write.is_none() && query.set_op.is_none();
+        let inherited = (0..query.relations.len())
+            .map(|r| {
+                let table = session.catalog().and_then(|c| c.relation(query.relations[r].oid));
+                table.is_some_and(|t| t.kind == rupg_catalog::RelKind::Table)
+                    && crate::scan::members(query, r, &[], session).is_ok_and(|m| m.is_some())
+            })
+            .collect();
         Fold {
             params,
             session,
             relations: &query.relations,
             nulled,
             pulled,
+            inherited,
             values,
             wrap_all: !query.grouping_sets.is_empty(),
             case: Vec::new(),
@@ -1869,13 +1879,16 @@ impl<'a> Fold<'a> {
         }
     }
 
-    /// `var_is_nonnullable`: a column of a relation of the query that no outer join makes null, and that is a system column or has a not-null constraint.
+    /// `var_is_nonnullable`: a column of a relation of the query that no outer join makes null, that is not a table with children of `INHERITS`, and that is a system column or has a not-null constraint.
     fn var_nonnullable(&self, var: Var) -> bool {
         if var.levels_up != 0 || self.nulled.get(var.relation).is_none_or(|n| *n) {
             return false;
         }
         if var.attnum < 0 {
             return true;
+        }
+        if self.inherited.get(var.relation).is_some_and(|i| *i) {
+            return false;
         }
         let column = usize::try_from(var.attnum - 1).ok();
         let relation = self.relations.get(var.relation);

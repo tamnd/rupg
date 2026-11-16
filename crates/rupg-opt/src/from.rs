@@ -1811,11 +1811,11 @@ pub(crate) fn scanned(kind: &Kind<'_>) -> Option<usize> {
     }
 }
 
-/// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table. A table whose `relhassubclass` stays true after its last child is gone is the one member of its tree: `set_plan_refs` takes out its `Append`, but not the `Result` above it.
+/// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table. A table whose `relhassubclass` stays true after its last child is gone is the one member of its tree, as is the one member that a condition leaves: `set_plan_refs` takes out its `Append`, but not the `Result` above it.
 pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
     if let Some(r) = scanned(&node.kind)
         && let Some(rel) = query.relations.get(r)
-        && node.member == Some(rel.oid)
+        && node.member.is_some_and(|m| m == rel.oid || crate::is_inheritance_parent(rel.oid))
     {
         return true;
     }
@@ -1825,7 +1825,9 @@ pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
     });
     let Some(r) = first.and_then(|c| scanned(&c.kind)) else { return false };
     let Some(oid) = query.relations.get(r).map(|rel| rel.oid) else { return false };
-    members_append(node) && node.children.iter().any(|c| member_of(c) == Some(oid))
+    members_append(node)
+        && (crate::is_inheritance_parent(oid)
+            || node.children.iter().any(|c| member_of(c) == Some(oid)))
 }
 
 /// The table of the scan of a member of an inheritance tree, or of the sort of one below a `Merge Append` or an ordered `Append`.
