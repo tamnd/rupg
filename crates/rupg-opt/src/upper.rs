@@ -1389,7 +1389,10 @@ impl<'q> Builder<'q> {
         let scope = level.display;
         let costs = target_costs(level).unwrap_or_default();
         // `apply_scanjoin_target_to_paths`: an `Append` of a `UNION ALL` or of a table with children of `INHERITS` does not compute targets, so a `Result` above it computes the targets that are not its columns, as `create_projection_path`.
+        // The plan of a `MERGE` gives the columns that its actions read, which the `ModifyTable` computes.
+        let merge = query.write.as_ref().is_some_and(|w| w.kind == WriteKind::Merge);
         let computed = !query.grouped
+            && !merge
             && query.windows.is_empty()
             && query.targets.iter().any(|t| !matches!(t.expr.kind, ExprKind::Var(_)));
         if computed && (from::append_rel(query, &node) || from::inheritance_append(query, &node)) {

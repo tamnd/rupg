@@ -135,19 +135,19 @@ pub(crate) fn expr_width(expr: &Expr, relations: &[Relation]) -> i32 {
 
 /// `estimate_rel_size` for a table: the pages and the rows.
 pub(crate) fn table_size(relation: &Relation, size: Size) -> (f64, f64) {
-    estimate_size(row_width(relation), size, false)
+    estimate_size(row_width(relation), size)
 }
 
-/// `estimate_rel_size` for a member of an inheritance tree. `relhassubclass` keeps the planner from taking ten pages for a table with children that has no pages.
+/// `estimate_rel_size` for a member of an inheritance tree.
 pub(crate) fn member_size(member: &Member) -> (f64, f64) {
     let width: i32 = member.columns.iter().map(|&(ty, typmod)| type_width(ty, typmod)).sum();
-    estimate_size(width, member.size, member.has_children)
+    estimate_size(width, member.size)
 }
 
-/// `table_block_relation_estimate_size`: the pages of the heap, or ten pages for a table that has fewer and was never vacuumed or analyzed, and the rows from the density of `relpages` and `reltuples`, or from the width of a row and the fill factor when there is none, with at least one row on a page.
-fn estimate_size(width: i32, size: Size, has_children: bool) -> (f64, f64) {
+/// `table_block_relation_estimate_size`: the pages of the heap, or ten pages for a table that has fewer, was never vacuumed or analyzed and has no `relhassubclass`, and the rows from the density of `relpages` and `reltuples`, or from the width of a row and the fill factor when there is none, with at least one row on a page.
+fn estimate_size(width: i32, size: Size) -> (f64, f64) {
     let mut pages = size.blocks;
-    if pages < DEFAULT_PAGES && size.reltuples < 0.0 && !has_children {
+    if pages < DEFAULT_PAGES && size.reltuples < 0.0 && !size.subclass {
         pages = DEFAULT_PAGES;
     }
     if pages == 0.0 {

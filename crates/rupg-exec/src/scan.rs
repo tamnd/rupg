@@ -543,7 +543,8 @@ pub fn members(
         return Ok(None);
     }
     let children = session.catalog().map(|c| c.all_inheritors(from.oid)).unwrap_or_default();
-    if children.is_empty() {
+    // `expand_inherited_rtentry` reads `relhassubclass`, which stays true after the last child is gone until the next `ANALYZE`: the table is then the one member of its tree.
+    if children.is_empty() && !session.catalog().is_some_and(|c| c.has_subclass(from.oid)) {
         return Ok(None);
     }
     let own = session.temp_number();

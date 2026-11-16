@@ -1,0 +1,185 @@
+> CREATE TABLE rhs (f1 int, f2 text)
+CREATE TABLE
+> CREATE TABLE rhsc (fc int) INHERITS (rhs)
+CREATE TABLE
+> DROP TABLE rhsc
+DROP TABLE
+> INSERT INTO rhs VALUES (5, 'a')
+INSERT 0 1
+> SELECT relhassubclass FROM pg_class WHERE relname = 'rhs'
+fields relhassubclass@pg_class.23:16:1:-1
+row t
+SELECT 1
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE rhs SET f2 = 'x' WHERE f1 = 5 RETURNING old.*, new.*
+fields QUERY PLAN:25:-1:-1
+row Update on public.rhs
+row   Output: old.f1, old.f2, new.f1, new.f2
+row   Update on public.rhs rhs_1
+row   ->  Result
+row         Output: 'x'::text, rhs_1.tableoid, rhs_1.ctid
+row         ->  Seq Scan on public.rhs rhs_1
+row               Output: rhs_1.tableoid, rhs_1.ctid
+row               Filter: (rhs_1.f1 = 5)
+EXPLAIN
+> UPDATE rhs SET f2 = 'x' WHERE f1 = 5 RETURNING old.*, new.*
+fields f1@rhs.1:23:4:-1,f2@rhs.2:25:-1:-1,f1@rhs.1:23:4:-1,f2@rhs.2:25:-1:-1
+row 5,a,5,x
+UPDATE 1
+> EXPLAIN (VERBOSE, COSTS OFF) DELETE FROM rhs WHERE f1 = 5 RETURNING *
+fields QUERY PLAN:25:-1:-1
+row Delete on public.rhs
+row   Output: rhs_1.f1, rhs_1.f2
+row   Delete on public.rhs rhs_1
+row   ->  Seq Scan on public.rhs rhs_1
+row         Output: rhs_1.tableoid, rhs_1.ctid
+row         Filter: (rhs_1.f1 = 5)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM rhs WHERE f1 = 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.rhs
+row   Output: rhs.f1, rhs.f2
+row   Filter: (rhs.f1 = 5)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ONLY rhs WHERE f1 = 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.rhs
+row   Output: f1, f2
+row   Filter: (rhs.f1 = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM rhs a JOIN rhs b USING (f1)
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (a.f1 = b.f1)
+row   ->  Seq Scan on rhs a
+row   ->  Hash
+row         ->  Seq Scan on rhs b
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) MERGE INTO rhs USING (VALUES (5)) v(k) ON f1 = k WHEN MATCHED THEN UPDATE SET f2 = 'y'
+fields QUERY PLAN:25:-1:-1
+row Merge on public.rhs
+row   Merge on public.rhs rhs_1
+row   ->  Seq Scan on public.rhs rhs_1
+row         Output: rhs_1.tableoid, rhs_1.ctid
+row         Filter: (rhs_1.f1 = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM rhs
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on rhs  (cost=0.00..2.27 rows=127 width=36)
+EXPLAIN
+> ANALYZE rhs
+ANALYZE
+> SELECT relhassubclass FROM pg_class WHERE relname = 'rhs'
+fields relhassubclass@pg_class.23:16:1:-1
+row f
+SELECT 1
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM rhs WHERE f1 = 5
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.rhs
+row   Output: f1, f2
+row   Filter: (rhs.f1 = 5)
+EXPLAIN
+> CREATE TABLE w (a int, b text)
+CREATE TABLE
+> CREATE TABLE wc () INHERITS (w)
+CREATE TABLE
+> EXPLAIN VERBOSE UPDATE w SET a = 2
+fields QUERY PLAN:25:-1:-1
+row Update on public.w  (cost=0.00..41.77 rows=0 width=0)
+row   Update on public.w w_1
+row   Update on public.wc w_2
+row   ->  Result  (cost=0.00..41.77 rows=1271 width=14)
+row         Output: 2, w.tableoid, w.ctid
+row         ->  Append  (cost=0.00..29.06 rows=1271 width=10)
+row               ->  Seq Scan on public.w w_1  (cost=0.00..0.00 rows=1 width=10)
+row                     Output: w_1.tableoid, w_1.ctid
+row               ->  Seq Scan on public.wc w_2  (cost=0.00..22.70 rows=1270 width=10)
+row                     Output: w_2.tableoid, w_2.ctid
+EXPLAIN
+> EXPLAIN VERBOSE DELETE FROM w
+fields QUERY PLAN:25:-1:-1
+row Delete on public.w  (cost=0.00..29.06 rows=0 width=0)
+row   Delete on public.w w_1
+row   Delete on public.wc w_2
+row   ->  Append  (cost=0.00..29.06 rows=1271 width=10)
+row         ->  Seq Scan on public.w w_1  (cost=0.00..0.00 rows=1 width=10)
+row               Output: w_1.tableoid, w_1.ctid
+row         ->  Seq Scan on public.wc w_2  (cost=0.00..22.70 rows=1270 width=10)
+row               Output: w_2.tableoid, w_2.ctid
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE ONLY w SET a = 2
+fields QUERY PLAN:25:-1:-1
+row Update on public.w  (cost=0.00..0.00 rows=0 width=0)
+row   ->  Seq Scan on public.w  (cost=0.00..0.00 rows=1 width=10)
+row         Output: 2, ctid
+EXPLAIN
+> CREATE TABLE p (a int, b text) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN (2)
+CREATE TABLE
+> EXPLAIN VERBOSE UPDATE p SET b = 'x'
+fields QUERY PLAN:25:-1:-1
+row Update on public.p  (cost=0.00..58.10 rows=0 width=0)
+row   Update on public.p1 p_1
+row   Update on public.p2 p_2
+row   ->  Append  (cost=0.00..58.10 rows=2540 width=42)
+row         ->  Seq Scan on public.p1 p_1  (cost=0.00..22.70 rows=1270 width=42)
+row               Output: 'x'::text, p_1.tableoid, p_1.ctid
+row         ->  Seq Scan on public.p2 p_2  (cost=0.00..22.70 rows=1270 width=42)
+row               Output: 'x'::text, p_2.tableoid, p_2.ctid
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE p SET b = 'x' WHERE a = 1
+fields QUERY PLAN:25:-1:-1
+row Update on public.p  (cost=0.00..25.88 rows=0 width=0)
+row   Update on public.p1 p_1
+row   ->  Seq Scan on public.p1 p_1  (cost=0.00..25.88 rows=6 width=42)
+row         Output: 'x'::text, p_1.tableoid, p_1.ctid
+row         Filter: (p_1.a = 1)
+EXPLAIN
+> EXPLAIN VERBOSE UPDATE p SET b = 'x' WHERE false
+fields QUERY PLAN:25:-1:-1
+row Update on public.p  (cost=0.00..0.00 rows=0 width=0)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=38)
+row         Output: 'x'::text, ctid
+row         Replaces: Scan on p
+row         One-Time Filter: false
+EXPLAIN
+> DROP TABLE wc
+DROP TABLE
+> EXPLAIN VERBOSE UPDATE w SET a = 2
+fields QUERY PLAN:25:-1:-1
+row Update on public.w  (cost=0.00..0.01 rows=0 width=0)
+row   Update on public.w w_1
+row   ->  Result  (cost=0.00..0.01 rows=1 width=14)
+row         Output: 2, w_1.tableoid, w_1.ctid
+row         ->  Seq Scan on public.w w_1  (cost=0.00..0.00 rows=1 width=10)
+row               Output: w_1.tableoid, w_1.ctid
+EXPLAIN
+> CREATE TABLE q (a int, b text) PARTITION BY LIST (a)
+CREATE TABLE
+> CREATE TABLE s (k int)
+CREATE TABLE
+> EXPLAIN VERBOSE UPDATE q SET b = 'x'
+fields QUERY PLAN:25:-1:-1
+row Update on public.q  (cost=0.00..0.00 rows=0 width=0)
+row   ->  Result  (cost=0.00..0.00 rows=0 width=38)
+row         Output: 'x'::text, ctid
+row         Replaces: Scan on q
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) MERGE INTO q USING s ON a = k WHEN NOT MATCHED THEN INSERT VALUES (k)
+fields QUERY PLAN:25:-1:-1
+row Merge on public.q
+row   ->  Hash Left Join
+row         Output: q.ctid, s.k, s.ctid
+row         Hash Cond: (s.k = q.a)
+row         ->  Seq Scan on public.s
+row               Output: s.k, s.ctid
+row         ->  Hash
+row               Output: q.ctid, q.a
+row               ->  Result
+row                     Output: q.ctid, q.a
+row                     Replaces: Scan on q
+row                     One-Time Filter: false
+EXPLAIN

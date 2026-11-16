@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `UPDATE`, `DELETE` and `MERGE` of a table with an inheritance tree or partitions carry `tableoid` before `ctid`, a table whose last child was dropped is still expanded until the next `ANALYZE`, and `relhassubclass` turns off the ten-page guess for a table that was never vacuumed, as in PostgreSQL 19 (#1609)
 - A `Tid Range Scan` has a parallel path (`Parallel Tid Range Scan` under `Gather`), and a table that was never vacuumed or analyzed has the rows of its pages from its `fillfactor`, as in PostgreSQL 19 (#1608)
 - The `bpchar` tests `x = c`, `x <> c`, `x IN (...)` and `x NOT IN (...)` on a column of codes, as `l_returnflag = 'R'` in TPC-H Q10 and `l_shipmode IN (...)` in Q12, are a set of the codes that pass, found in one read of the dictionary of the column. The scan then tests the code of each row and makes no vector of booleans. (#1607)
 - The planner estimates the rows of `generate_series` of `numeric` and of timestamps with constant arguments as the support functions of PostgreSQL do, and a null start, end or step gives one row (#1606)

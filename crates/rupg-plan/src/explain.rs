@@ -509,6 +509,11 @@ impl Explainer<'_, '_> {
             } else {
                 (Vec::new(), Vec::new())
             };
+            // `show_plan_tlist` of a `ModifyTable` shows the `RETURNING` list of its first result relation, which reads the first member of an inheritance tree.
+            let scope = match &node.kind {
+                Kind::Modify { targets, .. } => targets.first().copied().unwrap_or(node.scope),
+                _ => node.scope,
+            };
             let mut output = Vec::with_capacity(node.output.len());
             for item in &node.output {
                 // `get_special_variable`: an expression that the node reads from below shows as the node that computes it shows it, and a level of `ProjectSet` nodes shows the values of the level below it in parentheses.
@@ -518,7 +523,7 @@ impl Explainer<'_, '_> {
                 let (list, levels) = source.unwrap_or_else(|| own.clone());
                 self.texts.below(list);
                 self.texts.deeper(levels);
-                let text = self.items(node.scope, std::slice::from_ref(item), self.many);
+                let text = self.items(scope, std::slice::from_ref(item), self.many);
                 self.texts.below(Vec::new());
                 self.texts.deeper(Vec::new());
                 output.extend(text?);
