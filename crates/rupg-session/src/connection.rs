@@ -6772,6 +6772,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srf_group_by.test")));
     }
 
+    /// A subquery in `FROM` whose rows are none is empty for the query above, also when a `ProjectSet` computes its targets, as `is_dummy_rel` looks through it: a join with it is empty, and so is its scan as the inner side of a left join. A `Limit` above keeps it a plan of its own. `connection/srf_dummy.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn srf_dummy() {
+        big_stack(|| script(include_str!("connection/srf_dummy.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
