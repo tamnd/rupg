@@ -98,8 +98,11 @@ impl Bounds {
         let mut low = i64::MAX;
         let mut high = i64::MIN;
         let mut count = 0usize;
+        // True while each key is not less than the key before it, as the keys of a table in the order of its key.
+        let mut sorted = true;
         for (&key, &value) in keys.iter().zip(values) {
             if let (Some(key), Some(_)) = (key, value) {
+                sorted &= key >= high;
                 low = low.min(key);
                 high = high.max(key);
                 count += 1;
@@ -111,6 +114,9 @@ impl Bounds {
             && range <= limit
             && let Ok(range) = usize::try_from(range)
         {
+            if sorted {
+                return Bounds::Dense { base: low, slots: sorted_slots(keys, values, low, range) };
+            }
             let mut slots = vec![(i64::MAX, i64::MIN); range];
             for (&key, &value) in keys.iter().zip(values) {
                 if let (Some(key), Some(value)) = (key, value)
@@ -145,6 +151,41 @@ impl Bounds {
         }
         bounds
     }
+}
+
+/// The slots of [`Bounds::Dense`] from `low` for keys that do not go down from row to row. The rows of a key come one after another, so the bounds of a key are complete at the end of its run, and the slots are written once each, in order. A slot between two keys gets no row. The slots are not filled first and no slot is read again, so the memory of the slots is written in one pass.
+fn sorted_slots(
+    keys: &[Option<i64>],
+    values: &[Option<i64>],
+    low: i64,
+    range: usize,
+) -> Vec<(i64, i64)> {
+    const NO_ROW: (i64, i64) = (i64::MAX, i64::MIN);
+    let mut slots = Vec::with_capacity(range);
+    let put = |slots: &mut Vec<(i64, i64)>, key: i64, bounds: (i64, i64)| {
+        slots.resize(usize::try_from(key - low).unwrap_or(0), NO_ROW);
+        slots.push(bounds);
+    };
+    let mut run: Option<(i64, (i64, i64))> = None;
+    for (&key, &value) in keys.iter().zip(values) {
+        let (Some(key), Some(value)) = (key, value) else { continue };
+        match &mut run {
+            Some((k, (min, max))) if *k == key => {
+                *min = (*min).min(value);
+                *max = (*max).max(value);
+            }
+            _ => {
+                if let Some((k, bounds)) = run.replace((key, (value, value))) {
+                    put(&mut slots, k, bounds);
+                }
+            }
+        }
+    }
+    if let Some((k, bounds)) = run {
+        put(&mut slots, k, bounds);
+    }
+    slots.resize(range, NO_ROW);
+    slots
 }
 
 /// For an `EXISTS` with one integer key whose test is `column op outer`, where `column` is an integer column of the subquery and `outer` a column of the query outside it: `op`, `outer`, and the [`Bounds`]. A null `column` or `outer` makes the comparison not true, so the bounds do not keep the nulls, and a row whose `outer` is null gets false.
@@ -975,4 +1016,28 @@ fn outer_test(mut cond: Expr) -> Option<(Expr, Vec<Expr>)> {
         true
     });
     ok.then_some((cond, columns))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all(bounds: &Bounds, keys: std::ops::Range<i64>) -> Vec<Option<(i64, i64)>> {
+        keys.map(|k| bounds.get(k)).collect()
+    }
+
+    #[test]
+    fn the_bounds_of_sorted_keys_are_the_bounds_of_the_same_keys_in_another_order() {
+        let keys = [Some(3), Some(3), None, Some(4), Some(7), Some(7), Some(7), Some(9)];
+        let values = [Some(5), Some(2), Some(1), None, Some(8), Some(-1), Some(4), Some(6)];
+        let sorted = Bounds::of(&keys, &values);
+        assert!(matches!(sorted, Bounds::Dense { base: 3, .. }));
+        let want =
+            vec![None, Some((2, 5)), None, None, None, Some((-1, 8)), None, Some((6, 6)), None];
+        assert_eq!(all(&sorted, 2..11), want);
+        let mut pairs: Vec<_> = keys.iter().copied().zip(values.iter().copied()).collect();
+        pairs.reverse();
+        let (keys, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
+        assert_eq!(all(&Bounds::of(&keys, &values), 2..11), want);
+    }
 }
