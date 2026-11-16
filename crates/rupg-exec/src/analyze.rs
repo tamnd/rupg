@@ -638,7 +638,7 @@ impl<'p, 'q> Exec<'p, 'q> {
                 let tables = cx.tables(node.scope)?;
                 let eval = Eval::new(cx.params, cx.session, &tables, cx.cache, &[]);
                 let mut eval = eval.at(&row.tuple);
-                let levels = set_levels(&query.targets);
+                let levels = set_levels(query);
                 let mut out = Vec::new();
                 eval.project(&query.targets, &levels, &mut out, usize::MAX)?;
                 self.buf = out

@@ -269,12 +269,18 @@ fn strict(func: u32) -> bool {
     builtin::proc_by_oid(func).is_none_or(|p| p.strict)
 }
 
-/// The calls of functions that give a set in the targets, by level, as `split_pathtarget_at_srfs` puts them in `ProjectSet` nodes: a call is one level above the highest call in its arguments.
-fn set_levels(targets: &[Target]) -> Vec<Vec<&Expr>> {
-    fn walk<'a>(expr: &'a Expr, levels: &mut Vec<Vec<&'a Expr>>) -> usize {
-        let below = expr.children().into_iter().map(|c| walk(c, levels)).max().unwrap_or(0);
+/// The calls of functions that give a set in the targets, by level, as `split_pathtarget_at_srfs` puts them in `ProjectSet` nodes: a call is one level above the highest call in its arguments. A call in an item of `GROUP BY` runs below the groups, as [`grouped_sets`] runs it, so the targets read its value.
+fn set_levels(query: &Query) -> Vec<Vec<&Expr>> {
+    let grouped = grouped_calls(query);
+    levels_of(query.targets.iter().map(|t| &t.expr), &grouped)
+}
+
+/// The calls of functions that give a set in `exprs`, by level, with the calls that are the same as a call of `skip` as values.
+fn levels_of<'a>(exprs: impl IntoIterator<Item = &'a Expr>, skip: &[&Expr]) -> Vec<Vec<&'a Expr>> {
+    fn walk<'a>(expr: &'a Expr, skip: &[&Expr], levels: &mut Vec<Vec<&'a Expr>>) -> usize {
+        let below = expr.children().into_iter().map(|c| walk(c, skip, levels)).max().unwrap_or(0);
         match &expr.kind {
-            ExprKind::Func(f) if f.retset => {
+            ExprKind::Func(f) if f.retset && !skip.iter().any(|s| s.same(expr)) => {
                 if levels.len() == below {
                     levels.push(Vec::new());
                 }
@@ -285,10 +291,91 @@ fn set_levels(targets: &[Target]) -> Vec<Vec<&Expr>> {
         }
     }
     let mut levels = Vec::new();
-    for target in targets {
-        walk(&target.expr, &mut levels);
+    for expr in exprs {
+        walk(expr, skip, &mut levels);
     }
     levels
+}
+
+/// The calls of functions that give a set in the items of `GROUP BY` of a query with groups.
+fn grouped_calls(query: &Query) -> Vec<&Expr> {
+    fn walk<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+        if matches!(&expr.kind, ExprKind::Func(f) if f.retset) {
+            out.push(expr);
+        }
+        for child in expr.children() {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    if query.grouped {
+        for item in &query.group {
+            walk(&query.targets[item.target].expr, &mut out);
+        }
+    }
+    out
+}
+
+/// The values of the calls of functions that give a set in the items of `GROUP BY`, which a `ProjectSet` below the `Agg` computes for each row of the scan. Each tuple of the groups has one more number after its relations, of its row of `values`.
+#[derive(Debug)]
+struct GroupedSets {
+    /// The place of the number in a tuple.
+    at: usize,
+    /// The calls, in the order of the values of a row.
+    calls: Vec<Expr>,
+    values: Vec<Vec<Value>>,
+}
+
+/// The tuples of a query whose items of `GROUP BY` call a function that gives a set: the rows of the calls for each tuple, as the `ProjectSet` below the `Agg` gives them, or `None` when no item calls one.
+fn grouped_sets(
+    eval: &mut Eval<'_>,
+    query: &Query,
+    tuples: &[Vec<usize>],
+) -> Result<Option<(Vec<Vec<usize>>, GroupedSets)>> {
+    /// The values of the calls of the levels for the tuple of `eval`, one row for each row of the `ProjectSet`.
+    fn expand(eval: &mut Eval<'_>, levels: &[Vec<&Expr>], out: &mut Vec<Vec<Value>>) -> Result<()> {
+        let Some((calls, above)) = levels.split_first() else {
+            out.push(eval.sets.iter().map(|(_, v)| v.clone()).collect());
+            return Ok(());
+        };
+        let sets =
+            calls.iter().map(|call| eval.set_values(call, None)).collect::<Result<Vec<_>>>()?;
+        let count = sets.iter().map(Vec::len).max().unwrap_or(0);
+        let base = eval.sets.len();
+        for i in 0..count {
+            for (call, set) in calls.iter().zip(&sets) {
+                let value = set.get(i).cloned().unwrap_or(Value::Null);
+                eval.sets.push((std::ptr::from_ref(*call), value));
+            }
+            let result = expand(eval, above, out);
+            eval.sets.truncate(base);
+            result?;
+        }
+        Ok(())
+    }
+    let calls = grouped_calls(query);
+    if calls.is_empty() {
+        return Ok(None);
+    }
+    let levels = levels_of(query.group.iter().map(|g| &query.targets[g.target].expr), &[]);
+    let at = query.relations.len();
+    let mut expanded = Vec::new();
+    let mut values = Vec::new();
+    for (n, tuple) in tuples.iter().enumerate() {
+        interrupt(eval.session, n)?;
+        let mut eval = eval.at(tuple);
+        let mut rows = Vec::new();
+        expand(&mut eval, &levels, &mut rows)?;
+        for row in rows {
+            let mut tuple = tuple.clone();
+            tuple.resize(at, scan::NONE);
+            tuple.push(values.len());
+            expanded.push(tuple);
+            values.push(row);
+        }
+    }
+    let calls = levels.into_iter().flatten().cloned().collect();
+    Ok(Some((expanded, GroupedSets { at, calls, values })))
 }
 
 /// Checks that the engine can run the function of an operator, as for a call of the function: a function in SQL or in PL/pgSQL runs its body.
@@ -545,9 +632,6 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
     if !query.distinct.iter().all(|g| g.sort != 0) && !query.distinct.iter().all(|g| g.hashable) {
         return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement DISTINCT")
             .with_detail(MIXED_KEYS));
-    }
-    if query.group.iter().any(|g| query.targets[g.target].expr.first_set_call().is_some()) {
-        return Err(not_yet("a set-returning function in GROUP BY"));
     }
     window::check(query)?;
     for target in &query.targets {
@@ -1808,11 +1892,21 @@ fn run_query(
     if simple {
         return Ok(if tuples.is_empty() { Vec::new() } else { vec![Vec::new()] });
     }
+    // `ProjectSet` below the `Agg`: the calls of functions that give a set in the items of `GROUP BY` give the rows that the groups read.
+    let grouped_tuples;
+    let tuples = match grouped_sets(&mut eval, query, &tuples)? {
+        Some((expanded, sets)) => {
+            eval.grouped = Some(Rc::new(sets));
+            grouped_tuples = expanded;
+            &grouped_tuples
+        }
+        None => &tuples,
+    };
     let none = vec![scan::NONE; query.relations.len()];
     let late = late_targets(query);
     if !late.is_empty() {
         let inputs = if query.grouped {
-            agg::kept_groups(&mut eval, query, &tuples, &none)?
+            agg::kept_groups(&mut eval, query, tuples, &none)?
         } else {
             tuples.iter().map(|t| (t.as_slice(), Group::default())).collect()
         };
@@ -1840,7 +1934,7 @@ fn run_query(
             }
             _ => usize::MAX,
         };
-        agg::rows(&mut eval, query, &tuples, &none, needed)?
+        agg::rows(&mut eval, query, tuples, &none, needed)?
     } else {
         // With no sort, `Limit` stops after the rows that it gives.
         let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
@@ -1853,7 +1947,7 @@ fn run_query(
             Some(want) if !ordered => needed.min(offset.saturating_add(want)),
             _ => needed,
         };
-        let levels = set_levels(&query.targets);
+        let levels = set_levels(query);
         // The window function calls run before the targets, and the rows come in the order of the last sort of the windows.
         let calls = window::calls(query);
         let (sequence, mut values) = if calls.is_empty() {
@@ -1982,7 +2076,7 @@ fn postponed_rows<'a>(
         }
         reads = needed.saturating_add(1);
     }
-    let levels = set_levels(&query.targets);
+    let levels = set_levels(query);
     let mut out = Vec::new();
     for (n, row) in sorted.iter().take(reads).enumerate() {
         if out.len() >= reads {
@@ -3107,6 +3201,8 @@ struct Eval<'a> {
     domain_value: Vec<Value>,
     /// The value of each call of a function that gives a set in the row that the targets compute now, by the address of the call in the query.
     sets: Vec<(*const Expr, Value)>,
+    /// The values of the calls of functions that give a set in the items of `GROUP BY`, for the tuples of the groups.
+    grouped: Option<Rc<GroupedSets>>,
     /// The value of each window function call for the row, by the address of the call in the query.
     windows: Vec<(*const WindowFunc, Value)>,
     /// The rows of the subquery of each `SET (a, b) = (SELECT ...)` for the last row that read it, by the ID of the item, which the columns of the item share, as `ExecSetParamPlan` sets the parameters of `PARAM_MULTIEXPR`.
@@ -3134,6 +3230,7 @@ impl<'a> Eval<'a> {
             sub: Vec::new(),
             domain_value: Vec::new(),
             sets: Vec::new(),
+            grouped: None,
             windows: Vec::new(),
             multi: Vec::new(),
         }
@@ -3492,6 +3589,7 @@ impl<'a> Eval<'a> {
             sub: Vec::new(),
             domain_value: Vec::new(),
             sets: Vec::new(),
+            grouped: self.grouped.clone(),
             windows: Vec::new(),
             multi: Vec::new(),
         }
@@ -3538,8 +3636,15 @@ impl<'a> Eval<'a> {
             }
             ExprKind::Func(f) if f.retset => {
                 let at = std::ptr::from_ref(expr);
-                let value = self.sets.iter().rev().find(|(call, _)| *call == at);
-                value.map(|(_, v)| v.clone()).ok_or_else(|| {
+                if let Some((_, value)) = self.sets.iter().rev().find(|(call, _)| *call == at) {
+                    return Ok(value.clone());
+                }
+                // A call of an item of `GROUP BY` reads the row of the `ProjectSet` below the groups.
+                let grouped = self.grouped.as_deref().and_then(|g| {
+                    let row = g.values.get(*self.tuple.get(g.at)?)?;
+                    row.get(g.calls.iter().position(|c| c.same(expr))?)
+                });
+                grouped.cloned().ok_or_else(|| {
                     Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "set-valued function called in context that cannot accept a set",
@@ -4988,6 +5093,7 @@ pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         sub: Vec::new(),
         domain_value: Vec::new(),
         sets: Vec::new(),
+        grouped: None,
         windows: Vec::new(),
         multi: Vec::new(),
     };
@@ -5014,6 +5120,7 @@ pub fn evaluate_domain_check(expr: &Expr, value: &Value, session: &dyn Session) 
         sub: Vec::new(),
         domain_value: vec![value.clone()],
         sets: Vec::new(),
+        grouped: None,
         windows: Vec::new(),
         multi: Vec::new(),
     };
@@ -5123,6 +5230,7 @@ pub(crate) fn evaluate_row(
         sub: Vec::new(),
         domain_value: Vec::new(),
         sets: Vec::new(),
+        grouped: None,
         windows: Vec::new(),
         multi: Vec::new(),
     };
@@ -5180,6 +5288,7 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         sub: Vec::new(),
         domain_value: Vec::new(),
         sets: Vec::new(),
+        grouped: None,
         windows: Vec::new(),
         multi: Vec::new(),
     };

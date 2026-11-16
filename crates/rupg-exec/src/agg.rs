@@ -1619,7 +1619,7 @@ pub(crate) fn rows<'a>(
     let (mut rows, kept) = run_groups(eval, query, tuples, none, needed, !calls.is_empty())?;
     if !calls.is_empty() {
         // The windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
-        let levels = super::set_levels(&query.targets);
+        let levels = super::set_levels(query);
         let (firsts, mut groups): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
         let input = window::Input { tuples: &firsts, groups: &groups };
         let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
@@ -1688,7 +1688,7 @@ fn run_groups<'a>(
             })
         })
         .collect::<Result<_>>()?;
-    let levels = super::set_levels(&query.targets);
+    let levels = super::set_levels(query);
     // The targets of the items of each grouping set.
     let all_items: Vec<usize> = query.group.iter().map(|g| g.target).collect();
     let (sets, grouped) = if query.grouping_sets.is_empty() {
