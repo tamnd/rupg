@@ -1811,8 +1811,14 @@ pub(crate) fn scanned(kind: &Kind<'_>) -> Option<usize> {
     }
 }
 
-/// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table.
+/// True when the node is the `Append` of the members of a table with children of `INHERITS`, which has the table itself as a member. `apply_scanjoin_target_to_paths` gives the targets to the members of a partitioned table, but not to the members of such a table. A table whose `relhassubclass` stays true after its last child is gone is the one member of its tree: `set_plan_refs` takes out its `Append`, but not the `Result` above it.
 pub(crate) fn inheritance_append(query: &Query, node: &Node<'_>) -> bool {
+    if let Some(r) = scanned(&node.kind)
+        && let Some(rel) = query.relations.get(r)
+        && node.member == Some(rel.oid)
+    {
+        return true;
+    }
     let first = node.children.first().map(|c| match c.kind {
         Kind::Sort(_) => c.children.first().unwrap_or(c),
         _ => c,
@@ -1944,11 +1950,20 @@ fn needed(level: &Level<'_>, stats: &mut Stats, used: Option<&[bool]>) {
     let query = level.query;
     let relations = &query.relations;
     let top = BTreeSet::from([usize::MAX]);
+    // `preprocess_targetlist` of an `UPDATE` keeps only the columns of `SET`, and the `ModifyTable` reads the other columns from the old row.
+    let kept = |at: usize, target: &Expr| {
+        let update = level.write.is_some_and(|w| w.kind == WriteKind::Update && at < w.width);
+        !(update
+            && matches!(target.kind, ExprKind::Var(v) if v.relation == 0 && v.levels_up == 0 && usize::try_from(v.attnum).ok() == Some(at + 1)))
+    };
     for (at, target) in query.targets.iter().enumerate() {
-        if used.is_some_and(|u| !u.get(at).copied().unwrap_or(true)) {
+        if used.is_some_and(|u| !u.get(at).copied().unwrap_or(true)) || !kept(at, &target.expr) {
             continue;
         }
         stats.need(&target.expr, 0, &top, relations);
+    }
+    if let Some((identity, _)) = &level.identity {
+        stats.need(identity, 0, &top, relations);
     }
     for mark in &level.marks {
         stats.need(mark, 0, &top, relations);

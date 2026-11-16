@@ -180,7 +180,6 @@ impl rupg_opt::Members for Members<'_, '_> {
                 let table = catalog.relation(oid)?;
                 let columns =
                     table.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect();
-                let has_children = !catalog.all_inheritors(oid).is_empty();
                 let size = rupg_opt::Members::size(self, oid);
                 // `make_inh_translation_list`: the column of the child with the name of each column of the parent.
                 let attnums = parent
@@ -195,7 +194,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                         found.and_then(|at| i16::try_from(at + 1).ok()).unwrap_or(0)
                     })
                     .collect();
-                Some(Member { oid, columns, has_children, size, attnums })
+                Some(Member { oid, columns, size, attnums })
             })
             .collect();
         Some(members)
@@ -213,11 +212,13 @@ impl rupg_opt::Members for Members<'_, '_> {
                 reltuples: f64::from(tuples),
                 relallvisible: pages,
                 fillfactor: 100,
+                subclass: false,
             };
         }
         let size = self.heap.size(self.database, table);
         // `RelationGetFillFactor`: the option of the table, which `CREATE TABLE` and `ALTER TABLE SET` keep in their text.
-        let fillfactor = self.reader.catalog().and_then(|catalog| {
+        let catalog = self.reader.catalog();
+        let fillfactor = catalog.and_then(|catalog| {
             catalog.relation(table)?.options.iter().find_map(|text| {
                 let (name, value) = text.split_once('=')?;
                 (name == "fillfactor").then(|| value.parse().ok()).flatten()
@@ -229,6 +230,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             reltuples: f64::from(size.reltuples),
             relallvisible: f64::from(size.relallvisible),
             fillfactor: fillfactor.unwrap_or(100),
+            subclass: catalog.is_some_and(|c| c.has_subclass(table)),
         }
     }
 

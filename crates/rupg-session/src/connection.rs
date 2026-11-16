@@ -6808,6 +6808,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/tid_range_parallel.test")));
     }
 
+    /// A table that lost its last child keeps `relhassubclass` until the next `ANALYZE`, and the planner expands it as the one member of its tree, as `expand_inherited_rtentry` does. `connection/stale_subclass.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn stale_subclass() {
+        big_stack(|| script(include_str!("connection/stale_subclass.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

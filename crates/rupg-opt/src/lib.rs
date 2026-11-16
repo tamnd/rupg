@@ -162,11 +162,20 @@ pub struct Size {
     pub relallvisible: f64,
     /// `RelationGetFillFactor`: the option `fillfactor` of the table, 100 by default.
     pub fillfactor: i32,
+    /// `relhassubclass`: the table has children, or had them before the last `ANALYZE`, so the planner takes no pages for it when it has none.
+    pub subclass: bool,
 }
 
 impl Default for Size {
     fn default() -> Size {
-        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0, relallvisible: 0.0, fillfactor: 100 }
+        Size {
+            blocks: 0.0,
+            relpages: 0.0,
+            reltuples: -1.0,
+            relallvisible: 0.0,
+            fillfactor: 100,
+            subclass: false,
+        }
     }
 }
 
@@ -471,8 +480,6 @@ pub struct Member {
     pub oid: u32,
     /// The type and the type modifier of each column of the table that is not dropped.
     pub columns: Vec<(u32, i32)>,
-    /// `relhassubclass`: the table has children, so the planner takes no pages for it when it has none.
-    pub has_children: bool,
     /// The size of the heap of the table.
     pub size: Size,
     /// The column number in the table of each column of the parent, by name, or 0 for a dropped column of the parent.
@@ -1011,6 +1018,8 @@ pub(crate) struct Level<'q> {
     pub(crate) stats: from::Stats,
     /// The junk columns of the row marks, which the rows of the query carry after its targets.
     pub(crate) marks: Vec<Expr>,
+    /// `tableoid` of the target table of an `UPDATE`, a `DELETE` or a `MERGE` with an inheritance tree, which `add_row_identity_var` adds before `ctid` so that the node knows the member of each row, with true for a partitioned table.
+    pub(crate) identity: Option<(Expr, bool)>,
     /// The write of the statement of the query. A write with check constraints has it on the query outside [`Level::query`].
     pub(crate) write: Option<&'q Write>,
     /// True for a subquery of [`Query::minmax`]: only a plan of `FROM` whose rows are in the order of `ORDER BY` is a plan of the query.
@@ -1084,6 +1093,7 @@ impl<'q> Builder<'q> {
         let presorted = std::mem::take(&mut self.presorted);
         let want_paths = std::mem::take(&mut self.paths);
         let marks = self.marks(query, write);
+        let identity = self.identity(query, write);
         let leaf = self.setop.as_ref().filter(|s| parent == Some(s.scope)).map(|s| s.op);
         let mut level = Level {
             scope,
@@ -1098,6 +1108,7 @@ impl<'q> Builder<'q> {
             joined: Vec::new(),
             stats: from::Stats::default(),
             marks,
+            identity,
             write,
             presorted,
             lateral: OnceCell::new(),
@@ -1280,6 +1291,19 @@ impl<'q> Builder<'q> {
         out
     }
 
+    /// `distribute_row_identity_vars`: `tableoid` of the target table of an `UPDATE`, a `DELETE` or a `MERGE` whose target has members, a partitioned table or a table with an inheritance tree.
+    fn identity(&self, query: &'q Query, write: Option<&Write>) -> Option<(Expr, bool)> {
+        let kind = &write?.kind;
+        if !matches!(kind, WriteKind::Update | WriteKind::Delete | WriteKind::Merge) {
+            return None;
+        }
+        let members = self.members?;
+        members.members(query, 0, &[])?;
+        let partitioned = !members.is_table(query.relations.first()?.oid);
+        let var = Var { relation: 0, attnum: TABLE_OID_ATTNUM, levels_up: 0 };
+        Some((Expr::new(ExprKind::Var(var), oid::OID), partitioned))
+    }
+
     /// A new scope in the current subplan.
     /// True when the query of a scope is a `SELECT` of a set operation in the query that adds its casts, as [`setcast::wrap_all`] makes it.
     fn wrapper(&self, scope: usize) -> bool {
@@ -1308,7 +1332,9 @@ impl<'q> Builder<'q> {
         if let (Some(_), Some(r)) = (node.member, from::scanned(&node.kind)) {
             let write = level.write;
             let target = r == 0
-                && write.is_some_and(|w| matches!(w.kind, WriteKind::Update | WriteKind::Delete));
+                && write.is_some_and(|w| {
+                    matches!(w.kind, WriteKind::Update | WriteKind::Delete | WriteKind::Merge)
+                });
             let leaf = Leaf { of: level.scope, relation: r, renamed: append || target };
             let parent = self.scopes[level.scope].parent;
             self.scopes.push(Scope { query: level.query, parent, target: None, leaf: Some(leaf) });
@@ -1334,8 +1360,16 @@ impl<'q> Builder<'q> {
         for at in order {
             self.leaves(level, &mut node.children[at], append);
         }
+        // `set_plan_refs` takes out the `Append` of one member, and the `Result` above it reads the columns of the scan of the member.
+        if let (Kind::Result { replaces: None, .. }, [child]) =
+            (&node.kind, node.children.as_slice())
+            && child.member.is_some()
+            && from::scanned(&child.kind).is_some()
+        {
+            node.scope = child.scope;
+        }
         if let Kind::Modify {
-            operation: Operation::Update | Operation::Delete,
+            operation: Operation::Update | Operation::Delete | Operation::Merge,
             relation: 0,
             targets,
             ..

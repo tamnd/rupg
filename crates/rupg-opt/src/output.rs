@@ -253,7 +253,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
         Kind::Modify { operation, .. } => {
-            let want = modify_targets(level, *operation);
+            let want = modify_targets(level, *operation, identity(level, node.children.first()));
             if let Some(child) = node.children.first_mut() {
                 set(level, child, want, false);
             }
@@ -679,8 +679,24 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
     }
 }
 
+/// The `tableoid` of the target table that the node below a `ModifyTable` gives, as [`Level::identity`]. A partitioned table with a condition that is never true is a dummy relation that `expand_partitioned_rtentry` does not expand, so it has none.
+fn identity<'q>(level: &Level<'q>, child: Option<&Node<'q>>) -> Option<Item<'q>> {
+    fn dummy(node: &Node<'_>, scope: usize) -> bool {
+        node.scope == scope
+            && (matches!(node.kind, Kind::Result { replaces: Some(Replaced::Scan(0, _)), .. })
+                || node.children.iter().any(|c| dummy(c, scope)))
+    }
+    let (expr, partitioned) = level.identity.as_ref()?;
+    let dummy = child.is_some_and(|c| dummy(c, level.scope));
+    (!(*partitioned && dummy)).then(|| item(expr.clone()))
+}
+
 /// The items that the rows below a `ModifyTable` give, as `preprocess_targetlist`. An `UPDATE` gives the new values of the columns of `SET` and the ID of the version of the row, and a `DELETE` gives only the ID. The node computes `RETURNING` from the old and the new rows.
-fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> {
+fn modify_targets<'q>(
+    level: &Level<'q>,
+    operation: Operation,
+    identity: Option<Item<'q>>,
+) -> Vec<Item<'q>> {
     let query = level.query;
     let all = || query.targets.iter().map(|t| Item::of(&t.expr)).collect();
     let (Some(write), Some(tid)) = (level.write, query.targets.last()) else { return all() };
@@ -694,18 +710,20 @@ fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> 
                 })
                 .map(|(_, t)| Item::of(&t.expr))
                 .collect();
+            out.extend(identity);
             out.push(Item::of(&tid.expr));
             out.extend(level.marks.iter().map(|m| item(m.clone())));
             out.extend(returning_carried(query, write));
             out
         }
         Operation::Delete => {
-            let mut out = vec![Item::of(&tid.expr)];
+            let mut out: Vec<Item<'q>> = identity.into_iter().collect();
+            out.push(Item::of(&tid.expr));
             out.extend(level.marks.iter().map(|m| item(m.clone())));
             out.extend(returning_carried(query, write));
             out
         }
-        Operation::Merge => merge_targets(level).unwrap_or_else(all),
+        Operation::Merge => merge_targets(level, identity).unwrap_or_else(all),
         _ => all(),
     }
 }
@@ -813,7 +831,7 @@ fn map_row(expr: &mut Expr, map: &dyn Fn(i16) -> Option<Expr>) -> bool {
 }
 
 /// `preprocess_targetlist` for a `MERGE`: the ID of the version of the row of the target table, then the columns of the other relations that the condition and the row of each `WHEN` clause read, then the row marks, then the columns that only `RETURNING` reads. The columns of the target table do not come, as the executor reads them from the row of the table.
-fn merge_targets<'q>(level: &Level<'q>) -> Option<Vec<Item<'q>>> {
+fn merge_targets<'q>(level: &Level<'q>, identity: Option<Item<'q>>) -> Option<Vec<Item<'q>>> {
     let query = level.query;
     let merge = level.write?.merge.as_ref()?;
     let tid = query.targets.iter().find(|t| {
@@ -844,7 +862,8 @@ fn merge_targets<'q>(level: &Level<'q>) -> Option<Vec<Item<'q>>> {
             }
         }
     }
-    let mut out = vec![Item::of(&tid.expr)];
+    let mut out: Vec<Item<'q>> = identity.into_iter().collect();
+    out.push(Item::of(&tid.expr));
     out.extend(read.iter().map(|&at| Item::of(&carried[at].expr)));
     // `transform_MERGE_to_join`: with `NOT MATCHED BY SOURCE`, the executor tests the join condition and that the whole row of the source is not null, so the rows carry the columns of both.
     let by_source = merge.clauses.iter().any(|c| c.kind == MatchKind::NotMatchedBySource);
