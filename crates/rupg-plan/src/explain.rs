@@ -501,16 +501,26 @@ impl Explainer<'_, '_> {
             self.w.boolean("Disabled", node.disabled);
         }
         if self.options.verbose && !node.output.is_empty() {
-            // The calls of a window below are columns of the input of a `WindowAgg`.
-            let window = matches!(node.kind, Kind::WindowAgg { .. });
-            if window {
-                self.texts.below(computed(node));
-            }
-            let output = self.items(node.scope, &node.output, self.many);
-            if window {
+            // The calls of a window below are columns of the input of a `WindowAgg`, and the values that a `ProjectSet` below computes are columns of the input of a `ProjectSet` or a `Result` above it, as `split_pathtarget_at_srfs` levels them.
+            let own = if matches!(node.kind, Kind::WindowAgg { .. }) || set_level(node) {
+                (computed(node), deeper(node))
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let mut output = Vec::with_capacity(node.output.len());
+            for item in &node.output {
+                // `get_special_variable`: an expression that the node reads from below shows as the node that computes it shows it, and a level of `ProjectSet` nodes shows the values of the level below it in parentheses.
+                let source = (item.below && !matches!(item.expr.kind, ExprKind::Var(_)))
+                    .then(|| level_source(node, &item.expr))
+                    .flatten();
+                let (list, levels) = source.unwrap_or_else(|| own.clone());
+                self.texts.below(list);
+                self.texts.deeper(levels);
+                let text = self.items(node.scope, std::slice::from_ref(item), self.many);
                 self.texts.below(Vec::new());
+                self.texts.deeper(Vec::new());
+                output.extend(text?);
             }
-            let output = output?;
             self.w.list("Output", &output);
         }
         if matches!(
@@ -863,14 +873,28 @@ impl Explainer<'_, '_> {
                 // A key that a `WindowAgg` below computes shows as the `WindowAgg` shows it: the calls and the columns that it reads from below are in parentheses.
                 let window =
                     node.children.first().filter(|c| matches!(c.kind, Kind::WindowAgg { .. }));
-                if let Some(child) = window {
+                let keys = if let Some(child) = window {
                     self.texts.below(computed(child));
-                }
-                let keys = self.sort_keys(scope, keys, upper);
-                if window.is_some() {
+                    let keys = self.sort_keys(scope, keys, upper);
                     self.texts.below(Vec::new());
-                }
-                let keys = keys?;
+                    keys?
+                } else {
+                    // A key that a level of `ProjectSet` nodes below computes shows as the node that computes it shows it, as `get_special_variable` does.
+                    let mut out = Vec::with_capacity(keys.len());
+                    for key in keys {
+                        let source = (!matches!(key.item.expr.kind, ExprKind::Var(_)))
+                            .then(|| level_source(node, &key.item.expr))
+                            .flatten();
+                        let (list, levels) = source.unwrap_or_default();
+                        self.texts.below(list);
+                        self.texts.deeper(levels);
+                        let text = self.sort_keys(scope, std::slice::from_ref(key), upper);
+                        self.texts.below(Vec::new());
+                        self.texts.deeper(Vec::new());
+                        out.extend(text?);
+                    }
+                    out
+                };
                 self.w.list("Sort Key", &keys);
                 self.sort_info(node);
             }
@@ -1499,6 +1523,38 @@ impl Explainer<'_, '_> {
             }
         }
         Ok(())
+    }
+}
+
+/// True when the node is a `ProjectSet` or the `Result` above one, whose inputs are the values of a level of `split_pathtarget_at_srfs` below it.
+fn set_level(node: &Node<'_>) -> bool {
+    matches!(node.kind, Kind::ProjectSet)
+        || matches!(node.kind, Kind::Result { .. })
+            && node.children.first().is_some_and(|c| matches!(c.kind, Kind::ProjectSet))
+}
+
+/// The values below the node that computes `expr`, with the [`deeper`] lists of that node, when a node above passes `expr` up from a [`set_level`] node, so that the text of `expr` has the parentheses of that node.
+fn level_source(node: &Node<'_>, expr: &Expr) -> Option<(Vec<Expr>, Vec<Vec<Expr>>)> {
+    for child in &node.children {
+        if let Some(item) = child.output.iter().find(|i| i.expr.same(expr)) {
+            if item.below {
+                return level_source(child, expr);
+            }
+            return set_level(child).then(|| (computed(child), deeper(child)));
+        }
+    }
+    None
+}
+
+/// The [`computed`] lists of the [`set_level`] nodes below a [`set_level`] node, one for each node down, as the node below shows the values that it reads from the level below it.
+fn deeper(node: &Node<'_>) -> Vec<Vec<Expr>> {
+    match node.children.first() {
+        Some(child) if set_level(node) && set_level(child) => {
+            let mut out = vec![computed(child)];
+            out.extend(deeper(child));
+            out
+        }
+        _ => Vec::new(),
     }
 }
 

@@ -160,6 +160,26 @@ fn is_var(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Var(_))
 }
 
+/// `make_sort_input_target`: the target below the sort when [`upper::postponed`] puts targets after it: the other targets, then the columns, the aggregate calls and the window calls of those targets.
+pub(crate) fn sort_input<'q>(level: &Level<'q>) -> Vec<Item<'q>> {
+    let late = upper::postponed(level);
+    let targets = &level.query.targets;
+    let mut out: Vec<Item<'q>> =
+        targets.iter().zip(&late).filter(|(_, l)| !**l).map(|(t, _)| Item::of(&t.expr)).collect();
+    for (t, _) in targets.iter().zip(&late).filter(|(_, l)| **l) {
+        add_inputs(&t.expr, &mut out);
+    }
+    out
+}
+
+/// The number of `ProjectSet` nodes right below the node, one above another.
+fn project_sets_below(node: &Node<'_>) -> usize {
+    match node.children.first() {
+        Some(child) if matches!(child.kind, Kind::ProjectSet) => 1 + project_sets_below(child),
+        _ => 0,
+    }
+}
+
 /// True when the expression is a constant.
 fn is_const(expr: &Expr) -> bool {
     matches!(expr.kind, ExprKind::Const(_))
@@ -247,6 +267,23 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 set(level, child, below, false);
             }
             node.cost.width = width(level, node.scope, &want);
+        }
+        // `split_pathtarget_at_srfs` with `need_extra_projection`: the `Result` above the `ProjectSet` nodes computes the targets from the functions of the last level.
+        Kind::Result { replaces: None, one_time }
+            if one_time.is_empty()
+                && level.query.has_target_srfs()
+                && matches!(node.children.first(), Some(c) if matches!(c.kind, Kind::ProjectSet)) =>
+        {
+            let below: Vec<Item<'q>> = upper::srf_split(level)
+                .levels
+                .last()
+                .map(|t| t.iter().map(|e| item(e.clone())).collect())
+                .unwrap_or_default();
+            node.cost.width = width(level, node.scope, &want);
+            node.output = want;
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, false);
+            }
         }
         // `create_gating_plan`: the `Result` of the conditions that run once computes the targets, and the node below gives the columns that they read, as the target of its path. The `Result` above an `Append` of a `UNION ALL` does the same, as `create_projection_path`.
         Kind::Result { replaces: None, .. } if !node.children.is_empty() => {
@@ -394,7 +431,23 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let keys: Vec<Expr> = targets.into_iter().map(|t| level.target(t).clone()).collect();
             grouped(level, node, want, &keys, false);
         }
-        // `make_sort_input_target`: above the sort, the node computes the targets that come after it, and the node below gives the other targets and the inputs of those. A scan of a relation below it gives the columns of the targets.
+        // `split_pathtarget_at_srfs`: a `ProjectSet` above another computes its level of functions from the targets of the level below it.
+        Kind::ProjectSet if matches!(node.children.first(), Some(c) if matches!(c.kind, Kind::ProjectSet)) =>
+        {
+            let split = upper::srf_split(level);
+            let place = project_sets_below(node);
+            let below: Vec<Item<'q>> = split
+                .levels
+                .get(place - 1)
+                .map(|t| t.iter().map(|e| item(e.clone())).collect())
+                .unwrap_or_default();
+            node.cost.width = width(level, node.scope, &want);
+            node.output = want;
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, false);
+            }
+        }
+        // `split_pathtarget_at_srfs`: the lowest `ProjectSet` computes the functions of its level and reads the target of the first level from below. A scan of a relation below it gives the columns of the targets, as `create_project_set_plan` asks its input for no target list, and the node computes what a projection below it would compute. Above the sort of `make_sort_input_target`, it computes the targets that come after the sort and reads the others, and a `Result` between them gives the target of the first level when the sort gives another list.
         Kind::ProjectSet => {
             let scan = node.children.first().is_some_and(|c| {
                 matches!(
@@ -412,35 +465,61 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                         | Kind::WorkTableScan(_)
                 )
             });
-            let late = if scan { Vec::new() } else { upper::postponed(level) };
-            let is_late = |at: usize| late.get(at).copied().unwrap_or(false);
+            let split = upper::srf_split(level);
+            let late = upper::postponed(level);
+            let single = split.levels.is_empty() && !split.extra;
+            let computes = |at: usize, w: &Item<'_>| {
+                if single {
+                    late.get(at).copied().unwrap_or(true)
+                } else {
+                    w.expr.first_set_call().is_some()
+                }
+            };
             let mut below = Vec::new();
-            if late.is_empty() {
+            if scan {
                 for w in &want {
                     add_columns(&w.expr, 0, &mut below);
                 }
             } else {
-                below.extend(
-                    want.iter().enumerate().filter(|&(at, _)| !is_late(at)).map(|(_, w)| w.clone()),
-                );
-                for (at, w) in want.iter().enumerate() {
-                    if is_late(at) {
-                        add_inputs(&w.expr, &mut below);
-                    }
-                }
+                below.extend(split.bottom.iter().map(|e| item(e.clone())));
             }
             node.cost.width = width(level, node.scope, &want);
-            node.output = if late.is_empty() {
+            node.output = if scan {
                 want
             } else {
                 want.iter()
                     .enumerate()
-                    .map(|(at, w)| if is_late(at) { w.clone() } else { w.passed() })
+                    .map(|(at, w)| if computes(at, w) { w.clone() } else { w.passed() })
                     .collect()
             };
-            // `create_project_set_plan` asks its input for no target list, so a scan below it gives all the columns of its relation, and the node computes the targets that a projection below it would compute.
             if let Some(child) = node.children.first_mut() {
-                set(level, child, below, true);
+                let projection = |n: &Node<'_>| {
+                    matches!(&n.kind, Kind::Result { replaces: None, one_time } if one_time.is_empty())
+                        && !n.children.is_empty()
+                };
+                let gather = matches!(child.kind, Kind::Gather { .. } | Kind::GatherMerge { .. })
+                    && child.children.first().is_some_and(projection);
+                if !late.is_empty() && (gather || projection(child)) {
+                    // The `Result` between the sort and the lowest level gives the target of the level, which a `Gather` above it passes up.
+                    let passed: Vec<Item<'q>> = below.iter().map(Item::passed).collect();
+                    let w = width(level, child.scope, &below);
+                    let mut result = child;
+                    if gather {
+                        result.output.clone_from(&passed);
+                        result.cost.width = w;
+                        match result.children.first_mut() {
+                            Some(c) => result = c,
+                            None => return,
+                        }
+                    }
+                    result.output = passed;
+                    result.cost.width = w;
+                    if let Some(sort) = result.children.first_mut() {
+                        set(level, sort, sort_input(level), false);
+                    }
+                } else {
+                    set(level, child, below, true);
+                }
             }
         }
         Kind::NestedLoop { join_filter, .. } => {

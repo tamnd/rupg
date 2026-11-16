@@ -685,12 +685,86 @@ pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
     late.into_iter().map(|(volatile, expensive)| volatile || expensive).collect()
 }
 
-/// The `ProjectSet` node that computes the functions of the targets that give a set, as `adjust_paths_for_srfs` adds it, below the sort or above it when [`postponed`] puts them after it.
-fn project_set<'q>(level: &Level<'q>, node: Node<'q>) -> Node<'q> {
-    let query = level.query;
+/// The `ProjectSet` nodes that compute the functions of the targets that give a set, as `adjust_paths_for_srfs` adds them, below the sort or above it when [`postponed`] puts them after it. Each level of [`srf_split`] is a `ProjectSet`, and a `Result` above them computes the targets when a function at the deepest level is in a larger expression.
+fn project_set<'q>(level: &Level<'q>, mut node: Node<'q>) -> Node<'q> {
+    let split = srf_split(level);
+    let targets: Vec<&Expr> = level.query.targets.iter().map(|t| &t.expr).collect();
+    // `apply_projection_to_path`: above a node that cannot project, such as the sort of [`postponed`] targets, a `Result` gives the target of the lowest level when the node gives another list. Below a `Gather` or a `Gather Merge`, the workers compute it, and the `Gather` passes it up.
+    if !postponed(level).is_empty()
+        && !output::sort_input(level).iter().map(|i| &*i.expr).eq(split.bottom.iter())
+    {
+        let per_row = cost::qual_cost(split.bottom.iter());
+        let wrap = |node: Node<'q>| {
+            let c = node.cost;
+            let mut out = Node::new(
+                Kind::Result { replaces: None, one_time: Vec::new() },
+                level.display,
+                vec![node],
+            );
+            out.cost = Cost { total: c.total + (cost::CPU_TUPLE + per_row) * c.rows, ..c };
+            out
+        };
+        if matches!(node.kind, Kind::Gather { .. } | Kind::GatherMerge { .. })
+            && node.children.len() == 1
+            && !projects(&node.children[0])
+        {
+            if let Some(child) = node.children.pop() {
+                let child = wrap(child);
+                node.cost.total += child.cost.total - child.children[0].cost.total;
+                node.children.push(child);
+            }
+        } else if !projects(&node) {
+            node = wrap(node);
+        }
+    }
+    for target in &split.levels {
+        node = set_projection(level, node, &target.iter().collect::<Vec<_>>());
+    }
+    if !split.extra {
+        return set_projection(level, node, &targets);
+    }
+    // `create_projection_path`: a `ProjectSet` cannot project.
     let c = node.cost;
-    let rows = query.targets.iter().map(|t| set_rows(&t.expr)).fold(1.0, f64::max);
-    let per_row = cost::qual_cost(query.targets.iter().map(|t| &t.expr));
+    let per_row = cost::qual_cost(targets.iter().copied());
+    let mut out =
+        Node::new(Kind::Result { replaces: None, one_time: Vec::new() }, level.display, vec![node]);
+    out.cost = Cost { total: c.total + (cost::CPU_TUPLE + per_row) * c.rows, ..c };
+    out
+}
+
+/// `is_projection_capable_path`: the nodes that compute a target list of their own.
+fn projects(node: &Node<'_>) -> bool {
+    !matches!(
+        node.kind,
+        Kind::Sort(_)
+            | Kind::IncrementalSort { .. }
+            | Kind::Unique
+            | Kind::Limit
+            | Kind::LockRows
+            | Kind::Materialize
+            | Kind::Memoize(_)
+            | Kind::Hash
+            | Kind::Append
+            | Kind::MergeAppend(_)
+            | Kind::SetOp { .. }
+            | Kind::RecursiveUnion
+            | Kind::ProjectSet
+            | Kind::Modify { .. }
+    )
+}
+
+/// `create_set_projection_path`: a `ProjectSet` with the target `target`, which gives the rows of the function with the most rows for each row below.
+fn set_projection<'q>(level: &Level<'q>, node: Node<'q>, target: &[&Expr]) -> Node<'q> {
+    let c = node.cost;
+    // `expression_returns_set_rows` looks only at the top of each expression.
+    let rows = target
+        .iter()
+        .map(|e| match &e.kind {
+            ExprKind::Func(f) if f.retset => from::function_rows(e),
+            _ => 1.0,
+        })
+        .fold(1.0, f64::max);
+    let per_row = cost::qual_cost(target.iter().copied());
     let out_rows = c.rows * rows;
     let mut out = Node::new(Kind::ProjectSet, level.display, vec![node]);
     out.cost = Cost {
@@ -702,6 +776,153 @@ fn project_set<'q>(level: &Level<'q>, node: Node<'q>) -> Node<'q> {
         width: 0,
     };
     out
+}
+
+/// The levels of the functions that give a set in the targets of a query, as `split_pathtarget_at_srfs` makes them.
+pub(crate) struct SrfSplit {
+    /// The targets of the `ProjectSet` nodes below the node that computes the targets of the query, the lowest first. A function is at the level of the depth of the functions that give a set in its arguments, and a level gives the columns and the functions below it that the levels above it read.
+    pub(crate) levels: Vec<Vec<Expr>>,
+    /// True when a `Result` above the last `ProjectSet` computes the targets, as `need_extra_projection`: a function of the deepest level is in a larger expression.
+    pub(crate) extra: bool,
+    /// The target of the node below the lowest `ProjectSet`: the columns and the other inputs that the levels read.
+    pub(crate) bottom: Vec<Expr>,
+}
+
+/// `split_pathtarget_at_srfs` on the targets of the query. When [`postponed`] puts the functions after the sort, the other targets come from below the sort, as its `input_target`.
+pub(crate) fn srf_split(level: &Level<'_>) -> SrfSplit {
+    let query = level.query;
+    let late = postponed(level);
+    let inputs: Vec<&Expr> = if late.is_empty() {
+        Vec::new()
+    } else {
+        query.targets.iter().zip(&late).filter(|(_, l)| !**l).map(|(t, _)| &t.expr).collect()
+    };
+    let mut walk = SrfWalk {
+        inputs: &inputs,
+        srfs: vec![Vec::new()],
+        level_vars: vec![Vec::new()],
+        level_srfs: vec![Vec::new()],
+        vars: Vec::new(),
+        found: Vec::new(),
+        depth: 0,
+    };
+    let mut max = 0;
+    let mut extra = false;
+    for target in &query.targets {
+        walk.depth = 0;
+        walk.walk(&target.expr);
+        if walk.depth == 0 {
+            continue;
+        }
+        if max < walk.depth {
+            max = walk.depth;
+            extra = false;
+        }
+        if max == walk.depth && !matches!(&target.expr.kind, ExprKind::Func(f) if f.retset) {
+            extra = true;
+        }
+    }
+    if max == 0 {
+        return SrfSplit { levels: Vec::new(), extra: false, bottom: Vec::new() };
+    }
+    let vars = std::mem::take(&mut walk.vars);
+    let found = std::mem::take(&mut walk.found);
+    if extra {
+        walk.srfs.push(Vec::new());
+        walk.level_vars.push(vars);
+        walk.level_srfs.push(found);
+    } else {
+        walk.level_vars[max].extend(vars);
+        walk.level_srfs[max].extend(found);
+    }
+    // Each level below the last computes its functions and gives the columns that the levels above it read, and the functions of the level below it that they read.
+    let mut levels = Vec::new();
+    let mut bottom = Vec::new();
+    let mut previous: Vec<Expr> = Vec::new();
+    for at in 0..walk.srfs.len() - 1 {
+        let mut target: Vec<Expr> = Vec::new();
+        let mut add = |e: &Expr| {
+            if !target.iter().any(|t| t.same(e)) {
+                target.push(e.clone());
+            }
+        };
+        walk.srfs[at].iter().for_each(&mut add);
+        walk.level_vars[at + 1..].iter().flatten().for_each(&mut add);
+        walk.level_srfs[at + 1..]
+            .iter()
+            .flatten()
+            .filter(|e| previous.iter().any(|p| p.same(e)))
+            .for_each(&mut add);
+        if at > 0 {
+            levels.push(target.clone());
+        } else {
+            bottom.clone_from(&target);
+        }
+        previous = target;
+    }
+    SrfSplit { levels, extra, bottom }
+}
+
+/// The state of `split_pathtarget_walker`.
+struct SrfWalk<'a> {
+    /// The expressions that the node below computes.
+    inputs: &'a [&'a Expr],
+    /// The functions of each level.
+    srfs: Vec<Vec<Expr>>,
+    /// The columns that the functions of each level read.
+    level_vars: Vec<Vec<Expr>>,
+    /// The functions of lower levels that the functions of each level read.
+    level_srfs: Vec<Vec<Expr>>,
+    /// The columns that the expression reads, as `current_input_vars`.
+    vars: Vec<Expr>,
+    /// The functions that the expression reads, as `current_input_srfs`.
+    found: Vec<Expr>,
+    /// The depth of the functions of the expression, as `current_depth`.
+    depth: usize,
+}
+
+impl SrfWalk<'_> {
+    fn walk(&mut self, expr: &Expr) {
+        if self.inputs.iter().any(|i| i.same(expr)) {
+            self.vars.push(expr.clone());
+            return;
+        }
+        match &expr.kind {
+            // A column of a query outside is a parameter of the node, as `SS_replace_correlation_vars` makes it.
+            ExprKind::Var(v) if v.levels_up > 0 => {}
+            ExprKind::Var(_)
+            | ExprKind::PlaceHolder(_)
+            | ExprKind::Agg(_)
+            | ExprKind::Grouping(_)
+            | ExprKind::Window(_) => self.vars.push(expr.clone()),
+            ExprKind::Func(f) if f.retset => {
+                let vars = std::mem::take(&mut self.vars);
+                let found = std::mem::take(&mut self.found);
+                let depth = std::mem::take(&mut self.depth);
+                for child in expr.children() {
+                    self.walk(child);
+                }
+                let own = self.depth + 1;
+                while self.srfs.len() <= own {
+                    self.srfs.push(Vec::new());
+                    self.level_vars.push(Vec::new());
+                    self.level_srfs.push(Vec::new());
+                }
+                self.srfs[own].push(expr.clone());
+                let inner = std::mem::replace(&mut self.vars, vars);
+                self.level_vars[own].extend(inner);
+                let inner = std::mem::replace(&mut self.found, found);
+                self.level_srfs[own].extend(inner);
+                self.found.push(expr.clone());
+                self.depth = depth.max(own);
+            }
+            _ => {
+                for child in expr.children() {
+                    self.walk(child);
+                }
+            }
+        }
+    }
 }
 
 /// The node above the sort that computes the targets that come after it, as `apply_projection_to_path` in `create_ordered_paths`. A node that can compute its targets adds their costs, and a `Result` above the other nodes costs the targets and `cpu_tuple_cost` for each row, as `create_projection_path`.
@@ -810,15 +1031,6 @@ fn degenerate_result<'q>(level: &Level<'q>, sets: usize, target: (f64, f64)) -> 
     let mut node = Node::new(Kind::Append, level.display, members);
     node.cost = Cost { startup, total, rows, width: 0 };
     node
-}
-
-/// The number of rows of a function that gives a set in the targets, as `expression_returns_set_rows`.
-fn set_rows(expr: &Expr) -> f64 {
-    let own = match &expr.kind {
-        ExprKind::Func(f) if f.retset => from::function_rows(expr),
-        _ => 1.0,
-    };
-    expr.children().into_iter().map(set_rows).fold(own, f64::max)
 }
 
 impl<'q> Builder<'q> {

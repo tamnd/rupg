@@ -148,6 +148,8 @@ struct Deparser<'a> {
     pub(crate) own: Option<usize>,
     /// For `EXPLAIN` of a condition of a join, the expressions of the targets of the nodes below it. Such an expression that is not a column is the value that the node below gives, in parentheses, as `get_special_variable` shows an `OUTER_VAR` or an `INNER_VAR`.
     computed: Vec<Expr>,
+    /// For `EXPLAIN`, the lists of [`Self::computed`] of the nodes further below, one for each node down: the text of an expression that the node below computes shows the values that it reads from its own input in parentheses too.
+    pub(crate) deeper: Vec<Vec<Expr>>,
     /// For the body of a function in SQL, the name of the function and the name of each argument, as the `funcname` and `argnames` of the outermost `deparse_namespace`. A parameter shows the name of its argument.
     function: Option<(String, Vec<String>)>,
     buf: String,
@@ -213,6 +215,7 @@ impl<'a> Deparser<'a> {
             outer_prefix: false,
             own: None,
             computed: Vec::new(),
+            deeper: Vec::new(),
             function: None,
             buf: String::new(),
         }
@@ -432,10 +435,20 @@ impl<'a> Deparser<'a> {
             && self.computed.iter().any(|c| c.same(e))
         {
             let saved = std::mem::take(&mut self.computed);
+            let deeper = std::mem::take(&mut self.deeper);
+            // A node that passes the value up from below shows it as the node that computes it does, so the value itself does not take parentheses again.
+            if let Some((first, rest)) = deeper.split_first() {
+                self.computed = first.iter().filter(|c| !c.same(e)).cloned().collect();
+                self.deeper = rest
+                    .iter()
+                    .map(|l| l.iter().filter(|c| !c.same(e)).cloned().collect())
+                    .collect();
+            }
             self.buf.push('(');
             let done = self.expr(e, true);
             self.buf.push(')');
             self.computed = saved;
+            self.deeper = deeper;
             return done;
         }
         if let Some((join, column)) = self.join_column(e) {
