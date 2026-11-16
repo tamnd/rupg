@@ -769,6 +769,8 @@ impl Connection {
                 let raised = queue.split_off(said.min(len));
                 queue.extend(raised.into_iter().map(|w| w.with_context(copy.row_context(&row))));
             }
+            // The messages of the functions of the checks, such as a function of a check constraint, also have the line of the copy in their context.
+            self.relay_warnings(&reader, copy.row_context(&row));
             let rows = rows.map_err(line)?;
             if let Some(leaves) = &mut routing {
                 // `ExecFindPartition`, the triggers `BEFORE ... FOR EACH ROW` and the checks of the leaf, with the line of the row in the context of an error and of the messages of the triggers.
@@ -777,6 +779,8 @@ impl Connection {
                 for values in rows {
                     let said = self.trigger_warnings.borrow().len();
                     let fired = leaves.route_fired(self, (table, values), &catalog, &reader);
+                    // The messages of the checks of the leaf, which get the line of the row below with those of the triggers.
+                    self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
                     {
                         let mut queue = self.trigger_warnings.borrow_mut();
                         let len = queue.len();
@@ -922,6 +926,15 @@ impl Connection {
 }
 
 impl Connection {
+    /// The messages of the functions that the plan of the copy called for a row, which go with the messages of the triggers, with the line of the row in their context.
+    fn relay_warnings(&self, reader: &Reader<'_>, context: String) {
+        let raised = reader.take_warnings();
+        if !raised.is_empty() {
+            let mut queue = self.trigger_warnings.borrow_mut();
+            queue.extend(raised.into_iter().map(|w| w.with_context(context.clone())));
+        }
+    }
+
     /// False when the transaction created the table `relid` or gave it a new file, as `CopyFrom` then sets `TABLE_INSERT_SKIP_FSM`: the rows of the copy do not use the free space map, and the copy does not put the free pages of an extension into it.
     fn copy_uses_fsm(&self, relid: u32) -> bool {
         let file = self.catalog().relation(relid).map(|r| r.file);
