@@ -10,7 +10,7 @@ use rupg_analyze::{
     TABLE_OID_ATTNUM, Target, Var, Write,
 };
 use rupg_plan::{Item, Kind, Node, Operation, Replaced, Split, TARGET};
-use rupg_types::oid;
+use rupg_types::{Value, oid};
 
 use crate::{Level, cost, exprs, from, parallel, upper};
 
@@ -253,7 +253,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
         Kind::Modify { operation, .. } => {
-            let want = modify_targets(level, *operation, identity(level, node.children.first()));
+            let want = modify_targets(level, *operation, node.children.first());
             if let Some(child) = node.children.first_mut() {
                 set(level, child, want, false);
             }
@@ -679,23 +679,27 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
     }
 }
 
-/// The `tableoid` of the target table that the node below a `ModifyTable` gives, as [`Level::identity`]. A partitioned table with a condition that is never true is a dummy relation that `expand_partitioned_rtentry` does not expand, so it has none.
-fn identity<'q>(level: &Level<'q>, child: Option<&Node<'q>>) -> Option<Item<'q>> {
+/// The row identity of the target table that the node below a `ModifyTable` gives: `tableoid` of a table with members, as [`Level::identity`], then `ctid`. A partitioned table with a condition that is never true is a dummy relation that `expand_partitioned_rtentry` does not expand, so it has only `ctid`. A table with children of `INHERITS` whose relation is dummy has no member to take the row identity Vars, which `fix_scan_expr` makes null constants.
+fn identity<'q>(level: &Level<'q>, child: Option<&Node<'q>>, tid: &'q Expr) -> Vec<Item<'q>> {
     fn dummy(node: &Node<'_>, scope: usize) -> bool {
         node.scope == scope
             && (matches!(node.kind, Kind::Result { replaces: Some(Replaced::Scan(0, _)), .. })
                 || node.children.iter().any(|c| dummy(c, scope)))
     }
-    let (expr, partitioned) = level.identity.as_ref()?;
-    let dummy = child.is_some_and(|c| dummy(c, level.scope));
-    (!(*partitioned && dummy)).then(|| item(expr.clone()))
+    let Some((expr, partitioned)) = level.identity.as_ref() else { return vec![Item::of(tid)] };
+    let null = |ty| item(Expr::new(ExprKind::Const(Value::Null), ty));
+    match (child.is_some_and(|c| dummy(c, level.scope)), partitioned) {
+        (false, _) => vec![item(expr.clone()), Item::of(tid)],
+        (true, true) => vec![Item::of(tid)],
+        (true, false) => vec![null(oid::OID), null(oid::TID)],
+    }
 }
 
 /// The items that the rows below a `ModifyTable` give, as `preprocess_targetlist`. An `UPDATE` gives the new values of the columns of `SET` and the ID of the version of the row, and a `DELETE` gives only the ID. The node computes `RETURNING` from the old and the new rows.
 fn modify_targets<'q>(
     level: &Level<'q>,
     operation: Operation,
-    identity: Option<Item<'q>>,
+    child: Option<&Node<'q>>,
 ) -> Vec<Item<'q>> {
     let query = level.query;
     let all = || query.targets.iter().map(|t| Item::of(&t.expr)).collect();
@@ -710,20 +714,18 @@ fn modify_targets<'q>(
                 })
                 .map(|(_, t)| Item::of(&t.expr))
                 .collect();
-            out.extend(identity);
-            out.push(Item::of(&tid.expr));
+            out.extend(identity(level, child, &tid.expr));
             out.extend(level.marks.iter().map(|m| item(m.clone())));
             out.extend(returning_carried(query, write));
             out
         }
         Operation::Delete => {
-            let mut out: Vec<Item<'q>> = identity.into_iter().collect();
-            out.push(Item::of(&tid.expr));
+            let mut out = identity(level, child, &tid.expr);
             out.extend(level.marks.iter().map(|m| item(m.clone())));
             out.extend(returning_carried(query, write));
             out
         }
-        Operation::Merge => merge_targets(level, identity).unwrap_or_else(all),
+        Operation::Merge => merge_targets(level, child).unwrap_or_else(all),
         _ => all(),
     }
 }
@@ -740,28 +742,34 @@ fn returning_carried<'q>(query: &'q Query, write: &Write) -> impl Iterator<Item 
         .map(|t| Item::of(&t.expr))
 }
 
-/// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. The list is [`rupg_analyze::Shown::targets`], in which a column of `old` or `new` and `merge_action()` show as PostgreSQL shows them. None for a list that reads the OID of a partition or a subquery.
+/// The list of `RETURNING` of a write, as the target list of its `ModifyTable`. A column of the row that the statement writes is a column of the target table, which is the relation 0 of the query or [`TARGET`] for an `INSERT`, and a carried value is the column of the other relation that the query carries. The list is [`rupg_analyze::Shown::targets`], in which a column of `old` or `new` and `merge_action()` show as PostgreSQL shows them. None for a list that reads a subquery.
 fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<Item<'q>>> {
     let query = level.query;
     let write = level.write?;
     let returning = write.returning.as_deref()?;
-    let partition = query.targets.iter().any(
-        |t| matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.attnum == TABLE_OID_ATTNUM),
-    );
-    if write.instead || partition {
+    if write.instead {
         return None;
     }
+    // The query of a write to a partitioned table or a table with children gives the OID of the table of each row before its `ctid`, and the row of `RETURNING` has it after the columns, or after the action of a `MERGE`.
+    let tree = query.targets.iter().any(
+        |t| matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.attnum == TABLE_OID_ATTNUM),
+    );
     let width = returning.relations.first()?.columns.len();
     let (base, carried): (usize, &[Target]) = match operation {
         Operation::Insert => (width, &[]),
         Operation::Update | Operation::Delete => {
-            (width, query.targets.get(width..query.targets.len().checked_sub(1)?)?)
+            let end = query.targets.len().checked_sub(1 + usize::from(tree))?;
+            (width + usize::from(tree), query.targets.get(width..end)?)
         }
         Operation::Merge => {
             let count = write.merge.as_ref()?.carried;
-            (3 * width + 1, &query.targets[query.targets.len().checked_sub(count)?..])
+            (
+                3 * width + 1 + usize::from(tree),
+                &query.targets[query.targets.len().checked_sub(count)?..],
+            )
         }
     };
+    let table_oid_at = tree.then_some(base);
     let relation = if operation == Operation::Insert { TARGET } else { 0 };
     let var = |attnum| Expr::new(ExprKind::Var(Var { relation, attnum, levels_up: 0 }), 0);
     let map = |attnum: i16| -> Option<Expr> {
@@ -772,6 +780,9 @@ fn returning_output<'q>(level: &Level<'q>, operation: Operation) -> Option<Vec<I
         let at = usize::try_from(attnum).ok()?;
         if (1..=width).contains(&at) {
             return Some(var(attnum));
+        }
+        if Some(at) == table_oid_at {
+            return Some(var(TABLE_OID_ATTNUM));
         }
         // The write puts the ID of the new version in its place, which `ctid` reads.
         if write.returning_tid.is_some() && write.returning_tid == at.checked_sub(1) {
@@ -831,7 +842,7 @@ fn map_row(expr: &mut Expr, map: &dyn Fn(i16) -> Option<Expr>) -> bool {
 }
 
 /// `preprocess_targetlist` for a `MERGE`: the ID of the version of the row of the target table, then the columns of the other relations that the condition and the row of each `WHEN` clause read, then the row marks, then the columns that only `RETURNING` reads. The columns of the target table do not come, as the executor reads them from the row of the table.
-fn merge_targets<'q>(level: &Level<'q>, identity: Option<Item<'q>>) -> Option<Vec<Item<'q>>> {
+fn merge_targets<'q>(level: &Level<'q>, child: Option<&Node<'q>>) -> Option<Vec<Item<'q>>> {
     let query = level.query;
     let merge = level.write?.merge.as_ref()?;
     let tid = query.targets.iter().find(|t| {
@@ -862,8 +873,7 @@ fn merge_targets<'q>(level: &Level<'q>, identity: Option<Item<'q>>) -> Option<Ve
             }
         }
     }
-    let mut out: Vec<Item<'q>> = identity.into_iter().collect();
-    out.push(Item::of(&tid.expr));
+    let mut out = identity(level, child, &tid.expr);
     out.extend(read.iter().map(|&at| Item::of(&carried[at].expr)));
     // `transform_MERGE_to_join`: with `NOT MATCHED BY SOURCE`, the executor tests the join condition and that the whole row of the source is not null, so the rows carry the columns of both.
     let by_source = merge.clauses.iter().any(|c| c.kind == MatchKind::NotMatchedBySource);
