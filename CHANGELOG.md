@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `RETURNING` of a write to a partitioned table or a table with children shows its columns in `EXPLAIN VERBOSE`, a write to a table with children of `INHERITS` whose condition is never true reads `NULL::oid, NULL::tid`, and the relation of a scan that such a condition removes counts its members for the names of `EXPLAIN`, as in PostgreSQL 19 (#1610)
 - `UPDATE`, `DELETE` and `MERGE` of a table with an inheritance tree or partitions carry `tableoid` before `ctid`, a table whose last child was dropped is still expanded until the next `ANALYZE`, and `relhassubclass` turns off the ten-page guess for a table that was never vacuumed, as in PostgreSQL 19 (#1609)
 - A `Tid Range Scan` has a parallel path (`Parallel Tid Range Scan` under `Gather`), and a table that was never vacuumed or analyzed has the rows of its pages from its `fillfactor`, as in PostgreSQL 19 (#1608)
 - The `bpchar` tests `x = c`, `x <> c`, `x IN (...)` and `x NOT IN (...)` on a column of codes, as `l_returnflag = 'R'` in TPC-H Q10 and `l_shipmode IN (...)` in Q12, are a set of the codes that pass, found in one read of the dictionary of the column. The scan then tests the code of each row and makes no vector of booleans. (#1607)
