@@ -71,6 +71,8 @@ pub enum Test {
     Ge(u64),
     /// `x IN (c, ...)`, with the keys in ascending order and no key two times.
     In(Vec<u64>),
+    /// `x IN (c, ...)` of integers that span few values: the keys as [`Test::In`] has them, the least value, and the bitmap of the values from the least value, which [`in_span`] tests. [`Test::int_in`] makes it.
+    Span(Vec<u64>, i64, Arc<[u64]>),
     /// `x IS NULL`.
     IsNull,
     /// `x IS NOT NULL`.
@@ -87,6 +89,44 @@ pub fn has_code(bits: &[u64], code: u64) -> bool {
         .ok()
         .and_then(|w| bits.get(w))
         .is_some_and(|w| w >> (code % 64) & 1 == 1)
+}
+
+/// The most values that a bitmap of [`Test::Span`] holds for each key, the most values that it holds for any keys, and the most values that it holds.
+const SPAN_PER_KEY: u64 = 64;
+const SPAN_FLOOR: u64 = 1 << 12;
+const SPAN_MOST: u64 = 1 << 24;
+
+/// True when the integer `value` is in the bitmap `bits` of the values from `least`. A value below `least` wraps to a large offset, which is out of the bitmap.
+#[must_use]
+#[inline]
+pub fn in_span(least: i64, bits: &[u64], value: i64) -> bool {
+    has_code(bits, value.wrapping_sub(least) as u64)
+}
+
+impl Test {
+    /// `x IN (c, ...)` of the keys `keys` of integers, in ascending order and with no key two times. When the keys span fewer than 64 values for each key, or fewer than 4096 values, the test is [`Test::Span`] with a bitmap, so that the test of a value reads one bit and does no binary search.
+    #[must_use]
+    pub fn int_in(keys: Vec<u64>) -> Test {
+        let (Some(&first), Some(&last)) = (keys.first(), keys.last()) else {
+            return Test::In(keys);
+        };
+        let least = key::int_of(first);
+        let Some(span) =
+            key::int_of(last).checked_sub(least).and_then(|span| u64::try_from(span).ok())
+        else {
+            return Test::In(keys);
+        };
+        let room = (keys.len() as u64).saturating_mul(SPAN_PER_KEY).clamp(SPAN_FLOOR, SPAN_MOST);
+        if span >= room {
+            return Test::In(keys);
+        }
+        let mut bits = vec![0u64; (span / 64 + 1) as usize];
+        for &k in &keys {
+            let at = key::int_of(k).wrapping_sub(least) as u64;
+            bits[(at / 64) as usize] |= 1 << (at % 64);
+        }
+        Test::Span(keys, least, Arc::from(bits))
+    }
 }
 
 impl Zone {
@@ -185,7 +225,7 @@ impl Zone {
             Test::Gt(c) => self.above(c, false),
             Test::Ge(c) => self.above(c, true),
             // A key out of the bounds of the zone is in no row of it. A zone with two values or more passes a key in its bounds as some rows, and a zone with one value has at most one key in its bounds, so the first key in the bounds gives the verdict.
-            Test::In(ref list) => {
+            Test::In(ref list) | Test::Span(ref list, ..) => {
                 let from = list.partition_point(|&c| c < lo);
                 match list.get(from) {
                     Some(&c) if c <= hi => self.test_values(&Test::Eq(c)),
@@ -239,6 +279,7 @@ mod tests {
             Test::Gt(c) => k > *c,
             Test::Ge(c) => k >= *c,
             Test::In(list) => list.contains(&k),
+            Test::Span(_, least, bits) => in_span(*least, bits, v),
             Test::Codes(bits) => has_code(bits, v as u64),
             Test::IsNull => false,
             Test::IsNotNull => true,
@@ -262,6 +303,8 @@ mod tests {
             Test::In(vec![key::int(1), key::int(3)]),
             Test::In(vec![key::int(2)]),
             Test::In(vec![key::int(-1), key::int(0), key::int(4)]),
+            Test::int_in(vec![key::int(0), key::int(2)]),
+            Test::int_in(vec![key::int(-1), key::int(0), key::int(4)]),
             Test::Codes(Arc::from([0b1010_u64])),
         ];
         for c in 0..=4 {
@@ -293,6 +336,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn keys_near_each_other_make_a_bitmap() {
+        let keys = |list: &[i64]| list.iter().map(|&x| key::int(x)).collect::<Vec<u64>>();
+        let Test::Span(_, least, bits) = Test::int_in(keys(&[-70, 3, 4000])) else {
+            panic!("keys in 4096 values make a bitmap");
+        };
+        assert_eq!(least, -70);
+        for v in -200..5000 {
+            assert_eq!(in_span(least, &bits, v), [-70, 3, 4000].contains(&v), "{v}");
+        }
+        assert!(!in_span(least, &bits, i64::MIN));
+        assert!(!in_span(least, &bits, i64::MAX));
+        assert!(matches!(Test::int_in(keys(&[0, 5000])), Test::In(_)));
+        assert!(matches!(Test::int_in(keys(&[i64::MIN, i64::MAX])), Test::In(_)));
+        assert!(matches!(Test::int_in(Vec::new()), Test::In(_)));
+        let many: Vec<i64> = (0..1000).map(|i| i * 60).collect();
+        assert!(matches!(Test::int_in(keys(&many)), Test::Span(..)));
+        let sparse: Vec<i64> = (0..1000).map(|i| i * 70).collect();
+        assert!(matches!(Test::int_in(keys(&sparse)), Test::In(_)));
     }
 
     #[test]
