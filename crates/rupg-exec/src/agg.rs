@@ -1614,6 +1614,49 @@ pub(crate) fn rows<'a>(
     none: &'a [usize],
     needed: usize,
 ) -> Result<Vec<Vec<Value>>> {
+    let calls = window::calls(query);
+    let inherited = eval.group.nulled.clone();
+    let (mut rows, kept) = run_groups(eval, query, tuples, none, needed, !calls.is_empty())?;
+    if !calls.is_empty() {
+        // The windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
+        let levels = super::set_levels(&query.targets);
+        let (firsts, mut groups): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
+        let input = window::Input { tuples: &firsts, groups: &groups };
+        let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
+        for i in sequence {
+            eval.tuple = firsts[i];
+            eval.group = std::mem::take(&mut groups[i]);
+            eval.windows = std::mem::take(&mut values[i]);
+            eval.project(&query.targets, &levels, &mut rows, usize::MAX)?;
+        }
+        eval.windows.clear();
+        eval.group = Group { nulled: inherited, ..Group::default() };
+    }
+    Ok(rows)
+}
+
+/// A group that `HAVING` keeps: its first row and its state.
+pub(crate) type Kept<'a> = (&'a [usize], Group);
+
+/// The groups that `HAVING` keeps, each with its first row and the results of its aggregate calls, in the order of [`rows`], for the targets that run above the sort.
+pub(crate) fn kept_groups<'a>(
+    eval: &mut Eval<'a>,
+    query: &'a Query,
+    tuples: &'a [Vec<usize>],
+    none: &'a [usize],
+) -> Result<Vec<Kept<'a>>> {
+    Ok(run_groups(eval, query, tuples, none, usize::MAX, true)?.1)
+}
+
+/// The aggregate calls and `HAVING` of each group, with the row of each group that `HAVING` keeps, or with `keep` the group itself, its first row and its state, for the targets that run later.
+fn run_groups<'a>(
+    eval: &mut Eval<'a>,
+    query: &'a Query,
+    tuples: &'a [Vec<usize>],
+    none: &'a [usize],
+    needed: usize,
+    keep: bool,
+) -> Result<(Vec<Vec<Value>>, Vec<Kept<'a>>)> {
     let outer = outer_calls(query);
     let lowered: Vec<Aggref> = outer
         .iter()
@@ -1646,7 +1689,6 @@ pub(crate) fn rows<'a>(
         })
         .collect::<Result<_>>()?;
     let levels = super::set_levels(&query.targets);
-    let calls = window::calls(query);
     // The targets of the items of each grouping set.
     let all_items: Vec<usize> = query.group.iter().map(|g| g.target).collect();
     let (sets, grouped) = if query.grouping_sets.is_empty() {
@@ -1679,7 +1721,6 @@ pub(crate) fn rows<'a>(
             (out, nulled)
         })
         .collect();
-    // With window function calls, the windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
     let mut kept: Vec<(&[usize], Group)> = Vec::new();
     let mut rows = Vec::new();
     for (s, group) in ordered {
@@ -1693,29 +1734,17 @@ pub(crate) fn rows<'a>(
             none,
             Group { aggs: Vec::new(), out: out.clone(), nulled: nulled.clone() },
             &levels,
-            !calls.is_empty(),
+            keep,
             &mut kept,
             &mut rows,
             needed,
         )?;
     }
-    if !calls.is_empty() {
-        let (firsts, mut groups): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
-        let input = window::Input { tuples: &firsts, groups: &groups };
-        let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
-        for i in sequence {
-            eval.tuple = firsts[i];
-            eval.group = std::mem::take(&mut groups[i]);
-            eval.windows = std::mem::take(&mut values[i]);
-            eval.project(&query.targets, &levels, &mut rows, usize::MAX)?;
-        }
-        eval.windows.clear();
-    }
     eval.group = Group { nulled: inherited, ..Group::default() };
-    Ok(rows)
+    Ok((rows, kept))
 }
 
-/// The aggregate calls of a group, then `HAVING` and the row of the group. With window function calls, the group goes to `kept` for the windows. `current` has the grouping set of the group.
+/// The aggregate calls of a group, then `HAVING` and the row of the group. With `windowed`, the group goes to `kept` for the window function calls or the targets above the sort. `current` has the grouping set of the group.
 #[allow(clippy::too_many_arguments)]
 fn rows_of_group<'a>(
     eval: &mut Eval<'a>,

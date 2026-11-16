@@ -1811,7 +1811,14 @@ fn run_query(
     let none = vec![scan::NONE; query.relations.len()];
     let late = late_targets(query);
     if !late.is_empty() {
-        let rows = postponed_rows(&mut eval, query, &tuples, &late, (offset, count), session)?;
+        let inputs = if query.grouped {
+            agg::kept_groups(&mut eval, query, &tuples, &none)?
+        } else {
+            tuples.iter().map(|t| (t.as_slice(), Group::default())).collect()
+        };
+        let grouped = query.grouped;
+        let rows =
+            postponed_rows(&mut eval, query, inputs, grouped, &late, (offset, count), session)?;
         let width = query.targets.iter().take_while(|t| !t.junk).count();
         return Ok(rows
             .into_iter()
@@ -1900,10 +1907,9 @@ fn run_query(
         .collect())
 }
 
-/// `make_sort_input_target`: for each target of a query with `ORDER BY` and no groups and no window, true when it runs above the sort and `DISTINCT`, or an empty list when none does. A target that is not a key of the sort or of `DISTINCT` and calls a volatile function or a function that gives a set runs above them, in a `Result` or a `ProjectSet`. A function that gives a set in a key keeps them all below the sort here, and so does `WITH TIES` with a function that gives a set.
+/// `make_sort_input_target`: for each target of a query with `ORDER BY` and no window, true when it runs above the sort and `DISTINCT`, or an empty list when none does. A target that is not a key of the sort, of `DISTINCT` or of `GROUP BY` and calls a volatile function or a function that gives a set runs above them, in a `Result` or a `ProjectSet`. A function that gives a set in a key keeps them all below the sort here, and so does `WITH TIES` with a function that gives a set.
 fn late_targets(query: &Query) -> Vec<bool> {
     if query.sort.is_empty()
-        || query.grouped
         || query.set_op.is_some()
         || query.write.is_some()
         || !window::calls(query).is_empty()
@@ -1918,7 +1924,8 @@ fn late_targets(query: &Query) -> Vec<bool> {
         .enumerate()
         .map(|(at, target)| {
             let set = target.expr.first_set_call().is_some();
-            if query.sort.iter().chain(&query.distinct).any(|s| s.target == at) {
+            if query.sort.iter().chain(&query.distinct).chain(&query.group).any(|s| s.target == at)
+            {
                 set_key |= set;
                 return false;
             }
@@ -1928,26 +1935,35 @@ fn late_targets(query: &Query) -> Vec<bool> {
     if set_key || !late.contains(&true) { Vec::new() } else { late }
 }
 
-/// The rows of a query whose targets in `late` run above the sort, as [`late_targets`] finds them. The sort reads the other targets, then the targets of the rows that `Limit` reads run in the order of the sort, also for the rows that `OFFSET` skips, as `Limit` reads them through the `Result` or the `ProjectSet` above the `Sort`.
+/// The rows of a query whose targets in `late` run above the sort, as [`late_targets`] finds them. The sort reads the other targets, then the targets of the rows that `Limit` reads run in the order of the sort, also for the rows that `OFFSET` skips, as `Limit` reads them through the `Result` or the `ProjectSet` above the `Sort`. Each input is a tuple, or with `grouped` the first tuple of a group that `HAVING` keeps and the state of the group.
 fn postponed_rows<'a>(
     eval: &mut Eval<'a>,
     query: &Query,
-    tuples: &'a [Vec<usize>],
+    mut inputs: Vec<(&'a [usize], Group)>,
+    grouped: bool,
     late: &[bool],
     (offset, count): (usize, Option<usize>),
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
-    // Each row of the sort has the number of its tuple last.
-    let mut rows = Vec::with_capacity(tuples.len());
-    for (n, tuple) in tuples.iter().enumerate() {
+    let inherited = eval.group.nulled.clone();
+    // Each row of the sort has the number of its input last.
+    let mut rows = Vec::with_capacity(inputs.len());
+    for (n, (tuple, group)) in inputs.iter_mut().enumerate() {
         interrupt(session, n)?;
         eval.tuple = tuple;
-        let mut row = query
+        if grouped {
+            std::mem::swap(&mut eval.group, group);
+        }
+        let row = query
             .targets
             .iter()
             .zip(late)
             .map(|(t, &l)| if l { Ok(Value::Null) } else { eval.eval(&t.expr) })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>();
+        if grouped {
+            std::mem::swap(&mut eval.group, group);
+        }
+        let mut row = row?;
         row.push(Value::Int8(i64::try_from(n).unwrap_or(i64::MAX)));
         rows.push(row);
     }
@@ -1973,11 +1989,15 @@ fn postponed_rows<'a>(
             break;
         }
         interrupt(session, n)?;
-        let tuple = match row.last() {
-            Some(Value::Int8(at)) => usize::try_from(*at).ok().and_then(|at| tuples.get(at)),
+        let input = match row.last() {
+            Some(Value::Int8(at)) => usize::try_from(*at).ok().and_then(|at| inputs.get_mut(at)),
             _ => None,
         };
-        eval.tuple = tuple.ok_or_else(|| Error::internal("a sorted row with no tuple"))?;
+        let (tuple, group) = input.ok_or_else(|| Error::internal("a sorted row with no tuple"))?;
+        eval.tuple = tuple;
+        if grouped {
+            eval.group = std::mem::take(group);
+        }
         let from = out.len();
         eval.project(&query.targets, &levels, &mut out, reads)?;
         // The targets below the sort keep the values that the sort read.
@@ -1986,6 +2006,9 @@ fn postponed_rows<'a>(
                 new[at] = row[at].clone();
             }
         }
+    }
+    if grouped {
+        eval.group = Group { nulled: inherited, ..Group::default() };
     }
     out.truncate(needed);
     out.drain(..offset.min(out.len()));

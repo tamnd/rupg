@@ -6760,6 +6760,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srf_levels.test")));
     }
 
+    /// `make_sort_input_target` with `GROUP BY`: a target that is not an item of `GROUP BY` or of the sort and calls a function that gives a set or a volatile function runs above the sort, for the groups in the order of the sort, also with `HAVING`, `OFFSET` and grouping sets. `connection/srf_grouped.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn srf_grouped() {
+        big_stack(|| script(include_str!("connection/srf_grouped.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
