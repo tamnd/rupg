@@ -385,6 +385,18 @@ pub(crate) fn set_width(relation: &Relation, attnum: i16, width: i32) {
 thread_local! {
     /// The place of each member of an inheritance tree in the list of the members of its relation, as `expand_inherited_rtentry` gives the members their range table entries.
     static MEMBER_PLACES: RefCell<BTreeMap<u32, usize>> = RefCell::default();
+    /// The ordinary tables with children of `INHERITS` that the planner expanded, the parents of their trees.
+    static INHERITANCE_PARENTS: RefCell<BTreeSet<u32>> = RefCell::default();
+}
+
+/// True when `oid` is an ordinary table whose tree the planner expanded, which [`set_inheritance_parent`] set.
+pub(crate) fn is_inheritance_parent(oid: u32) -> bool {
+    INHERITANCE_PARENTS.with(|p| p.borrow().contains(&oid))
+}
+
+/// Marks the ordinary table `oid` as the parent of a tree that the planner expanded.
+pub(crate) fn set_inheritance_parent(oid: u32) {
+    INHERITANCE_PARENTS.with(|p| p.borrow_mut().insert(oid));
 }
 
 /// The place of the member `oid` in the list of the members of its relation, which [`set_member_places`] set.
@@ -484,6 +496,8 @@ pub struct Member {
     pub size: Size,
     /// The column number in the table of each column of the parent, by name, or 0 for a dropped column of the parent.
     pub attnums: Vec<i16>,
+    /// The columns of the parent, by their numbers in the parent, that have a valid not-null constraint in the table.
+    pub not_null: Vec<i16>,
 }
 
 /// `predicate_implied_by`: true when the conditions `clauses`, which are all true, make each condition of `predicate` true, with the proofs of the partial indexes. `compare` compares the constants of the proofs.
@@ -513,10 +527,12 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved_classes = CLASSES.with(|c| c.replace(members.classes()));
     let saved_widths = WIDTHS.with(|w| w.take());
     let saved_places = MEMBER_PLACES.with(|m| m.take());
+    let saved_parents = INHERITANCE_PARENTS.with(|p| p.take());
     let saved_subplans = parallel::swap_subplans(BTreeSet::new());
     let plan = plan_with(query, members);
     parallel::swap_subplans(saved_subplans);
     MEMBER_PLACES.with(|m| m.replace(saved_places));
+    INHERITANCE_PARENTS.with(|p| p.replace(saved_parents));
     WIDTHS.with(|w| w.replace(saved_widths));
     CLASSES.with(|c| c.replace(saved_classes));
     PATTERN_MATCH.with(|c| c.set(saved_match));

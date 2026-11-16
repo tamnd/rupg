@@ -6820,6 +6820,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/dummy_target.test")));
     }
 
+    /// The not-null constraints of a table with children of `INHERITS` hold for the table only, so the planner tests `IS NULL` and `IS NOT NULL` on each member: a member with the constraint drops `IS NOT NULL` and has no row for `IS NULL`, as `apply_child_basequals` finds them. A constraint `NOT VALID` proves nothing. `connection/inherited_not_null.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn inherited_not_null() {
+        big_stack(|| script(include_str!("connection/inherited_not_null.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
