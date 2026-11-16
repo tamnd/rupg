@@ -384,7 +384,7 @@ fn steps<'q>(
         if costs.late {
             node = project_late(level, node, costs);
         }
-        if query.has_target_srfs() && !postponed(level).is_empty() {
+        if sets_above(level) && !postponed(level).is_empty() {
             node = project_set(level, node);
         }
     }
@@ -788,17 +788,104 @@ pub(crate) struct SrfSplit {
     pub(crate) bottom: Vec<Expr>,
 }
 
-/// `split_pathtarget_at_srfs` on the targets of the query. When [`postponed`] puts the functions after the sort, the other targets come from below the sort, as its `input_target`.
+/// `split_pathtarget_at_srfs` on the targets of the query. When [`postponed`] puts the functions after the sort, the other targets come from below the sort, as its `input_target`. The items of `GROUP BY` that call a function that gives a set come from the groups, as [`group_split`] computes them below.
 pub(crate) fn srf_split(level: &Level<'_>) -> SrfSplit {
+    top_split(level).unwrap_or(SrfSplit { levels: Vec::new(), extra: false, bottom: Vec::new() })
+}
+
+/// True when a `ProjectSet` above the groups computes a function of the targets that gives a set: one that is not in an item of `GROUP BY`.
+pub(crate) fn sets_above(level: &Level<'_>) -> bool {
+    level.query.has_target_srfs() && top_split(level).is_some()
+}
+
+/// [`srf_split`], or `None` when no function that gives a set is left to compute.
+fn top_split(level: &Level<'_>) -> Option<SrfSplit> {
     let query = level.query;
     let late = postponed(level);
-    let inputs: Vec<&Expr> = if late.is_empty() {
+    let mut inputs: Vec<&Expr> = if late.is_empty() {
         Vec::new()
     } else {
         query.targets.iter().zip(&late).filter(|(_, l)| !**l).map(|(t, _)| &t.expr).collect()
     };
+    inputs.extend(group_sets(query));
+    let targets: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    split_at_srfs(&targets, &inputs)
+}
+
+/// The items of `GROUP BY` that call a function that gives a set.
+fn group_sets(query: &Query) -> Vec<&Expr> {
+    if !query.grouped {
+        return Vec::new();
+    }
+    let mut out: Vec<&Expr> = Vec::new();
+    for item in &query.group {
+        let expr = &query.targets[item.target].expr;
+        if expr.first_set_call().is_some() && !out.iter().any(|o| o.same(expr)) {
+            out.push(expr);
+        }
+    }
+    out
+}
+
+/// `make_group_input_target`: the target of the node below the groups, the items of `GROUP BY`, then the columns of the other targets and of `HAVING`.
+fn group_input(query: &Query) -> Vec<Expr> {
+    let mut out: Vec<Expr> = Vec::new();
+    for item in &query.group {
+        let expr = &query.targets[item.target].expr;
+        if !out.iter().any(|e| e.same(expr)) {
+            out.push(expr.clone());
+        }
+    }
+    let mut columns = Vec::new();
+    for (at, target) in query.targets.iter().enumerate() {
+        if !query.group.iter().any(|g| g.target == at) {
+            exprs::columns_at(&target.expr, 0, &mut columns);
+        }
+    }
+    if let Some(having) = &query.having {
+        exprs::columns_at(having, 0, &mut columns);
+    }
+    for column in columns {
+        if !out.iter().any(|e| e.same(&column)) {
+            out.push(column);
+        }
+    }
+    out
+}
+
+/// `split_pathtarget_at_srfs` on the input of the groups, as [`group_input`] makes it, or `None` when no item of `GROUP BY` calls a function that gives a set. The `ProjectSet` nodes below the groups compute them.
+pub(crate) fn group_split(level: &Level<'_>) -> Option<SrfSplit> {
+    let query = level.query;
+    if group_sets(query).is_empty() {
+        return None;
+    }
+    let input = group_input(query);
+    split_at_srfs(&input.iter().collect::<Vec<_>>(), &[])
+}
+
+/// `adjust_paths_for_srfs` in `apply_scanjoin_target_to_paths`: the `ProjectSet` nodes below the groups that compute the functions of the items of `GROUP BY` that give a set, then a `Result` that computes the input of the groups when a function of the deepest level is in a larger expression.
+fn group_project_set<'q>(level: &Level<'q>, mut node: Node<'q>) -> Node<'q> {
+    let Some(split) = group_split(level) else { return node };
+    for target in &split.levels {
+        node = set_projection(level, node, &target.iter().collect::<Vec<_>>());
+    }
+    let input = group_input(level.query);
+    let input: Vec<&Expr> = input.iter().collect();
+    if !split.extra {
+        return set_projection(level, node, &input);
+    }
+    let c = node.cost;
+    let per_row = cost::qual_cost(input.iter().copied());
+    let mut out =
+        Node::new(Kind::Result { replaces: None, one_time: Vec::new() }, level.display, vec![node]);
+    out.cost = Cost { total: c.total + (cost::CPU_TUPLE + per_row) * c.rows, ..c };
+    out
+}
+
+/// `split_pathtarget_at_srfs`: the levels of the functions that give a set in `exprs`, whose node below computes `inputs`, or `None` when they call none.
+fn split_at_srfs(exprs: &[&Expr], inputs: &[&Expr]) -> Option<SrfSplit> {
     let mut walk = SrfWalk {
-        inputs: &inputs,
+        inputs,
         srfs: vec![Vec::new()],
         level_vars: vec![Vec::new()],
         level_srfs: vec![Vec::new()],
@@ -808,9 +895,9 @@ pub(crate) fn srf_split(level: &Level<'_>) -> SrfSplit {
     };
     let mut max = 0;
     let mut extra = false;
-    for target in &query.targets {
+    for &expr in exprs {
         walk.depth = 0;
-        walk.walk(&target.expr);
+        walk.walk(expr);
         if walk.depth == 0 {
             continue;
         }
@@ -818,12 +905,12 @@ pub(crate) fn srf_split(level: &Level<'_>) -> SrfSplit {
             max = walk.depth;
             extra = false;
         }
-        if max == walk.depth && !matches!(&target.expr.kind, ExprKind::Func(f) if f.retset) {
+        if max == walk.depth && !matches!(&expr.kind, ExprKind::Func(f) if f.retset) {
             extra = true;
         }
     }
     if max == 0 {
-        return SrfSplit { levels: Vec::new(), extra: false, bottom: Vec::new() };
+        return None;
     }
     let vars = std::mem::take(&mut walk.vars);
     let found = std::mem::take(&mut walk.found);
@@ -860,7 +947,7 @@ pub(crate) fn srf_split(level: &Level<'_>) -> SrfSplit {
         }
         previous = target;
     }
-    SrfSplit { levels, extra, bottom }
+    Some(SrfSplit { levels, extra, bottom })
 }
 
 /// The state of `split_pathtarget_walker`.
@@ -1332,6 +1419,9 @@ impl<'q> Builder<'q> {
         } else {
             project(&mut node, costs.scan.0, costs.scan.1);
         }
+        if query.grouped && query.set_op.is_none() && degenerate(query).is_none() {
+            node = group_project_set(level, node);
+        }
         if let Some((workers, mode)) = partial
             && !query.grouped
         {
@@ -1357,7 +1447,7 @@ impl<'q> Builder<'q> {
                 only &= query.grouping_sets.is_empty();
             }
             node = windows(level, node, &mut order, only, costs)?;
-            if query.has_target_srfs() && postponed(level).is_empty() {
+            if sets_above(level) && postponed(level).is_empty() {
                 node = project_set(level, node);
             }
         }
