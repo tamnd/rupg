@@ -3,7 +3,7 @@
 pub(crate) mod append;
 mod classes;
 mod index;
-pub(crate) use index::implied_by;
+pub(crate) use index::{implied_by, refuted_by};
 mod inherit;
 mod memoize;
 pub(crate) mod paths;

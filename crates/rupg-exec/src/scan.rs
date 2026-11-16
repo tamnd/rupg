@@ -537,7 +537,13 @@ pub fn members(
         if from.only {
             return Ok(Some(Vec::new()));
         }
-        return crate::partition::pruned_leaves(from.oid, index, conds, false, session).map(Some);
+        let leaves = crate::partition::pruned_leaves(from.oid, index, conds, false, session)?;
+        return Ok(Some(
+            leaves
+                .into_iter()
+                .filter(|&oid| !excluded_by_constraints(index, relation, oid, conds, session))
+                .collect(),
+        ));
     }
     if from.only || relation.kind != rupg_catalog::RelKind::Table {
         return Ok(None);
@@ -549,35 +555,73 @@ pub fn members(
     }
     let own = session.temp_number();
     let other = |&child: &u32| session.catalog().is_some_and(|c| c.is_other_temp(child, own));
-    // `restriction_is_always_false` in `apply_child_basequals`: a condition `IS NULL` of a column with a valid not-null constraint in a member is false for each row of the member, which the planner leaves out.
-    let null_tested: Vec<&str> = conds
-        .iter()
-        .filter_map(|cond| match &cond.kind {
-            ExprKind::NullTest(arg, true) => match arg.kind {
-                ExprKind::Var(var) if var.relation == index && var.levels_up == 0 => {
-                    let at = usize::try_from(var.attnum).ok()?.checked_sub(1)?;
-                    Some(relation.columns.get(at)?.name.as_str())
-                }
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect();
-    let excluded = |oid: &u32| {
-        let Some(member) = session.catalog().and_then(|c| c.relation(*oid)) else { return false };
-        null_tested.iter().any(|name| {
-            member
-                .columns
-                .iter()
-                .any(|c| !c.dropped && c.name == *name && c.not_null && !c.not_null_invalid)
-        })
-    };
     Ok(Some(
         std::iter::once(from.oid)
             .chain(children.into_iter().filter(|c| !other(c)))
-            .filter(|oid| !excluded(oid))
+            .filter(|&oid| !excluded_by_constraints(index, relation, oid, conds, session))
             .collect(),
     ))
+}
+
+/// `relation_excluded_by_constraints` for the member `member` of the relation `index` of the query, whose table is `parent`: true when the conditions `conds` of the relation make false the check constraints of the member and the not-null constraints of its columns, as `get_relation_constraints` gives them for a member, with the constraints `NO INHERIT`. `constraint_exclusion` at `partition` tests the members, and `off` none. A constraint that is not valid or not enforced, or that calls a function that is not immutable, proves nothing. The conditions name the columns of the parent, so a column of the member is the column of the parent with its name.
+fn excluded_by_constraints(
+    index: usize,
+    parent: &rupg_catalog::Relation,
+    member: u32,
+    conds: &[&Expr],
+    session: &dyn Session,
+) -> bool {
+    if conds.is_empty() || session.setting("constraint_exclusion").as_deref() == Some("off") {
+        return false;
+    }
+    let Some(catalog) = session.catalog() else { return false };
+    let Some(table) = catalog.relation(member) else { return false };
+    // A column of the member that the parent does not have is in no condition.
+    let column = |attnum: i16, levels_up: usize| {
+        let name = usize::try_from(attnum)
+            .ok()
+            .and_then(|at| table.columns.get(at.checked_sub(1)?))
+            .map(|c| c.name.as_str());
+        let at = parent.columns.iter().position(|p| !p.dropped && Some(p.name.as_str()) == name);
+        match at.and_then(|at| i16::try_from(at + 1).ok()) {
+            Some(attnum) => Var { relation: index, attnum, levels_up },
+            None => Var { relation: usize::MAX, attnum, levels_up },
+        }
+    };
+    let mut predicate = Vec::new();
+    let checks = catalog
+        .constraints_of(member)
+        .filter(|c| c.kind == rupg_catalog::ConKind::Check && c.validated && c.enforced);
+    for text in checks.filter_map(|c| c.expr.as_deref()) {
+        let Ok(mut expr) = rupg_analyze::node::read(text) else { continue };
+        expr.each_mut(0, &mut |e, depth| {
+            let ExprKind::Var(var) = e.kind else { return false };
+            if var.levels_up != depth {
+                return false;
+            }
+            if var.attnum == TABLE_OID_ATTNUM {
+                *e = Expr::constant(Value::Oid(member), oid::OID, -1, None);
+            } else if var.attnum > 0 {
+                e.kind = ExprKind::Var(column(var.attnum, depth));
+            }
+            true
+        });
+        if !crate::fold::mutable(&expr) {
+            predicate.push(expr);
+        }
+    }
+    for (at, c) in (1..).zip(&table.columns) {
+        if c.dropped || !c.not_null || c.not_null_invalid {
+            continue;
+        }
+        let mut var = Expr::new(ExprKind::Var(column(at, 0)), c.ty);
+        var.typmod = c.typmod;
+        predicate.push(Expr::new(ExprKind::NullTest(Box::new(var), false), oid::BOOL));
+    }
+    let clauses: Vec<Expr> = conds.iter().map(|&c| c.clone()).collect();
+    rupg_opt::predicate_refuted(&predicate, &clauses, false, |left, a, right, b| {
+        rupg_func::compare(left, a, right, b).ok()
+    })
 }
 
 /// The value of a condition of `WHERE` for a tuple of rows of some [`Tables`].

@@ -516,6 +516,26 @@ pub fn predicate_implied(predicate: &[Expr], clauses: &[Expr], compare: Compare)
     proved
 }
 
+/// `predicate_refuted_by`: true when the conditions `clauses`, which are all true, make the conditions `predicate` false, or with `weak` false or null, as `relation_excluded_by_constraints` refutes the check constraints of a table. `compare` compares the constants of the proofs.
+pub fn predicate_refuted(
+    predicate: &[Expr],
+    clauses: &[Expr],
+    weak: bool,
+    compare: Compare,
+) -> bool {
+    let all = |list: &[Expr]| match list {
+        [one] => one.clone(),
+        _ => Expr::new(ExprKind::Bool(BoolOp::And, list.to_vec()), oid::BOOL),
+    };
+    if predicate.is_empty() || clauses.is_empty() {
+        return false;
+    }
+    let saved = COMPARE.with(|c| c.replace(compare));
+    let refuted = from::refuted_by(&all(clauses), &all(predicate), weak);
+    COMPARE.with(|c| c.set(saved));
+    refuted
+}
+
 /// The plan of a query, with the members of the relations that `members` gives.
 pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let saved = ENABLE.with(|e| e.replace(members.enable()));

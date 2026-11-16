@@ -1,4 +1,4 @@
-//! `predicate_implied_by_simple_clause` of `predtest.c`: the proofs that a condition that is not an `AND` or an `OR` makes a part of the predicate of a partial index true. The proofs read the operators of the B-tree operator families, as `operator_predicate_proof` reads them.
+//! `predicate_implied_by_simple_clause` and `predicate_refuted_by_simple_clause` of `predtest.c`: the proofs that a condition that is not an `AND` or an `OR` makes a part of the predicate of a partial index true, or a check constraint false. The proofs read the operators of the B-tree operator families, as `operator_predicate_proof` reads them.
 
 use std::cmp::Ordering;
 
@@ -35,6 +35,26 @@ const IMPLIC: [[i16; 6]; 6] = [
     [0, 0, 0, 0, 0, 3],
 ];
 
+/// `RC_refutes_table`: true when `x clause_op y` makes `x pred_op y` false, by the strategies of the operators from 1 to 6, the clause first.
+const REFUTES: [[bool; 6]; 6] = [
+    [false, false, true, true, true, false],
+    [false, false, false, false, true, false],
+    [true, false, false, false, true, true],
+    [true, false, false, false, false, false],
+    [true, true, true, false, false, false],
+    [false, false, true, false, false, false],
+];
+
+/// `RC_refute_table`: the strategy of the test `const2 test_op const1` that proves `x pred_op const2` false from `x clause_op const1`, or 0 when no test can, by the strategies of the operators, the clause first.
+const REFUTE: [[i16; 6]; 6] = [
+    [0, 0, 4, 4, 4, 0],
+    [0, 0, 5, 5, 4, 0],
+    [2, 1, 6, 5, 4, 3],
+    [2, 1, 1, 0, 0, 0],
+    [2, 2, 2, 0, 0, 0],
+    [0, 0, 3, 0, 0, 0],
+];
+
 /// `predicate_implied_by_simple_clause` with strong implication: true when the condition `clause` makes `pred` true. A condition proves itself, `x = true` proves `x` and `x = false` proves `NOT x`. A strict condition of `x` proves `x IS NOT NULL`. Two operators of a B-tree family on the same expressions, or on the same expression and two constants, give the proofs of `operator_predicate_proof`.
 pub(super) fn implied(pred: &Expr, clause: &Expr) -> bool {
     if pred.same(clause) {
@@ -59,7 +79,37 @@ pub(super) fn implied(pred: &Expr, clause: &Expr) -> bool {
     {
         return true;
     }
-    operator_proof(pred, clause)
+    operator_proof(pred, clause, false, false)
+}
+
+/// `predicate_refuted_by_simple_clause`: true when the condition `clause` makes `pred` false, or with `weak` false or null. `x IS NULL` refutes `x IS NOT NULL`, and with `weak` a condition that is strict for `x`. `x IS NOT NULL` and a condition strict for `x` refute `x IS NULL`. Two operators of a B-tree family give the proofs of `operator_predicate_proof`.
+pub(super) fn refuted(pred: &Expr, clause: &Expr, weak: bool) -> bool {
+    let simple = |arg: &Expr| !matches!(arg.kind, ExprKind::Row(..));
+    if let ExprKind::NullTest(arg, true) = &clause.kind {
+        if !simple(arg) {
+            return false;
+        }
+        if let ExprKind::NullTest(pred_arg, false) = &pred.kind
+            && simple(pred_arg)
+            && pred_arg.same(arg)
+        {
+            return true;
+        }
+        return weak && strict_for(pred, arg);
+    }
+    if let ExprKind::NullTest(pred_arg, is_null) = &pred.kind {
+        if !simple(pred_arg) || !is_null {
+            return false;
+        }
+        if let ExprKind::NullTest(arg, false) = &clause.kind
+            && simple(arg)
+            && arg.same(pred_arg)
+        {
+            return true;
+        }
+        return strict_for(clause, pred_arg);
+    }
+    operator_proof(pred, clause, true, weak)
 }
 
 /// The operator and the two arguments of a call of an infix operator. A call in a collation of ICU is not one, because the proofs know the order of the bytes.
@@ -92,8 +142,8 @@ fn strict_for(clause: &Expr, sub: &Expr) -> bool {
     }
 }
 
-/// `operator_predicate_proof` for implication: both conditions are calls of infix operators with one argument the same. With the other arguments also the same, the operators prove it by their strategies. With constants as the other arguments, the test operator of the strategies compares the constants, with the constants on the right of the operators.
-fn operator_proof(pred: &Expr, clause: &Expr) -> bool {
+/// `operator_predicate_proof`: both conditions are calls of infix operators with one argument the same. With the other arguments also the same, the operators prove it by their strategies. With constants as the other arguments, the test operator of the strategies compares the constants, with the constants on the right of the operators. `refute` asks for a proof that `pred` is false, and `weak` for a weak proof.
+fn operator_proof(pred: &Expr, clause: &Expr, refute: bool, weak: bool) -> bool {
     let (Some((mut pred_op, [pl, pr])), Some((mut clause_op, [cl, cr]))) =
         (operator(pred), operator(clause))
     else {
@@ -102,7 +152,7 @@ fn operator_proof(pred: &Expr, clause: &Expr) -> bool {
     let commute = |op: u32| builtin::operator_by_oid(op).map_or(0, |o| o.commutator);
     let (pred_const, clause_const) = if pl.same(cl) {
         if pr.same(cr) {
-            return same_operands(pred_op, clause_op);
+            return same_operands(pred_op, clause_op, refute);
         }
         (pr, cr)
     } else if pr.same(cr) {
@@ -111,7 +161,7 @@ fn operator_proof(pred: &Expr, clause: &Expr) -> bool {
         (pl, cl)
     } else if pl.same(cr) {
         if pr.same(cl) {
-            return same_operands(commute(pred_op), clause_op);
+            return same_operands(commute(pred_op), clause_op, refute);
         }
         clause_op = commute(clause_op);
         (pr, cl)
@@ -134,14 +184,17 @@ fn operator_proof(pred: &Expr, clause: &Expr) -> bool {
             .and_then(|o| builtin::proc_by_oid(o.code))
             .is_some_and(|p| p.strict)
     };
-    // A strict clause of a null is null, and a false condition implies any predicate.
+    // A strict clause of a null is null, and a condition that is not true proves anything but a weak implication, which a predicate that is also null proves.
     if matches!(clause_value, Value::Null) {
-        return strict(clause_op);
+        if !strict(clause_op) {
+            return false;
+        }
+        return !(weak && !refute) || matches!(pred_value, Value::Null) && strict(pred_op);
     }
     if matches!(pred_value, Value::Null) {
-        return false;
+        return weak && strict(pred_op);
     }
-    let Some(test) = test_strategy(pred_op, clause_op) else { return false };
+    let Some(test) = test_strategy(pred_op, clause_op, refute) else { return false };
     let Some(order) = crate::compare(pred_const.ty, pred_value, clause_const.ty, clause_value)
     else {
         return false;
@@ -183,23 +236,27 @@ fn immutable(op: u32) -> bool {
         .is_some_and(|p| p.volatile == b'i')
 }
 
-/// `operator_same_subexprs_proof`: true when `x clause_op y` implies `x pred_op y`, because the operators are the same or by their strategies in a B-tree family.
-fn same_operands(pred_op: u32, clause_op: u32) -> bool {
+/// `operator_same_subexprs_proof`: true when `x clause_op y` implies `x pred_op y`, or with `refute` makes it false, because the operators are the same, or each the negator of the other, or by their strategies in a B-tree family.
+fn same_operands(pred_op: u32, clause_op: u32, refute: bool) -> bool {
     if pred_op == 0 {
         return false;
     }
-    if pred_op == clause_op {
+    let negator = || builtin::operator_by_oid(pred_op).map_or(0, |o| o.negator);
+    let same = if refute { negator() == clause_op } else { pred_op == clause_op };
+    if same {
         return true;
     }
+    let table = if refute { &REFUTES } else { &IMPLIES };
     let clauses = interpretations(clause_op);
     immutable(clause_op)
         && interpretations(pred_op).iter().any(|p| {
-            clauses.iter().any(|c| c.0 == p.0 && IMPLIES[(c.3 - 1) as usize][(p.3 - 1) as usize])
+            clauses.iter().any(|c| c.0 == p.0 && table[(c.3 - 1) as usize][(p.3 - 1) as usize])
         })
 }
 
-/// `get_btree_test_op` for implication: the strategy of the immutable operator of a B-tree family of both operators that compares the constant of the predicate with the constant of the clause. The family must be the default family of its types, as [`crate::compare`] compares the values with the default order of their types.
-fn test_strategy(pred_op: u32, clause_op: u32) -> Option<i16> {
+/// `get_btree_test_op`: the strategy of the immutable operator of a B-tree family of both operators that compares the constant of the predicate with the constant of the clause. The family must be the default family of its types, as [`crate::compare`] compares the values with the default order of their types.
+fn test_strategy(pred_op: u32, clause_op: u32, refute: bool) -> Option<i16> {
+    let table = if refute { &REFUTE } else { &IMPLIC };
     let clauses = interpretations(clause_op);
     let default = |family: u32| {
         builtin::opclasses().iter().any(|c| c.method == BTREE_AM && c.family == family && c.default)
@@ -209,7 +266,7 @@ fn test_strategy(pred_op: u32, clause_op: u32) -> Option<i16> {
             if f != family || !default(family) {
                 return None;
             }
-            let test = IMPLIC[(clause_strategy - 1) as usize][(pred_strategy - 1) as usize];
+            let test = table[(clause_strategy - 1) as usize][(pred_strategy - 1) as usize];
             let op = match test {
                 0 => return None,
                 NE => builtin::opfamily_member(family, pred_right, clause_right, EQ)
