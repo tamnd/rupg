@@ -103,7 +103,7 @@ pub(super) fn grouped(
         Want::All,
     )?;
     let tables = scan::kept_tables(query, firsts, kept);
-    let levels = crate::set_levels(&query.targets);
+    let levels = crate::set_levels(query);
     let tuples: Vec<[usize; 1]> = (0..groups.len()).map(|g| [g]).collect();
     let mut out = Vec::new();
     let mut eval = Eval::new(exec.params, exec.session, &tables, exec.cache, &[]);

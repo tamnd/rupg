@@ -6766,6 +6766,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srf_grouped.test")));
     }
 
+    /// A function that gives a set in an item of `GROUP BY` runs in a `ProjectSet` below the `Agg`, so each of its rows goes to a group: the targets read the value of the group, also inside a larger expression, with the grouping sets of `CUBE`, and below another function that gives a set. `connection/srf_group_by.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn srf_group_by() {
+        big_stack(|| script(include_str!("connection/srf_group_by.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

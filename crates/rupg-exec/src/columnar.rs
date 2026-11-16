@@ -3861,7 +3861,7 @@ fn project(
     offset: usize,
     count: Option<usize>,
 ) -> Result<(Vec<Vec<Value>>, bool)> {
-    let levels = crate::set_levels(&query.targets);
+    let levels = crate::set_levels(query);
     let mut eval = Eval::new(params, session, tables, cache, &[]);
     let mut out = Vec::new();
     match groups {
@@ -4128,7 +4128,7 @@ fn having_first(query: &Query) -> bool {
     }
     query.having.as_ref().is_some_and(of_aggs)
         && !query.group.is_empty()
-        && crate::set_levels(&query.targets).is_empty()
+        && crate::set_levels(query).is_empty()
         && query.targets.iter().all(|target| safe(&target.expr, query))
 }
 
@@ -4184,7 +4184,7 @@ fn top_key(
     count: Option<usize>,
 ) -> Option<(*const Aggref, bool, usize)> {
     let count = count?;
-    if !crate::set_levels(&query.targets).is_empty()
+    if !crate::set_levels(query).is_empty()
         || !query.distinct.is_empty()
         || query.having.is_some()
         || !top_safe(query)
@@ -4211,7 +4211,7 @@ fn key_top(
     count: Option<usize>,
 ) -> Option<(usize, bool, sort::Radix, usize)> {
     let count = count?;
-    if !crate::set_levels(&query.targets).is_empty()
+    if !crate::set_levels(query).is_empty()
         || !query.distinct.is_empty()
         || query.having.is_some()
         || !top_safe(query)
@@ -4246,7 +4246,7 @@ fn first_groups(query: &Query, offset: usize, count: Option<usize>) -> Option<us
     (query.sort.is_empty()
         && query.distinct.is_empty()
         && query.having.is_none()
-        && crate::set_levels(&query.targets).is_empty())
+        && crate::set_levels(query).is_empty())
     .then(|| offset.checked_add(count?))
     .flatten()
 }
