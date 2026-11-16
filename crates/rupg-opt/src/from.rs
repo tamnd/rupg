@@ -28,7 +28,7 @@ use rupg_plan::{
     Cost, Item, Kind, Node, Replaced, STATISTIC_KIND_HISTOGRAM, STATISTIC_KIND_MCV, SortKey, Split,
     Statistic, Strategy,
 };
-use rupg_types::{Value, oid};
+use rupg_types::{Numeric, NumericSign, Value, oid};
 
 use crate::{Builder, Index, Level, Link, Size, cost, exprs, parallel, pullup, setop, upper};
 pub(crate) use classes::{equality, families};
@@ -2216,24 +2216,14 @@ fn number(expr: &Expr) -> Option<f64> {
     }
 }
 
-/// The number of rows of a function in `FROM`: the rows of `generate_series` with constant integers, as its support function gives them, or else `prorows`.
+/// The number of rows of a function in `FROM`: the rows of `generate_series` with constant arguments, as its support function gives them, or else `prorows`.
 pub(crate) fn function_rows(call: &Expr) -> f64 {
     let ExprKind::Func(f) = &call.kind else { return 1.0 };
     let name = builtin::proc_by_oid(f.oid).map(|p| p.name);
-    if name == Some("generate_series") {
-        let ints: Option<Vec<f64>> = f
-            .args
-            .iter()
-            .map(|a| matches!(a.ty, oid::INT4 | oid::INT8).then(|| number(a)).flatten())
-            .collect();
-        if let Some(ints) = ints {
-            let step = ints.get(2).copied().unwrap_or(1.0);
-            if let [start, stop, ..] = ints[..]
-                && step != 0.0
-            {
-                return ((stop - start) / step).floor().max(-1.0) + 1.0;
-            }
-        }
+    if name == Some("generate_series")
+        && let Some(rows) = series_rows(&f.args)
+    {
+        return rows;
     }
     // `array_unnest_support`: the number of the elements of the array, as `estimate_array_length`.
     if name == Some("unnest")
@@ -2253,6 +2243,71 @@ pub(crate) fn function_rows(call: &Expr) -> f64 {
         ) => 100.0,
         Some("regexp_matches") => 10.0,
         _ => 1000.0,
+    }
+}
+
+/// `generate_series_int4_support`, `generate_series_int8_support`, `generate_series_numeric_support` and `generate_series_timestamp_support`: no rows when the start, the end or the step is a null constant, and the number of rows of the series when they are constants. A zero step, a numeric that is not finite and a timestamp that is not finite give no estimate.
+fn series_rows(args: &[Expr]) -> Option<f64> {
+    let consts: Vec<Option<&Value>> =
+        args.iter().take(3).map(|a| a.strip_implicit().as_const()).collect();
+    if consts.iter().any(|c| matches!(c, Some(Value::Null))) {
+        return Some(0.0);
+    }
+    let consts: Vec<&Value> = consts.into_iter().collect::<Option<_>>()?;
+    let int = |v: &Value| match v {
+        Value::Int4(v) => Some(f64::from(*v)),
+        Value::Int8(v) => Some(*v as f64),
+        _ => None,
+    };
+    match consts.as_slice() {
+        [Value::Numeric(start), Value::Numeric(stop), rest @ ..] => {
+            let step = match rest.first() {
+                Some(Value::Numeric(step)) => Some(step),
+                Some(_) => return None,
+                None => None,
+            };
+            let finite =
+                |n: &Numeric| matches!(n.sign(), NumericSign::Positive | NumericSign::Negative);
+            if !finite(start) || !finite(stop) || step.is_some_and(|s| !finite(s)) {
+                return None;
+            }
+            // A zero has the sign `NUMERIC_POS`, as for `cmp_var` and the signs of `NumericVar`.
+            let negative = |n: &Numeric| {
+                n.sign() == NumericSign::Negative && n.digits().iter().any(|&d| d != 0)
+            };
+            let diff = stop.sub(start).ok()?;
+            let quotient = match step {
+                Some(step) if step.digits().iter().all(|&d| d == 0) => return None,
+                Some(step) if negative(step) != negative(&diff) => return Some(0.0),
+                Some(step) => diff.div_trunc(step).ok()?,
+                None if negative(&diff) => return Some(0.0),
+                None => diff.trunc(0).ok()?,
+            };
+            Some(quotient.to_f64() + 1.0)
+        }
+        [
+            Value::Timestamp(start) | Value::TimestampTz(start),
+            Value::Timestamp(finish) | Value::TimestampTz(finish),
+            Value::Interval(step),
+        ] => {
+            let finite = |t: i64| t != i64::MIN && t != i64::MAX;
+            if !finite(*start) || !finite(*finish) {
+                return None;
+            }
+            let diff = finish.checked_sub(*start)? as f64;
+            let step = (f64::from(step.month) * 30.0 + f64::from(step.day)) * 86_400_000_000.0
+                + step.time as f64;
+            (step != 0.0).then(|| (diff / step + 1.0).floor())
+        }
+        [start, stop, rest @ ..] => {
+            let (start, stop) = (int(start)?, int(stop)?);
+            let step = match rest.first() {
+                Some(step) => int(step)?,
+                None => 1.0,
+            };
+            (step != 0.0).then(|| ((stop - start + step) / step).floor())
+        }
+        _ => None,
     }
 }
 

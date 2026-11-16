@@ -1,0 +1,93 @@
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-03-01', INTERVAL '1 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.30 rows=30 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMP '2024-02-01', TIMESTAMP '2024-03-01', INTERVAL '7 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.05 rows=5 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-03-01', INTERVAL '1 day', 'UTC') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.30 rows=30 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMPTZ '2024-03-01', TIMESTAMPTZ '2024-02-01', INTERVAL '-1 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.30 rows=30 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMPTZ '2024-03-01', TIMESTAMPTZ '2024-02-01', INTERVAL '1 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMPTZ '-infinity', TIMESTAMPTZ 'infinity', INTERVAL '1 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(TIMESTAMP '2024-02-01', TIMESTAMP '2024-03-01', INTERVAL '1 month 36 hours') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1.0, 25.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.25 rows=25 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1.0, 25.0, 2.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.13 rows=13 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(25.0, 1.0, -1.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.25 rows=25 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(25.0, 1.0, 1.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(25.0, 25.0, -1.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(0.0, 0.3, 0.1) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.04 rows=4 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1.5, 3.2) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.02 rows=2 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series('-infinity'::NUMERIC, 'infinity'::NUMERIC, 1.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1.0, 25.0, 'NaN'::NUMERIC) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(25.0, 2.0, 0.0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, NULL::int) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1.0, 5.0, NULL) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(NULL::timestamp, '2024-01-01', '1 day') g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 10, 0) g(s)
+fields QUERY PLAN:25:-1:-1
+row Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=4)
+EXPLAIN
+> EXPLAIN SELECT generate_series(1.0, 4.0) AS s
+fields QUERY PLAN:25:-1:-1
+row ProjectSet  (cost=0.00..0.04 rows=4 width=32)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=0)
+EXPLAIN
+> SELECT count(*) FROM generate_series(0.0, 0.3, 0.1)
+fields count:20:8:-1
+row 4
+SELECT 1
