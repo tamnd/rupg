@@ -1,0 +1,92 @@
+> SET enable_seqscan TO off
+SET
+> BEGIN
+BEGIN
+> SET LOCAL parallel_setup_cost TO 0
+SET
+> SET LOCAL parallel_tuple_cost TO 0
+SET
+> SET LOCAL min_parallel_table_scan_size TO 0
+SET
+> SET LOCAL max_parallel_workers_per_gather TO 4
+SET
+> CREATE TABLE parallel_tidrangescan (id integer, data text) WITH (fillfactor = 10)
+CREATE TABLE
+> INSERT INTO parallel_tidrangescan SELECT i, repeat('x', 100) FROM generate_series(1,200) AS s(i)
+INSERT 0 200
+> SELECT min(ctid), max(ctid) FROM parallel_tidrangescan
+fields min:27:6:-1,max:27:6:-1
+row (0,1),(39,5)
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM parallel_tidrangescan WHERE ctid < '(30,1)'
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Tid Range Scan on parallel_tidrangescan
+row                     TID Cond: (ctid < '(30,1)'::tid)
+EXPLAIN
+> SELECT count(*) FROM parallel_tidrangescan WHERE ctid < '(30,1)'
+fields count:20:8:-1
+row 150
+SELECT 1
+> EXPLAIN SELECT count(*) FROM parallel_tidrangescan WHERE ctid > '(10,0)'
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=34.14..34.15 rows=1 width=8)
+row   ->  Gather  (cost=34.12..34.13 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=34.12..34.13 rows=1 width=8)
+row               ->  Parallel Tid Range Scan on parallel_tidrangescan  (cost=0.00..33.90 rows=90 width=0)
+row                     TID Cond: (ctid > '(10,0)'::tid)
+EXPLAIN
+> SELECT count(*) FROM parallel_tidrangescan WHERE ctid > '(10,0)'
+fields count:20:8:-1
+row 150
+SELECT 1
+> EXPLAIN SELECT count(*) FROM parallel_tidrangescan WHERE ctid > '(10,0)' AND ctid < '(30,1)'
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate  (cost=24.79..24.80 rows=1 width=8)
+row   ->  Gather  (cost=24.77..24.78 rows=4 width=8)
+row         Workers Planned: 4
+row         ->  Partial Aggregate  (cost=24.77..24.78 rows=1 width=8)
+row               ->  Parallel Tid Range Scan on parallel_tidrangescan  (cost=0.01..24.61 rows=61 width=0)
+row                     TID Cond: ((ctid > '(10,0)'::tid) AND (ctid < '(30,1)'::tid))
+EXPLAIN
+> SELECT count(*) FROM parallel_tidrangescan WHERE ctid > '(10,0)' AND ctid < '(30,1)'
+fields count:20:8:-1
+row 100
+SELECT 1
+> EXPLAIN (COSTS OFF) SELECT t.ctid,t2.c FROM parallel_tidrangescan t, LATERAL (SELECT count(*) c FROM parallel_tidrangescan t2 WHERE t2.ctid <= t.ctid) t2 WHERE t.ctid < '(1,0)'
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Parallel Tid Range Scan on parallel_tidrangescan t
+row               TID Cond: (ctid < '(1,0)'::tid)
+row   ->  Aggregate
+row         ->  Tid Range Scan on parallel_tidrangescan t2
+row               TID Cond: (ctid <= t.ctid)
+EXPLAIN
+> SELECT t.ctid,t2.c FROM parallel_tidrangescan t, LATERAL (SELECT count(*) c FROM parallel_tidrangescan t2 WHERE t2.ctid <= t.ctid) t2 WHERE t.ctid < '(1,0)'
+fields ctid@parallel_tidrangescan.-1:27:6:-1,c:20:8:-1
+row (0,1),1
+row (0,2),2
+row (0,3),3
+row (0,4),4
+row (0,5),5
+SELECT 5
+> SET LOCAL enable_tidscan TO off
+SET
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM parallel_tidrangescan WHERE ctid < '(30,1)'
+fields QUERY PLAN:25:-1:-1
+row Finalize Aggregate
+row   ->  Gather
+row         Workers Planned: 4
+row         ->  Partial Aggregate
+row               ->  Parallel Seq Scan on parallel_tidrangescan
+row                     Disabled: true
+row                     Filter: (ctid < '(30,1)'::tid)
+EXPLAIN
+> ROLLBACK
+ROLLBACK

@@ -117,12 +117,33 @@ pub(super) fn paths<'q>(
     if !enabled {
         return (out, false);
     }
-    let in_range = |q: &&Expr| binary_tid(q, r).is_some_and(|op| TID_RANGE.contains(&op));
-    let range: Vec<&Expr> = quals.iter().copied().filter(in_range).collect();
+    let range = range_quals(&quals, r);
     if !range.is_empty() {
-        out.push(range_scan(level, table, &range, stats));
+        out.push(range_scan(level, table, &range, stats, None));
     }
     (out, false)
+}
+
+/// `TidRangeQualFromRestrictInfoList`: the conditions of the table `r` that compare `ctid` with `<`, `<=`, `>` or `>=`.
+fn range_quals<'e>(quals: &[&'e Expr], r: usize) -> Vec<&'e Expr> {
+    let in_range = |q: &&Expr| binary_tid(q, r).is_some_and(|op| TID_RANGE.contains(&op));
+    quals.iter().copied().filter(in_range).collect()
+}
+
+/// The partial path of `create_tidscan_paths`: a `Parallel Tid Range Scan` of the conditions of the range, whose processes share the pages of the range, with the divisor `divisor` of the workers and the costs `targets` of the targets for each row. `enable_tidscan` off or no condition of a range make no scan.
+pub(super) fn partial_range<'q>(
+    level: &Level<'q>,
+    table: &Table<'_, 'q>,
+    stats: &Stats,
+    divisor: f64,
+    targets: (f64, f64),
+) -> Option<Rel<'q>> {
+    if !crate::enable().tidscan {
+        return None;
+    }
+    let quals: Vec<&Expr> = table.quals.iter().map(|q| &*q.expr).collect();
+    let range = range_quals(&quals, table.r);
+    (!range.is_empty()).then(|| range_scan(level, table, &range, stats, Some((divisor, targets))))
 }
 
 /// The scans of the table for the conditions `ctid = value` of the joins, as `BuildParameterizedTidPaths`: first the conditions that the equivalence classes make for `ctid` with the members of other relations, but not of the relations of `prohibited`, then the conditions of the joins in `joins`. Each scan reads the rows of one condition, and the values of the relations of the condition.
@@ -196,12 +217,13 @@ fn tid_scan<'q>(
     scan(level, table, kind, filter, (startup, startup + run), stats)
 }
 
-/// `cost_tidrangescan` and `create_tidrangescan_plan`: the `Tid Range Scan` of the table with the conditions of the range. The pages of the range cost a random page and then sequential pages, and its rows cost a row each. The conditions of the range cost once, and the other conditions, which are the filter, cost for each row.
+/// `cost_tidrangescan` and `create_tidrangescan_plan`: the `Tid Range Scan` of the table with the conditions of the range. The pages of the range cost a random page and then sequential pages, and its rows cost a row each. The conditions of the range cost once, and the other conditions, which are the filter, cost for each row. A parallel scan has the divisor of its workers and the costs of the targets in `parallel`: the work of the processor and the rows are the share of one process.
 fn range_scan<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
     range: &[&Expr],
     stats: &Stats,
+    parallel: Option<(f64, (f64, f64))>,
 ) -> Rel<'q> {
     let selectivity = cost::list_selectivity_by(range.iter().copied(), table.eq);
     let pages = (selectivity * table.pages).ceil();
@@ -217,7 +239,15 @@ fn range_scan<'q>(
     stats.sort_quals(&mut filter);
     let cond = range.iter().map(|e| item((*e).clone())).collect();
     let kind = Kind::TidScan { relation: table.r, range: true, cond };
-    scan(level, table, kind, filter, (startup, startup + cpu + disk), stats)
+    let Some((divisor, targets)) = parallel else {
+        return scan(level, table, kind, filter, (startup, startup + cpu + disk), stats);
+    };
+    let startup = startup + targets.0;
+    let cpu = (cpu + targets.1 * table.rows) / divisor;
+    let mut rel = scan(level, table, kind, filter, (startup, startup + cpu + disk), stats);
+    rel.node.parallel = true;
+    rel.node.cost.rows = cost::clamp_rows(table.rows / divisor);
+    rel
 }
 
 /// A condition of a scan as an expression of the node.
