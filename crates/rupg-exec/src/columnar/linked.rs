@@ -19,8 +19,8 @@ use rupg_func::Session;
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxMap, FxSet, Link as Ran, Selected, Source, decode, having_once,
-    kind_of, numeric_kind, once, plain, unsupported,
+    Decoded, DecodedData, FxSet, Link as Ran, Selected, Source, decode, having_once, kind_of,
+    numeric_kind, once, plain, unsupported,
 };
 use crate::{Cache, reduce, scan, sort};
 
@@ -520,12 +520,12 @@ fn left_join(
     if let Some(index) = Index::of(&key(null)) {
         let probe = key(kept);
         pos[kept] = (0..selected[kept].places.len() as u32).collect();
-        pos[null] = (0..selected[kept].places.len()).map(|row| index.find(&probe, row)).collect();
+        pos[null] = index.find_all(&probe, &pos[kept]);
     } else if let Some(index) = Index::of(&key(kept)) {
         let probe = key(null);
         let mut matched = vec![false; selected[kept].places.len()];
-        for row in 0..selected[null].places.len() {
-            let found = index.find(&probe, row);
+        let rows: Vec<u32> = (0..selected[null].places.len() as u32).collect();
+        for (row, found) in index.find_all(&probe, &rows).into_iter().enumerate() {
             if found != NONE {
                 matched[found as usize] = true;
                 pos[kept].push(found);
@@ -789,8 +789,91 @@ enum Index {
         min: i64,
         rows: Vec<u32>,
     },
-    One(FxMap<i64, u32>),
-    Two(FxMap<(i64, i64), u32>),
+    One(Flat<1>),
+    Two(Flat<2>),
+}
+
+/// The number of rows that [`Index::find_all`] looks up in one step. It first finds the slot of each row of the step and starts the read of the slot, and then it reads the slots, so the misses of the cache overlap.
+const STEP: usize = 32;
+
+/// The largest array of [`Index::Dense`] that [`Index::find_all`] reads with no prefetch, as an array of this size stays in the cache of level 2.
+const SMALL: usize = 1 << 16;
+
+/// A hash table of the keys of `W` integers with the row of each key, with open addressing and linear probing. A slot has the key and the row together, so a lookup reads one line of the cache in most cases. The table has at least twice as many slots as keys. A slot with the row [`NONE`] has no key.
+struct Flat<const W: usize> {
+    /// 64 less the number of the bits of the place of a slot, which come from the high bits of the hash.
+    shift: u32,
+    slots: Vec<([i64; W], u32)>,
+}
+
+impl<const W: usize> Flat<W> {
+    /// An empty table with room for `count` keys.
+    fn with(count: usize) -> Self {
+        let size = count.saturating_mul(2).max(16).next_power_of_two();
+        Flat { shift: 64 - size.trailing_zeros(), slots: vec![([0; W], NONE); size] }
+    }
+
+    /// The first slot to read for `key`. The hash multiplies by the golden ratio, and the high bits of the product give the place, as in Fibonacci hashing.
+    #[inline]
+    fn place(&self, key: &[i64; W]) -> usize {
+        let mut hash = 0_u64;
+        for &k in key {
+            hash = (hash.rotate_left(32) ^ k.cast_unsigned()).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+        usize::try_from(hash >> self.shift).unwrap_or(0)
+    }
+
+    /// Puts `row` in for `key`. False when the table has the key already.
+    fn insert(&mut self, key: [i64; W], row: u32) -> bool {
+        let mask = self.slots.len() - 1;
+        let mut at = self.place(&key);
+        loop {
+            let slot = &mut self.slots[at];
+            if slot.1 == NONE {
+                *slot = (key, row);
+                return true;
+            }
+            if slot.0 == key {
+                return false;
+            }
+            at = (at + 1) & mask;
+        }
+    }
+
+    /// The row of `key`, or [`NONE`], from the slot `at` that [`Flat::place`] gives.
+    #[inline]
+    fn get_at(&self, key: &[i64; W], mut at: usize) -> u32 {
+        let mask = self.slots.len() - 1;
+        loop {
+            let (k, row) = &self.slots[at];
+            if *row == NONE || k == key {
+                return *row;
+            }
+            at = (at + 1) & mask;
+        }
+    }
+
+    /// The row of the key of each row of `rows`, or [`NONE`], with `key` to get the key of a row. The table finds the slots of [`STEP`] rows and starts their reads before it compares a key.
+    fn find_all(&self, rows: &[u32], key: impl Fn(usize) -> Option<[i64; W]>, out: &mut Vec<u32>) {
+        let mut at = [usize::MAX; STEP];
+        for step in rows.chunks(STEP) {
+            let mut keys = [[0; W]; STEP];
+            for (i, &row) in step.iter().enumerate() {
+                at[i] = match key(row as usize) {
+                    Some(k) => {
+                        let place = self.place(&k);
+                        rupg_kernels::hash::prefetch(&self.slots[place]);
+                        keys[i] = k;
+                        place
+                    }
+                    None => usize::MAX,
+                };
+            }
+            for (&place, k) in at[..step.len()].iter().zip(&keys) {
+                out.push(if place == usize::MAX { NONE } else { self.get_at(k, place) });
+            }
+        }
+    }
 }
 
 impl Index {
@@ -825,46 +908,68 @@ impl Index {
                     }
                     return Some(Index::Dense { min, rows });
                 }
-                let mut map = FxMap::default();
-                map.reserve(count);
+                let mut flat = Flat::with(count);
                 for (row, k) in one.iter().enumerate() {
                     let Some(k) = k else { continue };
-                    if map.insert(*k, u32::try_from(row).ok()?).is_some() {
+                    if !flat.insert([*k], u32::try_from(row).ok()?) {
                         return None;
                     }
                 }
-                Some(Index::One(map))
+                Some(Index::One(flat))
             }
             [a, b] => {
-                let mut map = FxMap::default();
-                map.reserve(a.len());
+                let mut flat = Flat::with(a.len());
                 for (row, (x, y)) in a.iter().zip(b.iter()).enumerate() {
                     let (Some(x), Some(y)) = (x, y) else { continue };
-                    if map.insert((*x, *y), u32::try_from(row).ok()?).is_some() {
+                    if !flat.insert([*x, *y], u32::try_from(row).ok()?) {
                         return None;
                     }
                 }
-                Some(Index::Two(map))
+                Some(Index::Two(flat))
             }
             _ => None,
         }
     }
 
     /// The row whose key is the key of the row `row` of `keys`, or [`NONE`].
-    #[inline]
+    #[cfg(test)]
     fn find(&self, keys: &[&[Option<i64>]], row: usize) -> u32 {
+        #[allow(clippy::cast_possible_truncation)]
+        self.find_all(keys, &[row as u32])[0]
+    }
+
+    /// [`Index::find`] for each row of `rows`, in order. The kind of the index is matched once for all the rows.
+    fn find_all(&self, keys: &[&[Option<i64>]], rows: &[u32]) -> Vec<u32> {
+        let mut out = Vec::with_capacity(rows.len());
         match (self, keys) {
-            (Index::Dense { min, rows }, [one]) => one[row]
-                .and_then(|k| usize::try_from(k.checked_sub(*min)?).ok())
-                .and_then(|at| rows.get(at).copied())
-                .unwrap_or(NONE),
-            (Index::One(map), [one]) => one[row].and_then(|k| map.get(&k).copied()).unwrap_or(NONE),
-            (Index::Two(map), [a, b]) => match (a[row], b[row]) {
-                (Some(x), Some(y)) => map.get(&(x, y)).copied().unwrap_or(NONE),
-                _ => NONE,
-            },
-            _ => NONE,
+            (Index::Dense { min, rows: slots }, [one]) => {
+                let slot = |row: u32| {
+                    one[row as usize]
+                        .and_then(|k| usize::try_from(k.checked_sub(*min)?).ok())
+                        .filter(|&at| at < slots.len())
+                };
+                if slots.len() <= SMALL {
+                    out.extend(rows.iter().map(|&row| slot(row).map_or(NONE, |at| slots[at])));
+                } else {
+                    let mut at = [usize::MAX; STEP];
+                    for step in rows.chunks(STEP) {
+                        for (i, &row) in step.iter().enumerate() {
+                            at[i] = slot(row).unwrap_or(usize::MAX);
+                            if let Some(s) = slots.get(at[i]) {
+                                rupg_kernels::hash::prefetch(s);
+                            }
+                        }
+                        out.extend(
+                            at[..step.len()].iter().map(|&a| slots.get(a).copied().unwrap_or(NONE)),
+                        );
+                    }
+                }
+            }
+            (Index::One(flat), [one]) => flat.find_all(rows, |r| one[r].map(|k| [k]), &mut out),
+            (Index::Two(flat), [a, b]) => flat.find_all(rows, |r| Some([a[r]?, b[r]?]), &mut out),
+            _ => out.resize(rows.len(), NONE),
         }
+        out
     }
 }
 
@@ -970,8 +1075,7 @@ impl Tree {
                 .iter()
                 .map(|&k| selected[link.parent].keys[k].as_slice())
                 .collect();
-            let mut found: Vec<u32> =
-                pos[link.parent].iter().map(|&p| link.index.find(&keys, p as usize)).collect();
+            let mut found = link.index.find_all(&keys, &pos[link.parent]);
             if found.contains(&NONE) {
                 for (table, places) in pos.iter_mut().enumerate() {
                     if have[table] {
@@ -1092,5 +1196,24 @@ mod tests {
         let index = Index::of(&[&a, &b]).unwrap();
         assert_eq!(index.find(&[&[Some(1)], &[Some(3)]], 0), 1);
         assert!(Index::of(&[&[Some(1), Some(1)], &[Some(2), Some(2)]]).is_none());
+    }
+
+    #[test]
+    fn a_batch_of_lookups_gives_the_row_of_each_key() {
+        let keys: Vec<Option<i64>> = (0..1000).map(|k| (k % 7 != 0).then_some(k << 33)).collect();
+        let index = Index::of(&[&keys]).unwrap();
+        assert!(matches!(index, Index::One(_)));
+        let probe: Vec<Option<i64>> = (0..1100).rev().map(|k| Some(k << 33)).collect();
+        let rows: Vec<u32> = (0..1100).collect();
+        let found = index.find_all(&[&probe], &rows);
+        for (row, &got) in found.iter().enumerate() {
+            let k = 1099 - row;
+            let want = if k < 1000 && k % 7 != 0 { k as u32 } else { NONE };
+            assert_eq!(got, want);
+        }
+        let (a, b): (Vec<_>, Vec<_>) = (0..500).map(|k| (Some(k / 10), Some(k % 10))).unzip();
+        let index = Index::of(&[&a, &b]).unwrap();
+        let found = index.find_all(&[&b, &a], &[3, 0, 499]);
+        assert_eq!(found, vec![30, 0, NONE]);
     }
 }
