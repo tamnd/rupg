@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A scan condition that compares two integer columns, as `l_commitdate < l_receiptdate` in TPC-H Q4, Q12 and Q21, keeps the rows that pass on the decoded values of the two columns, with no copy of the values and no vector of booleans. (#1592)
 - The join of the vectors looks up the keys of a join in steps of 32 rows. It finds the slots of the rows of a step and starts their reads before it compares a key, so the misses of the cache overlap. A key of one or two integers that does not get an array goes in a flat hash table with open addressing. (#1591)
 - With `DISTINCT ON`, a target that is not a key of `DISTINCT ON` or of `ORDER BY` and gives a set or calls a volatile function runs above the `Unique`, as `make_sort_input_target` postpones it: `SELECT DISTINCT ON (a) a, b, generate_series(1, 3)` gives the rows of the function for each row it keeps, and `nextval` runs only for the rows that `LIMIT` reads. (#1590)
 - `EXPLAIN` shows the `ProjectSet` of a function that gives a set above the sort when no key of the sort gives a set, as `make_sort_input_target` postpones it, and a scan right below a `ProjectSet` gives all the columns of its table, as `create_project_set_plan` asks for no target list. (#1589)
