@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- An operator whose function returns a set is a set-returning call: `ProjectSet` computes it in the targets, and in WHERE, CASE, JOIN conditions and the other places where such a call is not allowed it gives the errors of PostgreSQL (#1603)
 - A subquery in FROM whose result is empty is empty for the query above also when it has set-returning functions in its targets, and EXPLAIN keeps its name (#1602)
 - EXPLAIN shows the set-returning functions of `GROUP BY` items in `ProjectSet` nodes below the aggregate, as PostgreSQL plans them, and a `Values Scan` of a query with grouping sets gives only the columns it reads (#1601)
 - A dictionary chunk of integers decodes its codes into the vector of the values, with one check of all the codes first, so the loop has no branch and no push for each value. A negative code is now an error as a code past the end of the dictionary. (#1600)

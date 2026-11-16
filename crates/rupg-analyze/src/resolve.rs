@@ -1305,15 +1305,11 @@ impl Analyzer<'_> {
         let result = poly::resolve(&inputs, &mut declared, op.result)?;
         self.check_internal(&declared, result, at)?;
         let args = self.make_arguments(args, &declared)?;
-        if builtin::proc_by_oid(op.code).is_some_and(|p| p.retset) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!(
-                    "set-returning operator {} is not supported yet",
-                    op_signature(&name, op.left, op.right)
-                ),
-            )
-            .at_opt(at));
+        // `make_op`: an operator whose function gives a set is a call of a function that gives a set, in the parts of the query where one can be.
+        let retset = builtin::proc_by_oid(op.code).is_some_and(|p| p.retset);
+        if retset {
+            self.check_srf_placement(&op_signature(&name, op.left, op.right), at)?;
+            self.srfs = (self.srfs.0 + 1, at);
         }
         self.funcs.push(op.code);
         let collation = self.call_collation(op.code, &args);
@@ -1324,7 +1320,7 @@ impl Analyzer<'_> {
                 args,
                 form: FuncForm::Operator(op.oid),
                 variadic: false,
-                retset: false,
+                retset,
                 collation,
             }),
             ty: result,

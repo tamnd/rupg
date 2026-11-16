@@ -1190,9 +1190,10 @@ impl<'a> Writer<'a> {
     /// `OpExpr` and the nodes of the same form.
     fn op(&mut self, node: &str, opno: u32, func: u32, e: &Expr, args: &[Expr]) -> Option<()> {
         let (collation, input) = (self.collation(e), self.input_collation(args));
+        let retset = matches!(&e.kind, ExprKind::Func(f) if f.retset);
         let _ = write!(
             self.out,
-            "{{{node} :opno {opno} :opfuncid {func} :opresulttype {} :opretset false :opcollid {collation} :inputcollid {input} :args ",
+            "{{{node} :opno {opno} :opfuncid {func} :opresulttype {} :opretset {retset} :opcollid {collation} :inputcollid {input} :args ",
             e.ty
         );
         self.exprs(args)?;
