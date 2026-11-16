@@ -1320,6 +1320,16 @@ impl<'q> Builder<'q> {
             add_targets(&mut rel.node);
             partials.push((rel, workers));
         }
+        // `create_tidscan_paths`: a parallel `Tid Range Scan` after the partial index scans, with the workers of the pages of the table.
+        if let Some(option) = parallel {
+            let workers = parallel::workers(&enable, pages, option);
+            if workers > 0 {
+                let divisor = parallel::divisor(&enable, workers);
+                if let Some(rel) = tid::partial_range(level, &table, stats, divisor, targets) {
+                    partials.push((rel, workers));
+                }
+            }
+        }
         let gathered = self.gather_paths(stats, r, &partials, seq.node.cost.rows);
         if scans.is_empty() && tids.is_empty() && gathered.is_empty() {
             return vec![seq];

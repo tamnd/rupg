@@ -212,14 +212,23 @@ impl rupg_opt::Members for Members<'_, '_> {
                 relpages: pages,
                 reltuples: f64::from(tuples),
                 relallvisible: pages,
+                fillfactor: 100,
             };
         }
         let size = self.heap.size(self.database, table);
+        // `RelationGetFillFactor`: the option of the table, which `CREATE TABLE` and `ALTER TABLE SET` keep in their text.
+        let fillfactor = self.reader.catalog().and_then(|catalog| {
+            catalog.relation(table)?.options.iter().find_map(|text| {
+                let (name, value) = text.split_once('=')?;
+                (name == "fillfactor").then(|| value.parse().ok()).flatten()
+            })
+        });
         Size {
             blocks: f64::from(size.blocks),
             relpages: f64::from(size.relpages),
             reltuples: f64::from(size.reltuples),
             relallvisible: f64::from(size.relallvisible),
+            fillfactor: fillfactor.unwrap_or(100),
         }
     }
 

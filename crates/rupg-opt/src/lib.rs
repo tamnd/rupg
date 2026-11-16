@@ -160,11 +160,13 @@ pub struct Size {
     pub reltuples: f64,
     /// `relallvisible` of `pg_class`: the pages that the visibility map marks all visible.
     pub relallvisible: f64,
+    /// `RelationGetFillFactor`: the option `fillfactor` of the table, 100 by default.
+    pub fillfactor: i32,
 }
 
 impl Default for Size {
     fn default() -> Size {
-        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0, relallvisible: 0.0 }
+        Size { blocks: 0.0, relpages: 0.0, reltuples: -1.0, relallvisible: 0.0, fillfactor: 100 }
     }
 }
 

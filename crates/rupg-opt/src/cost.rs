@@ -144,7 +144,7 @@ pub(crate) fn member_size(member: &Member) -> (f64, f64) {
     estimate_size(width, member.size, member.has_children)
 }
 
-/// `table_block_relation_estimate_size`: the pages of the heap, or ten pages for a table that has fewer and was never vacuumed or analyzed, and the rows from the density of `relpages` and `reltuples`, or from the width of a row when there is none.
+/// `table_block_relation_estimate_size`: the pages of the heap, or ten pages for a table that has fewer and was never vacuumed or analyzed, and the rows from the density of `relpages` and `reltuples`, or from the width of a row and the fill factor when there is none, with at least one row on a page.
 fn estimate_size(width: i32, size: Size, has_children: bool) -> (f64, f64) {
     let mut pages = size.blocks;
     if pages < DEFAULT_PAGES && size.reltuples < 0.0 && !has_children {
@@ -156,7 +156,9 @@ fn estimate_size(width: i32, size: Size, has_children: bool) -> (f64, f64) {
     let density = if size.reltuples >= 0.0 && size.relpages > 0.0 {
         size.reltuples / size.relpages
     } else {
-        f64::from((PAGE_SPACE / (width + TUPLE_OVERHEAD)).max(1))
+        // The division of integers, as in `table_block_relation_estimate_size`.
+        let usable = PAGE_SPACE * size.fillfactor / 100;
+        clamp_rows(f64::from(usable / (width + TUPLE_OVERHEAD)))
     };
     (pages, (density * pages).round_ties_even())
 }
