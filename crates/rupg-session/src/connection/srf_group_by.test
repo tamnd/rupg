@@ -75,3 +75,58 @@ row b,3,2
 row b,10,1
 row b,10,2
 SELECT 10
+> EXPLAIN (COSTS OFF) SELECT dataa, count(*) FROM srfgb_t WHERE dataa = 'a' GROUP BY dataa, unnest('{1,1,3}'::int[]) ORDER BY 2
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: (count(*))
+row   ->  HashAggregate
+row         Group Key: unnest('{1,1,3}'::integer[])
+row         ->  ProjectSet
+row               ->  Seq Scan on srfgb_t
+row                     Filter: (dataa = 'a'::text)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT generate_series(1, 2) + 1 AS h, count(*) FROM srfgb_t GROUP BY generate_series(1, 2)
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: ((generate_series(1, 2)) + 1), count(*), (generate_series(1, 2))
+row   Group Key: generate_series(1, 2)
+row   ->  ProjectSet
+row         Output: generate_series(1, 2)
+row         ->  Seq Scan on public.srfgb_t
+row               Output: id, dataa, datab
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT generate_series(1, a) AS g FROM (VALUES (1, 1), (2, 2)) AS t (a, b) GROUP BY ROLLUP (g) ORDER BY 1
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Output: (generate_series(1, "*VALUES*".column1))
+row   Sort Key: (generate_series(1, "*VALUES*".column1))
+row   ->  MixedAggregate
+row         Output: (generate_series(1, "*VALUES*".column1))
+row         Hash Key: generate_series(1, "*VALUES*".column1)
+row         Group Key: ()
+row         ->  ProjectSet
+row               Output: generate_series(1, "*VALUES*".column1)
+row               ->  Values Scan on "*VALUES*"
+row                     Output: "*VALUES*".column1
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT generate_series(1, a) AS g FROM (VALUES (1, 1), (2, 2)) AS t (a, b) GROUP BY g
+fields QUERY PLAN:25:-1:-1
+row HashAggregate
+row   Output: (generate_series(1, "*VALUES*".column1))
+row   Group Key: generate_series(1, "*VALUES*".column1)
+row   ->  ProjectSet
+row         Output: generate_series(1, "*VALUES*".column1)
+row         ->  Values Scan on "*VALUES*"
+row               Output: "*VALUES*".column1, "*VALUES*".column2
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT generate_series(1, id) AS g FROM srfgb_t GROUP BY ROLLUP (g)
+fields QUERY PLAN:25:-1:-1
+row MixedAggregate
+row   Output: (generate_series(1, id))
+row   Hash Key: generate_series(1, srfgb_t.id)
+row   Group Key: ()
+row   ->  ProjectSet
+row         Output: generate_series(1, id)
+row         ->  Seq Scan on public.srfgb_t
+row               Output: id, dataa, datab
+EXPLAIN

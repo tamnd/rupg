@@ -172,6 +172,34 @@ pub(crate) fn sort_input<'q>(level: &Level<'q>) -> Vec<Item<'q>> {
     out
 }
 
+/// True when the node scans a relation, so a `ProjectSet` above it asks it for the columns that it reads, as `create_project_set_plan` asks its input for no target list.
+fn scan_node(node: &Node<'_>) -> bool {
+    matches!(
+        node.kind,
+        Kind::SeqScan(_)
+            | Kind::IndexScan { .. }
+            | Kind::TidScan { .. }
+            | Kind::BitmapHeapScan { .. }
+            | Kind::SampleScan(_)
+            | Kind::FunctionScan(_)
+            | Kind::TableFunctionScan(_)
+            | Kind::ValuesScan(_)
+            | Kind::SubqueryScan(_)
+            | Kind::CteScan(_)
+            | Kind::WorkTableScan(_)
+    )
+}
+
+/// True when the node is below the groups of the query level, whose items of `GROUP BY` call a function that gives a set: no `Agg` of the level is in its subtree.
+fn below_groups(level: &Level<'_>, node: &Node<'_>) -> bool {
+    fn has_groups(level: &Level<'_>, node: &Node<'_>) -> bool {
+        (node.scope == level.scope || node.scope == level.display)
+            && (matches!(node.kind, Kind::Aggregate { .. })
+                || node.children.iter().any(|c| has_groups(level, c)))
+    }
+    level.query.grouped && !has_groups(level, node) && upper::group_split(level).is_some()
+}
+
 /// The number of `ProjectSet` nodes right below the node, one above another.
 fn project_sets_below(node: &Node<'_>) -> usize {
     match node.children.first() {
@@ -237,6 +265,48 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 _ => 0,
             };
         }
+        // `adjust_paths_for_srfs` in `apply_scanjoin_target_to_paths`: below the groups, each `ProjectSet` computes its level of the functions of the items of `GROUP BY` that give a set from the level below it, and a `Result` above them computes the input of the groups. The lowest reads the columns of a scan below it, or the target of the first level.
+        Kind::ProjectSet | Kind::Result { replaces: None, .. }
+            if below_groups(level, node)
+                && (matches!(node.kind, Kind::ProjectSet) || project_sets_below(node) > 0) =>
+        {
+            let Some(split) = upper::group_split(level) else { return };
+            let place = project_sets_below(node);
+            let result = matches!(node.kind, Kind::Result { .. });
+            let scan = node.children.first().is_some_and(scan_node);
+            let below: Vec<Item<'q>> = if result {
+                split
+                    .levels
+                    .last()
+                    .map(|t| t.iter().map(|e| item(e.clone())).collect())
+                    .unwrap_or_default()
+            } else if place > 0 {
+                split
+                    .levels
+                    .get(place - 1)
+                    .map(|t| t.iter().map(|e| item(e.clone())).collect())
+                    .unwrap_or_default()
+            } else if scan {
+                let mut below = Vec::new();
+                for w in &want {
+                    add_columns(&w.expr, 0, &mut below);
+                }
+                below
+            } else {
+                split.bottom.iter().map(|e| item(e.clone())).collect()
+            };
+            node.cost.width = width(level, node.scope, &want);
+            node.output = if result || (place == 0 && scan) {
+                want
+            } else {
+                want.iter()
+                    .map(|w| if w.expr.first_set_call().is_some() { w.clone() } else { w.passed() })
+                    .collect()
+            };
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, place == 0 && !result);
+            }
+        }
         // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
         Kind::Result { replaces: None, one_time }
             if one_time.is_empty()
@@ -271,7 +341,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         // `split_pathtarget_at_srfs` with `need_extra_projection`: the `Result` above the `ProjectSet` nodes computes the targets from the functions of the last level.
         Kind::Result { replaces: None, one_time }
             if one_time.is_empty()
-                && level.query.has_target_srfs()
+                && upper::sets_above(level)
                 && matches!(node.children.first(), Some(c) if matches!(c.kind, Kind::ProjectSet)) =>
         {
             let below: Vec<Item<'q>> = upper::srf_split(level)
@@ -449,22 +519,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         }
         // `split_pathtarget_at_srfs`: the lowest `ProjectSet` computes the functions of its level and reads the target of the first level from below. A scan of a relation below it gives the columns of the targets, as `create_project_set_plan` asks its input for no target list, and the node computes what a projection below it would compute. Above the sort of `make_sort_input_target`, it computes the targets that come after the sort and reads the others, and a `Result` between them gives the target of the first level when the sort gives another list.
         Kind::ProjectSet => {
-            let scan = node.children.first().is_some_and(|c| {
-                matches!(
-                    c.kind,
-                    Kind::SeqScan(_)
-                        | Kind::IndexScan { .. }
-                        | Kind::TidScan { .. }
-                        | Kind::BitmapHeapScan { .. }
-                        | Kind::SampleScan(_)
-                        | Kind::FunctionScan(_)
-                        | Kind::TableFunctionScan(_)
-                        | Kind::ValuesScan(_)
-                        | Kind::SubqueryScan(_)
-                        | Kind::CteScan(_)
-                        | Kind::WorkTableScan(_)
-                )
-            });
+            let scan = node.children.first().is_some_and(scan_node);
             let split = upper::srf_split(level);
             let late = upper::postponed(level);
             let single = split.levels.is_empty() && !split.extra;
@@ -600,7 +655,11 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             let plain =
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
-            let physical = physical && node.member.is_none();
+            // `pull_up_simple_subquery` wraps the columns of `VALUES` in `FROM` in `PlaceHolderVar`s when the query has grouping sets, and `use_physical_tlist` gives no physical target list to a relation that computes a `PlaceHolderVar` that a node above reads.
+            let wrapped = matches!(node.kind, Kind::ValuesScan(_))
+                && !level.query.grouping_sets.is_empty()
+                && !want.is_empty();
+            let physical = physical && node.member.is_none() && !wrapped;
             // `create_scan_plan`: the physical target list of an index only scan is the columns of the index.
             let full = physical && plain;
             node.output = match &node.kind {

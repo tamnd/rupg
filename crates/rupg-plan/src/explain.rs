@@ -504,6 +504,8 @@ impl Explainer<'_, '_> {
             // The calls of a window below are columns of the input of a `WindowAgg`, and the values that a `ProjectSet` below computes are columns of the input of a `ProjectSet` or a `Result` above it, as `split_pathtarget_at_srfs` levels them.
             let own = if matches!(node.kind, Kind::WindowAgg { .. }) || set_level(node) {
                 (computed(node), deeper(node))
+            } else if groups_of_sets(node) {
+                (computed(node), Vec::new())
             } else {
                 (Vec::new(), Vec::new())
             };
@@ -1531,6 +1533,20 @@ fn set_level(node: &Node<'_>) -> bool {
     matches!(node.kind, Kind::ProjectSet)
         || matches!(node.kind, Kind::Result { .. })
             && node.children.first().is_some_and(|c| matches!(c.kind, Kind::ProjectSet))
+}
+
+/// True when the node is the `Agg` above the [`set_level`] nodes that compute the items of `GROUP BY` that call a function that gives a set, with a sort between them or not. A target that contains an item reads it from below, so the item shows in parentheses.
+fn groups_of_sets(node: &Node<'_>) -> bool {
+    if !matches!(node.kind, Kind::Aggregate { .. }) {
+        return false;
+    }
+    let mut below = node.children.first();
+    while let Some(child) = below
+        && matches!(child.kind, Kind::Sort(_) | Kind::IncrementalSort { .. })
+    {
+        below = child.children.first();
+    }
+    below.is_some_and(set_level)
 }
 
 /// The values below the node that computes `expr`, with the [`deeper`] lists of that node, when a node above passes `expr` up from a [`set_level`] node, so that the text of `expr` has the parentheses of that node.
