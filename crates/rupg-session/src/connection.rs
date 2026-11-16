@@ -6778,6 +6778,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/srf_dummy.test")));
     }
 
+    /// An operator whose function gives a set is a call of a function that gives a set: a `ProjectSet` computes it in the targets, and the parts of the query where such a call cannot be give their errors. `connection/srf_operator.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn srf_operator() {
+        big_stack(|| script(include_str!("connection/srf_operator.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

@@ -1,0 +1,44 @@
+!details
+> CREATE OPERATOR |@| (PROCEDURE = unnest, RIGHTARG = anyarray)
+CREATE OPERATOR
+> SELECT |@|ARRAY[1,2,3]
+fields ?column?:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT |@| ARRAY[1,2] AS u, 10
+fields u:23:4:-1,?column?:23:4:-1
+row 1,10
+row 2,10
+SELECT 2
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT |@| ARRAY[1,2,3]
+fields QUERY PLAN:25:-1:-1
+row ProjectSet
+row   Output: (|@| '{1,2,3}'::integer[])
+row   ->  Result
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT (|@| ARRAY[1,2]) + 1 AS v
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Output: (((|@| '{1,2}'::integer[])) + 1)
+row   ->  ProjectSet
+row         Output: (|@| '{1,2}'::integer[])
+row         ->  Result
+EXPLAIN
+> SELECT (|@| ARRAY[1,2]) + 1 AS v
+fields v:23:4:-1
+row 2
+row 3
+SELECT 2
+> SELECT 1 WHERE (|@| ARRAY[1,2]) = 1
+ERROR 0A000 set-returning functions are not allowed in WHERE at 17
+> SELECT CASE WHEN true THEN |@| ARRAY[1,2] END
+ERROR 0A000 set-returning functions are not allowed in CASE at 28
+HINT You might be able to move the set-returning function into a LATERAL FROM item.
+> SELECT * FROM (VALUES (1)) v(a) JOIN (VALUES (1)) w(b) ON (|@| ARRAY[a]) = b
+ERROR 0A000 set-returning functions are not allowed in JOIN conditions at 60
+> SELECT count(*) FROM (SELECT |@| ARRAY[1,2,3]) s
+fields count:20:8:-1
+row 3
+SELECT 1
