@@ -550,6 +550,11 @@ pub trait Texts {
         let _ = exprs;
     }
 
+    /// Sets the lists of [`Self::below`] of the nodes further below, one for each node down, for the texts of the expressions in the list of [`Self::below`]. An empty list ends them.
+    fn deeper(&mut self, levels: Vec<Vec<Expr>>) {
+        let _ = levels;
+    }
+
     /// [`Self::expr`] for an expression that a node reads from the node below, which shows the casts that the analyzer added at its top, as `get_special_variable` writes it.
     ///
     /// # Errors

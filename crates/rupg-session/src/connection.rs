@@ -6754,6 +6754,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/distinct_on_late.test")));
     }
 
+    /// `split_pathtarget_at_srfs`: a function that gives a set in the arguments of another runs in a `ProjectSet` below the one of the other, the functions of one level give their rows together, and a `Result` above them computes a target that has a function of the last level inside it. The levels run above the sort and the `Limit`, and above an aggregate. `connection/srf_levels.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn srf_levels() {
+        big_stack(|| script(include_str!("connection/srf_levels.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

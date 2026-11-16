@@ -39,6 +39,8 @@ struct PlanTexts<'a, 'q> {
     subplans: Vec<SubName<'a>>,
     /// The expressions of the targets of the nodes below the join whose conditions the texts show now.
     computed: Vec<Expr>,
+    /// The lists of the nodes further below, as `Deparser::deeper`.
+    deeper: Vec<Vec<Expr>>,
 }
 
 impl<'a, 'q> PlanTexts<'a, 'q> {
@@ -158,7 +160,16 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             })
             .collect();
         let spaces = spaces.into_iter().map(Rc::new).collect();
-        PlanTexts { session, plan, spaces, targets, windows, subplans, computed: Vec::new() }
+        PlanTexts {
+            session,
+            plan,
+            spaces,
+            targets,
+            windows,
+            subplans,
+            computed: Vec::new(),
+            deeper: Vec::new(),
+        }
     }
 
     /// A deparse of the expressions of a scope, with the names of the scope and of the scopes outside it.
@@ -183,6 +194,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
         d.window_names.clone_from(&self.windows[scope]);
         d.subplans.clone_from(&self.subplans);
         d.computed.clone_from(&self.computed);
+        d.deeper.clone_from(&self.deeper);
         Ok(d)
     }
 }
@@ -339,6 +351,10 @@ fn window_names(node: &Node<'_>, out: &mut [Vec<Option<String>>]) {
 impl Texts for PlanTexts<'_, '_> {
     fn below(&mut self, exprs: Vec<Expr>) {
         self.computed = exprs;
+    }
+
+    fn deeper(&mut self, levels: Vec<Vec<Expr>>) {
+        self.deeper = levels;
     }
 
     fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
