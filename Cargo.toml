@@ -92,7 +92,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["std", "tl
 cranelift-codegen = { version = "=0.125.0", default-features = false, features = ["std", "host-arch"] }
 cranelift-frontend = { version = "=0.125.0", default-features = false, features = ["std"] }
 # iced-x86: the disassembler of the tests of the direct compile tier in rupg-jit, a development dependency only, pinned as in rudb. See spec/22-crate-layout.md section 22.5.
-iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "intel"] }
+iced-x86 = { version = "=1.22.0", default-features = false, features = ["std", "decoder", "intel"] }
 # loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
 loom = "0.7.2"
 
