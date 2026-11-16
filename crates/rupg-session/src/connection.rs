@@ -6826,6 +6826,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherited_not_null.test")));
     }
 
+    /// With `constraint_exclusion` at `partition`, `relation_excluded_by_constraints` leaves out a member of a table with children of `INHERITS` or of a partitioned table when the conditions refute its check constraints, as `predicate_refuted_by` proves it: by the operators of a B-tree family, also of two types, through `AND`, `OR`, `NOT` and `IN`. The parent as a member has its constraints `NO INHERIT`, a constraint `NOT VALID` proves nothing, and a member names its columns as the parent does. `connection/check_exclusion.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn check_exclusion() {
+        big_stack(|| script(include_str!("connection/check_exclusion.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

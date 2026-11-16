@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- With `constraint_exclusion` at `partition`, the planner leaves out a member of a table with children of `INHERITS` or of a partitioned table whose check constraints the conditions refute, by the proofs of `predicate_refuted_by`, as in PostgreSQL 19 (#1613)
 - A condition `IS NULL` or `IS NOT NULL` on a column of a table with children of `INHERITS` is tested on each member: the members whose column is `NOT NULL` drop `IS NOT NULL` and are excluded by `IS NULL`, and the one member left keeps its `Result`, as in PostgreSQL 19 (#1612)
 - An integer `IN` list and a key filter of a join whose keys span few values, as the keys of `part` that `ps_partkey` of TPC-H Q16 must have, are a `Test::Span`: the sorted keys, which the zones read, and a bitmap of the values from the least key. The scan then tests each row with one bit and does no binary search. (#1611)
 - `RETURNING` of a write to a partitioned table or a table with children shows its columns in `EXPLAIN VERBOSE`, a write to a table with children of `INHERITS` whose condition is never true reads `NULL::oid, NULL::tid`, and the relation of a scan that such a condition removes counts its members for the names of `EXPLAIN`, as in PostgreSQL 19 (#1610)

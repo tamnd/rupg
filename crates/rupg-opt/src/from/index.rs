@@ -2028,6 +2028,46 @@ pub(crate) fn implied_by(clause: &Expr, pred: &Expr) -> bool {
     }
 }
 
+/// `extract_not_arg`: the argument of a `NOT`, or of `IS NOT TRUE`, `IS FALSE` or `IS UNKNOWN`. With `strong`, `extract_strong_not_arg`: the argument of a `NOT` or of `IS FALSE` only.
+fn not_arg(expr: &Expr, strong: bool) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::Bool(BoolOp::Not, args) => args.first(),
+        ExprKind::BooleanTest(arg, test) => match test {
+            BoolTest::IsFalse => Some(arg),
+            BoolTest::IsNotTrue | BoolTest::IsUnknown if !strong => Some(arg),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `predicate_refuted_by_recurse`: true when the condition `clause` makes the condition `pred` false, or with `weak` false or null, by the form of the `AND` and the `OR` in them. A `NOT` that the other condition implies the argument of refutes it. A condition that is not an `AND` or an `OR` refutes another such condition as `predicate_refuted_by_simple_clause`. A strong `NOT` refutes a weak condition only, since only the strong implication is here.
+pub(crate) fn refuted_by(clause: &Expr, pred: &Expr, weak: bool) -> bool {
+    let negated = |clause: &Expr| not_arg(pred, false).is_some_and(|arg| implied_by(clause, arg));
+    match (bool_items(clause), bool_items(pred)) {
+        (Some((BoolOp::And, c)), Some((BoolOp::And, p))) => {
+            p.iter().any(|p| refuted_by(clause, p, weak))
+                || c.iter().any(|c| refuted_by(c, pred, weak))
+        }
+        (Some(_), Some((BoolOp::Or, p))) => p.iter().all(|p| refuted_by(clause, p, weak)),
+        (Some((BoolOp::And, c)), None) => {
+            negated(clause) || c.iter().any(|c| refuted_by(c, pred, weak))
+        }
+        (Some((_, c)), Some((_, p))) => c.iter().all(|c| p.iter().any(|p| refuted_by(c, p, weak))),
+        (Some((_, c)), None) => negated(clause) || c.iter().all(|c| refuted_by(c, pred, weak)),
+        (None, p) => {
+            if weak && not_arg(clause, true).is_some_and(|arg| implied_by(pred, arg)) {
+                return true;
+            }
+            match p {
+                Some((BoolOp::And, p)) => p.iter().any(|p| refuted_by(clause, p, weak)),
+                Some((_, p)) => p.iter().all(|p| refuted_by(clause, p, weak)),
+                None => negated(clause) || super::predtest::refuted(pred, clause, weak),
+            }
+        }
+    }
+}
+
 /// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap. Its filter is each condition of the table that the bitmap does not test exactly, in the order of `order_qual_clauses`. A condition that the conditions of the indexes imply, such as an `OR` that a `BitmapOr` tests, is not in the filter. The recheck conditions are the conditions of the bitmap as the query has them, but not those in the filter. With `workers` above 0, the scan is a partial scan, and each process gives its share of the rows.
 fn bitmap_heap_scan<'q>(
     level: &Level<'q>,

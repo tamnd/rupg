@@ -1897,7 +1897,7 @@ impl<'a> Fold<'a> {
 }
 
 /// `contain_mutable_functions`: true when the expression calls a function that is not immutable.
-fn mutable(expr: &Expr) -> bool {
+pub(crate) fn mutable(expr: &Expr) -> bool {
     let mutable_proc = |oid: u32| builtin::proc_by_oid(oid).is_none_or(|p| p.volatile != b'i');
     expr.find(0, &mut |e, _| {
         let mutable = match &e.kind {

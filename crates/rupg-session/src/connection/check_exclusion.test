@@ -1,0 +1,219 @@
+> CREATE TABLE ct (a int, b text)
+CREATE TABLE
+> CREATE TABLE ct1 (CHECK (a < 10)) INHERITS (ct)
+CREATE TABLE
+> CREATE TABLE ct2 (CHECK (a >= 10 AND a < 20)) INHERITS (ct)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 5
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 5)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 15
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 15)
+row   ->  Seq Scan on ct2 ct_2
+row         Filter: (a = 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a > 25
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ct
+row   Filter: (a > 25)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a IN (1, 2)
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = ANY ('{1,2}'::integer[]))
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 5 OR a = 15
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: ((a = 5) OR (a = 15))
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: ((a = 5) OR (a = 15))
+row   ->  Seq Scan on ct2 ct_3
+row         Filter: ((a = 5) OR (a = 15))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a IS NULL)
+row   ->  Seq Scan on ct2 ct_3
+row         Filter: (a IS NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a < 10 AND b = 'x'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: ((a < 10) AND (b = 'x'::text))
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: ((a < 10) AND (b = 'x'::text))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a <> 5
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a <> 5)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a <> 5)
+row   ->  Seq Scan on ct2 ct_3
+row         Filter: (a <> 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 5::bigint
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = '5'::bigint)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a = '5'::bigint)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE NOT (a < 10)
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a >= 10)
+row   ->  Seq Scan on ct2 ct_2
+row         Filter: (a >= 10)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 5 AND random() < 2
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: ((a = 5) AND (random() < '2'::double precision))
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: ((a = 5) AND (random() < '2'::double precision))
+EXPLAIN
+> ALTER TABLE ct ADD CONSTRAINT ct_pos CHECK (a > 0) NO INHERIT
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = -1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ct1 ct
+row   Filter: (a = '-1'::integer)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY ct WHERE a = -1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ct
+row   Filter: (a = '-1'::integer)
+EXPLAIN
+> ALTER TABLE ct1 ADD CONSTRAINT nv CHECK (b <> 'z') NOT VALID
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE b = 'z'
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (b = 'z'::text)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (b = 'z'::text)
+row   ->  Seq Scan on ct2 ct_3
+row         Filter: (b = 'z'::text)
+EXPLAIN
+> CREATE TABLE cto (z int, b text, a int CHECK (a > 1000))
+CREATE TABLE
+> ALTER TABLE cto INHERIT ct
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 2000
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 2000)
+row   ->  Seq Scan on cto ct_2
+row         Filter: (a = 2000)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 5
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 5)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a = 5)
+EXPLAIN
+> CREATE TABLE ctx (c int, CHECK (a > 100 AND c > 0)) INHERITS (ct)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 50
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ct
+row   Filter: (a = 50)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) UPDATE ct SET b = 'y' WHERE a = 15
+fields QUERY PLAN:25:-1:-1
+row Update on public.ct
+row   Update on public.ct ct_1
+row   Update on public.ct2 ct_2
+row   ->  Result
+row         Output: 'y'::text, ct.tableoid, ct.ctid
+row         ->  Append
+row               ->  Seq Scan on public.ct ct_1
+row                     Output: ct_1.tableoid, ct_1.ctid
+row                     Filter: (ct_1.a = 15)
+row               ->  Seq Scan on public.ct2 ct_2
+row                     Output: ct_2.tableoid, ct_2.ctid
+row                     Filter: (ct_2.a = 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) DELETE FROM ct WHERE a = 5
+fields QUERY PLAN:25:-1:-1
+row Delete on ct
+row   Delete on ct ct_1
+row   Delete on ct1 ct_2
+row   ->  Append
+row         ->  Seq Scan on ct ct_1
+row               Filter: (a = 5)
+row         ->  Seq Scan on ct1 ct_2
+row               Filter: (a = 5)
+EXPLAIN
+> SET constraint_exclusion = off
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 15
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 15)
+row   ->  Seq Scan on ct1 ct_2
+row         Filter: (a = 15)
+row   ->  Seq Scan on ct2 ct_3
+row         Filter: (a = 15)
+row   ->  Seq Scan on cto ct_4
+row         Filter: (a = 15)
+row   ->  Seq Scan on ctx ct_5
+row         Filter: (a = 15)
+EXPLAIN
+> SET constraint_exclusion = on
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM ct WHERE a = 15
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on ct ct_1
+row         Filter: (a = 15)
+row   ->  Seq Scan on ct2 ct_2
+row         Filter: (a = 15)
+EXPLAIN
+> RESET constraint_exclusion
+RESET
+> CREATE TABLE cp (a int, b int) PARTITION BY LIST (b)
+CREATE TABLE
+> CREATE TABLE cp1 PARTITION OF cp (CONSTRAINT cp1_a CHECK (a > 0)) FOR VALUES IN (1)
+CREATE TABLE
+> CREATE TABLE cp2 PARTITION OF cp FOR VALUES IN (2)
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM cp WHERE a = -1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on cp2 cp
+row   Filter: (a = '-1'::integer)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM cp WHERE a = -1 AND b = 1
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on cp
+row   One-Time Filter: false
+EXPLAIN
