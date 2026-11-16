@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The bounds of a lifted `EXISTS` with one comparison, as in TPC-H Q21, are written in one pass in the order of the keys when the keys of the rows do not go down, as the keys of a table in the order of its key. (#1598)
 - A query with `GROUP BY` or an aggregate and `ORDER BY` runs its targets that give a set or call a volatile function above the sort, for the groups in the order of the sort, as `make_sort_input_target` puts them above the `Sort`: the rows of the function of one group now come together and in order, and `nextval` numbers the groups in the order of the sort. (#1597)
 - A function that gives a set in the arguments of another runs in its own `ProjectSet` below the one of the other, as `split_pathtarget_at_srfs` puts the functions in levels: `EXPLAIN` shows a `ProjectSet` for each level, a `Result` above them when a function of the last level is inside a larger expression, and a `Result` between the sort and the lowest `ProjectSet` when the sort gives another list, below a `Gather Merge` when there is one. Each node shows the values that a level below computes in parentheses, as `get_special_variable` shows them. (#1596)
 - A scan condition that compares two integer columns, as `l_commitdate < l_receiptdate` in TPC-H Q4, Q12 and Q21, keeps the rows that pass on the decoded values of the two columns, with no copy of the values and no vector of booleans. (#1592)
