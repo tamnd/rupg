@@ -1187,17 +1187,25 @@ fn decode_chunk_room(reader: &mut Reader<'_>, room: usize) -> Result<Vec<i64>> {
             expanded(&run_values, &run_lengths, count)
         }
         Kind::Dict => {
+            // The codes go into the vector of the values, and the value of each code is written over the code.
+            // One check of all the codes comes first, so the loop has no branch and no push, and the compiler reads the dictionary for several codes at a time.
+            // A push of each value with a check of each code was about ten instructions a value.
             let dictionary = decode_chunk(reader)?;
-            let codes = decode_chunk(reader)?;
-            let mut values = Vec::with_capacity(count + room);
-            for code in codes {
-                let index =
-                    usize::try_from(code).ok().and_then(|index| dictionary.get(index)).ok_or_else(
-                        || Error::internal(format!("code {code} is not in the dictionary")),
-                    )?;
-                values.push(*index);
-            }
+            let mut values = decode_chunk_room(reader, room)?;
             check_count(values.len(), count)?;
+            // A negative code is a large unsigned number, so it is past the end of the dictionary.
+            let most = values.iter().fold(0_u64, |most, &code| most.max(code as u64));
+            let Some(last) = dictionary.len().checked_sub(1).filter(|&last| most <= last as u64)
+            else {
+                if values.is_empty() {
+                    return Ok(values);
+                }
+                let code = most as i64;
+                return Err(Error::internal(format!("code {code} is not in the dictionary")));
+            };
+            for value in &mut values {
+                *value = dictionary[(*value as usize).min(last)];
+            }
             Ok(values)
         }
         Kind::Sparse => {
@@ -2716,6 +2724,17 @@ mod tests {
         put_u32(&mut bytes, 1);
         bytes.extend_from_slice(&encode(&[10]).unwrap());
         bytes.extend_from_slice(&encode(&[5]).unwrap());
+        let error = decode(&bytes).unwrap_err();
+        assert!(error.message().contains("not in the dictionary"), "{error}");
+    }
+
+    #[test]
+    fn a_negative_dictionary_code_is_an_error() {
+        // The check of the codes takes each code as an unsigned number, so a negative code is past the end of the dictionary.
+        let mut bytes = vec![Kind::Dict.tag()];
+        put_u32(&mut bytes, 3);
+        bytes.extend_from_slice(&encode(&[10, 20]).unwrap());
+        bytes.extend_from_slice(&encode(&[0, -1, 1]).unwrap());
         let error = decode(&bytes).unwrap_err();
         assert!(error.message().contains("not in the dictionary"), "{error}");
     }
