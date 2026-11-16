@@ -477,6 +477,8 @@ pub(crate) struct Analyzer<'a> {
     keep_unknowns: bool,
     /// True while the analyzer reads the single row of `VALUES` of an `INSERT` or of an action `INSERT` of a `MERGE`, whose list of targets can call a function that gives a set, as `check_srf_call_placement` allows for `EXPR_KIND_VALUES_SINGLE`.
     srf_values: bool,
+    /// True when the targets of the next `SELECT` are the condition of `WHERE` of `COPY ... FROM`, which the analyzer reads as `EXPR_KIND_COPY_WHERE`.
+    copy_where: bool,
     /// True when an `INSERT`, an `UPDATE` or a `DELETE` keeps its form before the rewrite in [`Write::insert_def`] or [`Write::set_def`], for a deparse of the query as `get_insert_query_def`, `get_update_query_def` and `get_delete_query_def` show it.
     pub(crate) keep_source: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
@@ -562,6 +564,7 @@ impl<'a> Analyzer<'a> {
             has_windows: false,
             keep_unknowns: false,
             srf_values: false,
+            copy_where: false,
             keep_source: false,
             views: Vec::new(),
             lazy_views: false,
@@ -637,6 +640,17 @@ pub fn foreign_keys(env: &dyn Env, table: u32, kind: WriteKind) -> Result<Vec<Fo
 /// `parse_analyze`: the query tree of a raw statement, which is the `stmt` of a `RawStmt`. For a statement of the extended protocol, the [`Query`] has the type of each parameter.
 pub fn analyze(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
     analyze_hooked(stmt, env, params, None)
+}
+
+/// [`analyze`] for the query of [`copy_filter`]: the analyzer reads the condition as `transformExpr` with `EXPR_KIND_COPY_WHERE` does, where an aggregate, a window function, a set-returning function and a subquery are errors.
+///
+/// # Errors
+///
+/// The errors of [`analyze`].
+pub fn analyze_copy_filter(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
+    let mut analyzer = Analyzer::new(env, params);
+    analyzer.copy_where = true;
+    analyze_in(analyzer, stmt, None)
 }
 
 /// [`analyze`] with the variables of a PL/pgSQL function, if any.

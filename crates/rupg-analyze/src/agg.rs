@@ -77,6 +77,8 @@ pub(crate) enum Kind {
     PartitionExpression,
     /// `EXPR_KIND_GENERATED_COLUMN`: the expression of a generated column.
     Generated,
+    /// `EXPR_KIND_COPY_WHERE`: the condition of `WHERE` of `COPY ... FROM`.
+    CopyWhere,
 }
 
 impl Kind {
@@ -117,6 +119,7 @@ impl Kind {
             Kind::PartitionBound => "partition bound",
             Kind::PartitionExpression => "partition key expressions",
             Kind::Generated => "column generation expressions",
+            Kind::CopyWhere => "WHERE",
         }
     }
 
@@ -137,6 +140,7 @@ impl Kind {
                 | Kind::PartitionBound
                 | Kind::PartitionExpression
                 | Kind::Generated
+                | Kind::CopyWhere
         )
     }
 
@@ -154,6 +158,7 @@ impl Kind {
             Kind::PartitionBound => "partition bound",
             Kind::PartitionExpression => "partition key expression",
             Kind::Generated => "column generation expression",
+            Kind::CopyWhere => "COPY FROM WHERE condition",
             _ => "index predicate",
         }
     }
@@ -410,6 +415,12 @@ impl Analyzer<'_> {
             ));
         };
         match place {
+            Kind::CopyWhere => {
+                return Err(grouping_error(
+                    format!("{what} are not allowed in COPY FROM WHERE conditions"),
+                    at,
+                ));
+            }
             Kind::JoinOn => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in JOIN conditions"),

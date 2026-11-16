@@ -288,6 +288,9 @@ impl Analyzer<'_> {
             | Kind::Generated => {
                 Some(format!("window functions are not allowed in {}", self.kind.name()))
             }
+            Kind::CopyWhere => {
+                Some("window functions are not allowed in COPY FROM WHERE conditions".to_owned())
+            }
             Kind::Other => return Err(not_yet("a window function in this place", at)),
         };
         if let Some(message) = message {

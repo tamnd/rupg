@@ -71,8 +71,21 @@ pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Copy
         });
     let is_generated = |i: usize| generated.get(i).copied().unwrap_or(false);
     if let Some(condition) = &stmt.whereClause {
-        let mut refs = WhereColumns { relname: &name, columns: &columns, used: Vec::new() };
+        let mut refs = WhereColumns {
+            relname: &name,
+            columns: &columns,
+            used: Vec::new(),
+            system: Vec::new(),
+        };
         walk::one(&mut refs, Some(condition));
+        // `pull_varattnos` gives the system columns first, as their numbers are below zero.
+        if let Some((_, column)) = refs.system.iter().min() {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_REFERENCE,
+                "system columns are not supported in COPY FROM WHERE conditions",
+            )
+            .with_detail(format!("Column \"{column}\" is a system column.")));
+        }
         let mut used = refs.used;
         used.sort_unstable();
         if let Some(&i) = used.iter().find(|&&i| is_generated(i)) {
@@ -100,6 +113,8 @@ struct WhereColumns<'a> {
     relname: &'a str,
     columns: &'a [String],
     used: Vec<usize>,
+    /// The attribute number and the name of each system column that the condition names.
+    system: Vec<(i16, String)>,
 }
 
 impl Walker for WhereColumns<'_> {
@@ -107,6 +122,20 @@ impl Walker for WhereColumns<'_> {
         let Node::ColumnRef(cref) = node else { return walk::walk(self, node) };
         let fields: Vec<Option<&str>> = cref.fields.iter().flatten().map(string).collect();
         let position = |name: &str| self.columns.iter().position(|c| c == name);
+        let system = |name: &str| {
+            position(name).is_none().then(|| crate::from::system_column(name)).flatten()
+        };
+        let named = match fields.as_slice() {
+            [Some(name)] => Some(*name),
+            [Some(rel), Some(name)] if *rel == self.relname => Some(*name),
+            _ => None,
+        };
+        if let Some(name) = named
+            && let Some((attno, _)) = system(name)
+        {
+            self.system.push((attno, name.to_owned()));
+            return false;
+        }
         match fields.as_slice() {
             [Some(name)] if position(name).is_some() => self.used.extend(position(name)),
             [Some(rel)] | [Some(rel), None] if *rel == self.relname => {

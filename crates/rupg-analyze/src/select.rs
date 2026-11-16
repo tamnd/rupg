@@ -383,8 +383,10 @@ impl Analyzer<'_> {
     fn plain_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         // The subqueries of the query are not the value of the assignment.
         let assign = self.assign.take();
+        let kind =
+            if std::mem::take(&mut self.copy_where) { Kind::CopyWhere } else { Kind::Select };
         let from = self.transform_from(&s.fromClause)?;
-        let mut targets = self.target_list(&s.targetList, Kind::Select)?;
+        let mut targets = self.target_list(&s.targetList, kind)?;
         if let Some(assign) = assign {
             self.assign_target(&mut targets, assign)?;
         }
