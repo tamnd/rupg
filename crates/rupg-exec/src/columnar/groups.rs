@@ -10,7 +10,7 @@ use rupg_column::stored::{self, Stored, VECTOR};
 use rupg_common::Result;
 use rupg_kernels::hash::prefetch;
 use rupg_platform::{Job, Tasks};
-use rupg_summary::zone::{Test, Verdict, has_code};
+use rupg_summary::zone::{Test, Verdict, has_code, in_span};
 
 use super::{Decoded, DecodedData, FxMap, WordTable, decode, passes};
 
@@ -837,6 +837,11 @@ pub(super) fn keep<R: Row>(test: &Test, d: &Decoded, sel: &mut Vec<R>) {
             // The keys are in ascending order, so a long list finds a value with a binary search.
             Test::In(keys) => {
                 compare(v, n, sel, |x| keys.binary_search(&rupg_summary::key::int(x)).is_ok());
+            }
+            // The keys span few values, so each row reads one bit and the loop has no branch for the test.
+            Test::Span(_, least, bits) => {
+                let least = *least;
+                compare(v, n, sel, |x| in_span(least, bits, x));
             }
             Test::Codes(bits) => {
                 compare(v, n, sel, |x| u64::try_from(x).is_ok_and(|x| has_code(bits, x)));
@@ -2095,6 +2100,36 @@ enum Column<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_in_test_keeps_the_same_rows_with_a_bitmap_and_with_a_list() {
+        let values: Vec<i64> =
+            vec![i64::MIN, -5000, -3, 0, 1, 3, 14, 49, 63, 64, 65, 4095, 4096, 5000, i64::MAX];
+        let lists: [&[i64]; 5] = [
+            &[3, 14, 49],
+            &[-3, 0, 64, 4095],
+            &[-3, 4096],
+            &[i64::MIN, i64::MAX],
+            &[0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 4096, 5000],
+        ];
+        let nulls: Vec<bool> = (0..values.len()).map(|i| i % 3 == 0).collect();
+        for list in lists {
+            let keys: Vec<u64> = list.iter().map(|&x| rupg_summary::key::int(x)).collect();
+            for test in [Test::In(keys.clone()), Test::int_in(keys)] {
+                for nulls in [None, Some(nulls.clone())] {
+                    let d =
+                        Decoded { data: DecodedData::Int(values.clone()), nulls: nulls.clone() };
+                    let mut sel: Vec<usize> = (0..values.len()).collect();
+                    keep(&test, &d, &mut sel);
+                    let wanted: Vec<usize> = (0..values.len())
+                        .filter(|&i| !nulls.as_ref().is_some_and(|n| n[i]))
+                        .filter(|&i| list.contains(&values[i]))
+                        .collect();
+                    assert_eq!(sel, wanted, "{test:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn packs_the_extreme_values_of_each_kind() {

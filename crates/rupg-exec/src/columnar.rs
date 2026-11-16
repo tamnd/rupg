@@ -14,7 +14,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_platform::{Job, Tasks};
 use rupg_summary::column::{Bound, ColumnSummary, Sum};
-use rupg_summary::zone::{Test, Verdict, Zone, has_code};
+use rupg_summary::zone::{Test, Verdict, Zone, has_code, in_span};
 use rupg_types::{
     DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateUnit, Numeric, POSTGRES_EPOCH_JDATE,
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, USECS_PER_DAY, Value, date2j, j2date, oid,
@@ -4339,6 +4339,7 @@ fn passes(test: &Test, null: bool, value: i64) -> bool {
         Test::Gt(c) => key > *c,
         Test::Ge(c) => key >= *c,
         Test::In(cs) => cs.binary_search(&key).is_ok(),
+        Test::Span(_, least, bits) => in_span(*least, bits, value),
         Test::Codes(bits) => u64::try_from(value).is_ok_and(|c| has_code(bits, c)),
     }
 }
@@ -4725,7 +4726,7 @@ impl Exec<'_> {
                 let mut keys: Vec<u64> = values.into_iter().map(rupg_summary::key::int).collect();
                 keys.sort_unstable();
                 keys.dedup();
-                Some((place, Test::In(keys)))
+                Some((place, Test::int_in(keys)))
             }
             _ => None,
         }
