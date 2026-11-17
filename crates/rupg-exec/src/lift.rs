@@ -92,100 +92,86 @@ impl Bounds {
             }
         }
     }
-
-    /// The bounds of the keys `keys` with the values `values` of the same rows, where a row with a null key or value is not in a set. The bounds are [`Bounds::Dense`] when the range of the keys is at most twice the number of rows and 1024 more.
-    fn of(keys: &[Option<i64>], values: &[Option<i64>]) -> Self {
-        let mut low = i64::MAX;
-        let mut high = i64::MIN;
-        let mut count = 0usize;
-        // True while each key is not less than the key before it, as the keys of a table in the order of its key.
-        let mut sorted = true;
-        for (&key, &value) in keys.iter().zip(values) {
-            if let (Some(key), Some(_)) = (key, value) {
-                sorted &= key >= high;
-                low = low.min(key);
-                high = high.max(key);
-                count += 1;
-            }
-        }
-        let range = i128::from(high) - i128::from(low) + 1;
-        let limit = i128::try_from(count).unwrap_or(i128::MAX).saturating_mul(2) + 1024;
-        if count > 0
-            && range <= limit
-            && let Ok(range) = usize::try_from(range)
-        {
-            if sorted {
-                return Bounds::Dense { base: low, slots: sorted_slots(keys, values, low, range) };
-            }
-            let mut slots = vec![(i64::MAX, i64::MIN); range];
-            for (&key, &value) in keys.iter().zip(values) {
-                if let (Some(key), Some(value)) = (key, value)
-                    && let Ok(at) = usize::try_from(key - low)
-                {
-                    let slot = &mut slots[at];
-                    slot.0 = slot.0.min(value);
-                    slot.1 = slot.1.max(value);
-                }
-            }
-            return Bounds::Dense { base: low, slots };
-        }
-        let mut bounds = Bounds::Hash(rupg_kernels::hash::HashMap::default());
-        // The rows of a key often come one after another, as the rows of a table in the order of its key, so a run of the same key widens the bounds once.
-        let mut run: Option<(i64, (i64, i64))> = None;
-        for (&key, &value) in keys.iter().zip(values) {
-            let (Some(key), Some(value)) = (key, value) else { continue };
-            match &mut run {
-                Some((k, (min, max))) if *k == key => {
-                    *min = (*min).min(value);
-                    *max = (*max).max(value);
-                }
-                _ => {
-                    if let Some((k, found)) = run.replace((key, (value, value))) {
-                        widen(&mut bounds, k, found);
-                    }
-                }
-            }
-        }
-        if let Some((k, found)) = run {
-            widen(&mut bounds, k, found);
-        }
-        bounds
-    }
 }
 
-/// The slots of [`Bounds::Dense`] from `low` for keys that do not go down from row to row. The rows of a key come one after another, so the bounds of a key are complete at the end of its run, and the slots are written once each, in order. A slot between two keys gets no row. The slots are not filled first and no slot is read again, so the memory of the slots is written in one pass.
-fn sorted_slots(
-    keys: &[Option<i64>],
-    values: &[Option<i64>],
-    low: i64,
-    range: usize,
-) -> Vec<(i64, i64)> {
-    const NO_ROW: (i64, i64) = (i64::MAX, i64::MIN);
-    let mut slots = Vec::with_capacity(range);
-    let put = |slots: &mut Vec<(i64, i64)>, key: i64, bounds: (i64, i64)| {
-        slots.resize(usize::try_from(key - low).unwrap_or(0), NO_ROW);
-        slots.push(bounds);
-    };
-    let mut run: Option<(i64, (i64, i64))> = None;
-    for (&key, &value) in keys.iter().zip(values) {
-        let (Some(key), Some(value)) = (key, value) else { continue };
-        match &mut run {
-            Some((k, (min, max))) if *k == key => {
-                *min = (*min).min(value);
-                *max = (*max).max(value);
-            }
-            _ => {
-                if let Some((k, bounds)) = run.replace((key, (value, value))) {
-                    put(&mut slots, k, bounds);
-                }
-            }
+/// A slot of [`Bounds::Dense`] with no row.
+const NO_ROW: (i64, i64) = (i64::MAX, i64::MIN);
+
+/// [`Bounds`] that grow as the rows come, so that the values of all the rows are not kept first. The bounds are [`Bounds::Dense`] from the first key while each key is not less than the first key and the slots stay at most twice the number of rows and 1024 more, as the keys of a table that come from a sequence. Another key changes them to [`Bounds::Hash`].
+struct Building {
+    bounds: Bounds,
+    /// The key of the last rows and their bounds. The rows of a key often come one after another, as the rows of a table in the order of its key, so a run of the same key goes into the bounds once.
+    run: Option<(i64, (i64, i64))>,
+    /// The number of rows so far.
+    count: usize,
+}
+
+impl Building {
+    /// Bounds with no row, with room for the slots of `rows` keys. The pages of the room that no slot fills are not touched.
+    fn new(rows: usize) -> Self {
+        Building {
+            bounds: Bounds::Dense { base: 0, slots: Vec::with_capacity(rows) },
+            run: None,
+            count: 0,
         }
     }
-    if let Some((k, bounds)) = run {
-        put(&mut slots, k, bounds);
+
+    /// Adds a row with the key `key` and the value `value`.
+    fn push(&mut self, key: i64, value: i64) {
+        self.count += 1;
+        if let Some((k, (min, max))) = &mut self.run
+            && *k == key
+        {
+            *min = (*min).min(value);
+            *max = (*max).max(value);
+            return;
+        }
+        if let Some((k, bounds)) = self.run.replace((key, (value, value))) {
+            self.put(k, bounds);
+        }
     }
-    slots.resize(range, NO_ROW);
-    slots
+
+    /// Adds the bounds `low` and `high` to the bounds of `key`.
+    fn put(&mut self, key: i64, (low, high): (i64, i64)) {
+        if let Bounds::Dense { base, slots } = &mut self.bounds {
+            if slots.is_empty() {
+                *base = key;
+            }
+            let room = self.count.saturating_mul(2).saturating_add(1024);
+            if let Some(at) = key
+                .checked_sub(*base)
+                .and_then(|at| usize::try_from(at).ok())
+                .filter(|&at| at < room)
+            {
+                match slots.get_mut(at) {
+                    Some(slot) => *slot = (slot.0.min(low), slot.1.max(high)),
+                    None => {
+                        slots.resize(at, NO_ROW);
+                        slots.push((low, high));
+                    }
+                }
+                return;
+            }
+            let mut map = rupg_kernels::hash::HashMap::default();
+            for (at, &(min, max)) in slots.iter().enumerate() {
+                if min <= max
+                    && let Some(k) = i64::try_from(at).ok().and_then(|at| base.checked_add(at))
+                {
+                    map.insert(k, (min, max));
+                }
+            }
+            self.bounds = Bounds::Hash(map);
+        }
+        widen(&mut self.bounds, key, (low, high));
+    }
+
+    /// The bounds of all the rows.
+    fn finish(mut self) -> Bounds {
+        if let Some((k, bounds)) = self.run.take() {
+            self.put(k, bounds);
+        }
+        self.bounds
+    }
 }
 
 /// For an `EXISTS` with one integer key whose test is `column op outer`, where `column` is an integer column of the subquery and `outer` a column of the query outside it: `op`, `outer`, and the [`Bounds`]. A null `column` or `outer` makes the comparison not true, so the bounds do not keep the nulls, and a row whose `outer` is null gets false.
@@ -564,28 +550,39 @@ fn lift(
             Some(q) => Rc::new(run_query(q, params, session, cache, &[], false)?),
             None => Rc::new(Vec::new()),
         };
-        let columns = match single || compare.is_some() {
-            true => columnar::column_keys(&queries[0], session, cache)?,
-            false => None,
-        };
         if compare.is_some() {
-            let mut bounds = Bounds::Hash(rupg_kernels::hash::HashMap::default());
-            match columns.as_deref() {
-                Some([values, keys]) => bounds = Bounds::of(keys, values),
-                Some(_) => return Err(rupg_common::Error::internal("a lifted row has no key")),
-                None => {
+            let mut building: Option<Building> = None;
+            let columnar =
+                columnar::column_pairs(&queries[0], session, cache, &mut |rows, values, keys| {
+                    let building = building.get_or_insert_with(|| Building::new(rows));
+                    for (&key, &value) in keys.iter().zip(values) {
+                        if let (Some(key), Some(value)) = (key, value) {
+                            building.push(key, value);
+                        }
+                    }
+                })?;
+            let building = match (columnar, building) {
+                (true, Some(building)) => building,
+                (true, None) => Building::new(0),
+                (false, _) => {
+                    let mut building = Building::new(0);
                     for row in run_query(&queries[0], params, session, cache, &[], false)? {
                         let Ok([value, key]) = <[Value; 2]>::try_from(row) else {
                             return Err(rupg_common::Error::internal("a lifted row has no key"));
                         };
                         if let (Some(key), Some(value)) = (int(key)?, int(value)?) {
-                            widen(&mut bounds, key, (value, value));
+                            building.push(key, value);
                         }
                     }
+                    building
                 }
-            }
-            return Ok((Buckets::default(), None, Some(bounds), empty_rows));
+            };
+            return Ok((Buckets::default(), None, Some(building.finish()), empty_rows));
         }
+        let columns = match single {
+            true => columnar::column_keys(&queries[0], session, cache)?,
+            false => None,
+        };
         if single && let Some(keys) = columns.and_then(|mut columns| columns.pop()) {
             return Ok((
                 Buckets::default(),
@@ -1026,11 +1023,22 @@ mod tests {
         keys.map(|k| bounds.get(k)).collect()
     }
 
+    /// The bounds of the rows with the keys `keys` and the values `values`, with no row for a null.
+    fn of(keys: &[Option<i64>], values: &[Option<i64>]) -> Bounds {
+        let mut building = Building::new(keys.len());
+        for (&key, &value) in keys.iter().zip(values) {
+            if let (Some(key), Some(value)) = (key, value) {
+                building.push(key, value);
+            }
+        }
+        building.finish()
+    }
+
     #[test]
     fn the_bounds_of_sorted_keys_are_the_bounds_of_the_same_keys_in_another_order() {
         let keys = [Some(3), Some(3), None, Some(4), Some(7), Some(7), Some(7), Some(9)];
         let values = [Some(5), Some(2), Some(1), None, Some(8), Some(-1), Some(4), Some(6)];
-        let sorted = Bounds::of(&keys, &values);
+        let sorted = of(&keys, &values);
         assert!(matches!(sorted, Bounds::Dense { base: 3, .. }));
         let want =
             vec![None, Some((2, 5)), None, None, None, Some((-1, 8)), None, Some((6, 6)), None];
@@ -1038,6 +1046,25 @@ mod tests {
         let mut pairs: Vec<_> = keys.iter().copied().zip(values.iter().copied()).collect();
         pairs.reverse();
         let (keys, values): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
-        assert_eq!(all(&Bounds::of(&keys, &values), 2..11), want);
+        let reversed = of(&keys, &values);
+        assert!(matches!(reversed, Bounds::Hash(_)));
+        assert_eq!(all(&reversed, 2..11), want);
+    }
+
+    #[test]
+    fn the_bounds_change_to_a_hash_table_for_a_key_far_from_the_first_key() {
+        let keys =
+            [Some(5), Some(6), Some(5), Some(1 << 40), Some(6), Some(i64::MAX), Some(i64::MIN)];
+        let values = [Some(1), Some(2), Some(3), Some(4), Some(-5), Some(6), Some(7)];
+        let near = of(&keys[..3], &values[..3]);
+        assert!(matches!(near, Bounds::Dense { base: 5, .. }));
+        assert_eq!(all(&near, 4..8), vec![None, Some((1, 3)), Some((2, 2)), None]);
+        let far = of(&keys, &values);
+        assert!(matches!(far, Bounds::Hash(_)));
+        assert_eq!(all(&far, 4..8), vec![None, Some((1, 3)), Some((-5, 2)), None]);
+        assert_eq!(far.get(1 << 40), Some((4, 4)));
+        assert_eq!(far.get(i64::MAX), Some((6, 6)));
+        assert_eq!(far.get(i64::MIN), Some((7, 7)));
+        assert!(of(&[None, Some(2)], &[Some(1), None]).is_empty());
     }
 }

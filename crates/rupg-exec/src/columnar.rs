@@ -3534,6 +3534,63 @@ pub(crate) fn selected(
     cache: &Cache,
     small: bool,
 ) -> Result<Option<Selected>> {
+    let mut out: Option<Selected> = None;
+    let mut integers = true;
+    let scanned = scan_table(
+        relation,
+        conds,
+        keys,
+        params,
+        session,
+        cache,
+        small,
+        &mut |rows, exec, batch, sel| {
+            // The vectors have room for each row of the table, so that they do not grow and copy their values. The pages of the room that no row fills are not touched.
+            let out = out.get_or_insert_with(|| Selected {
+                rows,
+                places: Vec::with_capacity(rows),
+                keys: (0..keys.len()).map(|_| Vec::with_capacity(rows)).collect(),
+            });
+            let base = batch.segment * ROWS + batch.vector * VECTOR;
+            out.places.extend(sel.iter().map(|&i| base + i as usize));
+            for (values, &key) in out.keys.iter_mut().zip(keys) {
+                let col = exec.var(batch, key, exec.types[key], sel)?;
+                let Data::Int(ints) = &col.data else {
+                    integers = false;
+                    return Ok(false);
+                };
+                values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
+            }
+            Ok(true)
+        },
+    )?;
+    let Some(rows) = scanned.filter(|_| integers) else { return Ok(None) };
+    Ok(Some(out.unwrap_or_else(|| Selected {
+        rows,
+        places: Vec::new(),
+        keys: vec![Vec::new(); keys.len()],
+    })))
+}
+
+/// A call with the number of rows of the table and the rows of a vector that pass the conditions, which gives false to stop the scan.
+type TableEach<'a> = dyn FnMut(usize, &mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + 'a;
+
+/// Calls `each` with the rows of each vector of the table of `relation` that pass the conditions `conds`, where the scan reads the columns `keys` and the columns of the conditions. The number of rows of the table, or `None` when the vectors cannot read the table or test the conditions.
+///
+/// # Errors
+///
+/// The error of a condition or of `each`.
+#[allow(clippy::too_many_arguments)]
+fn scan_table(
+    relation: &rupg_analyze::Relation,
+    conds: &[&Expr],
+    keys: &[usize],
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    small: bool,
+    each: &mut TableEach<'_>,
+) -> Result<Option<usize>> {
     let types: Vec<u32> = relation.columns.iter().map(|c| c.ty).collect();
     let mut used = vec![false; types.len()];
     for &key in keys {
@@ -3619,40 +3676,16 @@ pub(crate) fn selected(
     let segments = rows.div_ceil(ROWS);
     let mut scan =
         Scan { exec: &mut exec, conds, segments, rows, open: true, answered: Vec::new() };
-    // The vectors have room for each row of the table, so that they do not grow and copy their values. The pages of the room that no row fills are not touched.
-    let mut out = Selected {
-        rows,
-        places: Vec::with_capacity(rows),
-        keys: (0..keys.len()).map(|_| Vec::with_capacity(rows)).collect(),
-    };
-    let mut integers = true;
-    scan.each(&mut |exec, batch, sel| {
-        let base = batch.segment * ROWS + batch.vector * VECTOR;
-        out.places.extend(sel.iter().map(|&i| base + i as usize));
-        for (values, &key) in out.keys.iter_mut().zip(keys) {
-            let col = exec.var(batch, key, exec.types[key], sel)?;
-            let Data::Int(ints) = &col.data else {
-                integers = false;
-                return Ok(false);
-            };
-            values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
-        }
-        Ok(true)
-    })?;
-    Ok(integers.then_some(out))
+    scan.each(&mut |exec, batch, sel| each(rows, exec, batch, sel))?;
+    Ok(Some(rows))
 }
 
-/// For a query of one table whose targets are integer columns of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: for each target, the value of its column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
-///
-/// # Errors
-///
-/// An error of a condition of `WHERE` or of a read of the table.
-pub(crate) fn column_keys(
-    query: &Query,
+/// For a query of one table whose targets are integer columns of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: the table, the conditions of `WHERE`, and the column of each target. `None` when the vectors cannot run the query, and then the row engine runs it.
+fn table_query<'q>(
+    query: &'q Query,
     session: &dyn Session,
-    cache: &Cache,
-) -> Result<Option<Vec<Vec<Option<i64>>>>> {
-    let [relation] = query.relations.as_slice() else { return Ok(None) };
+) -> Option<(&'q rupg_analyze::Relation, Vec<&'q Expr>, Vec<usize>)> {
+    let [relation] = query.relations.as_slice() else { return None };
     if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
         || relation.subquery.is_some()
         || relation.function.is_some()
@@ -3677,16 +3710,12 @@ pub(crate) fn column_keys(
         || !query.grouping_sets.is_empty()
         || query.has_target_srfs()
     {
-        return Ok(None);
+        return None;
     }
     let mut columns = Vec::with_capacity(query.targets.len());
     for target in &query.targets {
-        let ExprKind::Var(var) = &target.expr.kind else { return Ok(None) };
-        let Some(column) = usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0)
-        else {
-            return Ok(None);
-        };
-        columns.push(column);
+        let ExprKind::Var(var) = &target.expr.kind else { return None };
+        columns.push(usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0)?);
     }
     let mut conds = Vec::new();
     if let Some(filter) = &query.filter {
@@ -3700,20 +3729,77 @@ pub(crate) fn column_keys(
             _ => None,
         });
         if other.is_some() {
-            return Ok(None);
+            return None;
         }
     }
-    let Some(catalog) = session.catalog() else { return Ok(None) };
-    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    let catalog = session.catalog()?;
+    let table = catalog.relation(relation.oid)?;
     if table.kind != rupg_catalog::RelKind::Table
         || !catalog.all_inheritors(relation.oid).is_empty()
     {
-        return Ok(None);
+        return None;
     }
+    Some((relation, conds, columns))
+}
+
+/// For a query of [`table_query`]: for each target, the value of its column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
+///
+/// # Errors
+///
+/// An error of a condition of `WHERE` or of a read of the table.
+pub(crate) fn column_keys(
+    query: &Query,
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<Vec<Vec<Option<i64>>>>> {
+    let Some((relation, conds, columns)) = table_query(query, session) else { return Ok(None) };
     let Some(found) = selected(relation, &conds, &columns, &[], session, cache, false)? else {
         return Ok(None);
     };
     Ok(Some(found.keys))
+}
+
+/// A call with the number of rows of a table and the values of two columns for the rows of a vector, where `None` is a null.
+type PairEach<'a> = dyn FnMut(usize, &[Option<i64>], &[Option<i64>]) + 'a;
+
+/// For a query of [`table_query`] with two targets: calls `each` with the number of rows of the table and the values of the two targets for the rows of each vector that pass `WHERE`, where `None` is a null. The values of all the rows are not kept, so a fold of them reads each value once, while it is in the cache. False when the scan cannot run so, and then the caller drops what `each` got and the row engine runs the query.
+///
+/// # Errors
+///
+/// An error of a condition of `WHERE` or of a read of the table.
+pub(crate) fn column_pairs(
+    query: &Query,
+    session: &dyn Session,
+    cache: &Cache,
+    each: &mut PairEach<'_>,
+) -> Result<bool> {
+    let Some((relation, conds, columns)) = table_query(query, session) else { return Ok(false) };
+    let [first, second] = columns[..] else { return Ok(false) };
+    let mut pair = [Vec::with_capacity(VECTOR), Vec::with_capacity(VECTOR)];
+    let mut integers = true;
+    let scanned = scan_table(
+        relation,
+        &conds,
+        &columns,
+        &[],
+        session,
+        cache,
+        false,
+        &mut |rows, exec, batch, sel| {
+            for (values, key) in pair.iter_mut().zip([first, second]) {
+                let col = exec.var(batch, key, exec.types[key], sel)?;
+                let Data::Int(ints) = &col.data else {
+                    integers = false;
+                    return Ok(false);
+                };
+                values.clear();
+                values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
+            }
+            each(rows, &pair[0], &pair[1]);
+            Ok(true)
+        },
+    )?;
+    Ok(scanned.is_some() && integers)
 }
 
 /// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.
