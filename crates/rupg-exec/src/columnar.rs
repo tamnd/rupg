@@ -153,6 +153,13 @@ enum KeyMap {
     Three(WordTable<4>),
     Wide(WordTable<8>),
     Large(FxMap<Box<[u64]>, u32>),
+    /// A key of one integer column whose values span few integers, as the summaries of its segments tell: the group of each value is at the place of the value minus `min`, so a row reads one slot of an array in the order of the keys and computes no hash, as the `l_orderkey` of `lineitem` in TPC-H Q18. A key out of the span makes the map [`KeyMap::One`].
+    Dense {
+        min: i64,
+        ids: Vec<u32>,
+        null: Option<u32>,
+        len: usize,
+    },
 }
 
 /// The words of a key of 4 to 7 words and its mask, with words of 0 after them.
@@ -175,6 +182,16 @@ impl KeyMap {
         }
     }
 
+    /// A map for a key of one integer column whose values are from `min` to `min + span`.
+    fn dense(min: i64, span: usize) -> KeyMap {
+        KeyMap::Dense {
+            min,
+            ids: rupg_platform::alloc::large_vec(span + 1, NO_GROUP),
+            null: None,
+            len: 0,
+        }
+    }
+
     /// The hash of the key `word` for [`KeyMap::id`], or 0 for a map that finds its own.
     #[inline]
     fn hash(&self, word: &[u64]) -> u64 {
@@ -184,6 +201,7 @@ impl KeyMap {
             KeyMap::Three(_) => WordTable::<4>::hash(&[word[0], word[1], word[2], word[3]]),
             KeyMap::Wide(_) => WordTable::<8>::hash(&wide(word)),
             KeyMap::Large(_) => 0,
+            KeyMap::Dense { .. } => 0,
         }
     }
 
@@ -195,7 +213,7 @@ impl KeyMap {
             KeyMap::Two(table) => table.prefetch(hash),
             KeyMap::Three(table) => table.prefetch(hash),
             KeyMap::Wide(table) => table.prefetch(hash),
-            KeyMap::Large(_) => {}
+            KeyMap::Large(_) | KeyMap::Dense { .. } => {}
         }
     }
 
@@ -203,6 +221,33 @@ impl KeyMap {
     #[inline]
     fn id(&mut self, word: &[u64], hash: u64, next: u32) -> (u32, bool) {
         match self {
+            KeyMap::Dense { null, .. } if word.get(1).is_some_and(|&mask| mask != 0) => {
+                match null {
+                    Some(id) => (*id, false),
+                    None => (*null.insert(next), true),
+                }
+            }
+            KeyMap::Dense { min, ids, null, len } => {
+                let at = usize::try_from((word[0] as i64).wrapping_sub(*min) as u64)
+                    .unwrap_or(usize::MAX);
+                if let Some(slot) = ids.get_mut(at) {
+                    return if *slot == NO_GROUP {
+                        *slot = next;
+                        *len += 1;
+                        (next, true)
+                    } else {
+                        (*slot, false)
+                    };
+                }
+                let mut table = WordTable::<1>::new(*len);
+                for (at, &id) in ids.iter().enumerate().filter(|(_, id)| **id != NO_GROUP) {
+                    let key = [min.wrapping_add(at as i64) as u64];
+                    table.id(&key, WordTable::<1>::hash(&key), id);
+                }
+                *self = KeyMap::One(table, *null);
+                let hash = self.hash(word);
+                self.id(word, hash, next)
+            }
             KeyMap::One(_, null) if word.get(1).is_some_and(|&mask| mask != 0) => match null {
                 Some(id) => (*id, false),
                 None => (*null.insert(next), true),
@@ -229,6 +274,7 @@ impl KeyMap {
             KeyMap::Three(table) => table.room(),
             KeyMap::Wide(table) => table.room(),
             KeyMap::Large(map) => map.capacity() - map.len(),
+            KeyMap::Dense { ids, len, .. } => (*len).max(1 << 10).min(ids.len() - *len),
         }
     }
 
@@ -240,8 +286,33 @@ impl KeyMap {
             KeyMap::Three(table) => table.reserve(more),
             KeyMap::Wide(table) => table.reserve(more),
             KeyMap::Large(map) => map.reserve(more),
+            KeyMap::Dense { .. } => {}
         }
     }
+}
+
+/// The least value and the span of the values of the integer column `key` in the segments of a table of `rows` rows, from the summaries of the segments, when the span is less than four times the rows and less than 2^24, or 2^22 when the scan has conditions (not `whole`), as the array then can be large for the few rows that pass, or `None`. The open rows after the last segment have no summary, and a value out of the span makes [`KeyMap::Dense`] a hash table.
+fn key_span(exec: &Exec<'_>, key: &Expr, rows: usize, whole: bool) -> Option<(i64, usize)> {
+    let place = place_of(exec, key)?;
+    let stored = exec.stored.get(place)?;
+    if !matches!(stored.kind, Kind::Int2 | Kind::Int4 | Kind::Int8) || stored.segments.is_empty() {
+        return None;
+    }
+    let (mut least, mut most) = (i64::MAX, i64::MIN);
+    for column in &stored.segments {
+        let summary = &column.summary;
+        match (&summary.min, &summary.max) {
+            (Some(Bound::Int(a)), Some(Bound::Int(b))) => {
+                least = least.min(i64::try_from(*a).ok()?);
+                most = most.max(i64::try_from(*b).ok()?);
+            }
+            (None, None) => {}
+            _ => return None,
+        }
+    }
+    let span = usize::try_from(most.checked_sub(least)?).ok()?;
+    let most_span = if whole { 1 << 24 } else { 1 << 22 };
+    (span < rows.saturating_mul(4) && span < most_span).then_some((least, span))
 }
 
 /// The physical type that a column of the type `ty` has in a segment.
@@ -4824,7 +4895,14 @@ fn grouped(
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
     // The map starts with room for the groups of a few batches at most. The estimate of the plan can be many times the real number of groups, and a map that is larger than the cache makes each row a miss. After each batch the map grows to the rate of new groups that the scan sees.
     let expected = session_groups(scan.exec.session, query).min(scan.rows).min(START_GROUPS);
-    let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
+    // A key of one integer column whose values span at most four times the rows of the table gets an array in place of a hash table.
+    let mut map = match keys.as_slice() {
+        [key] => match key_span(scan.exec, key, scan.rows, scan.conds.is_empty()) {
+            Some((min, span)) => KeyMap::dense(min, span),
+            None => KeyMap::new(2, expected),
+        },
+        _ => KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected }),
+    };
     // The key of the last row and its group. Rows in the order of a key come in runs of one key, and a run needs one probe of the map.
     let mut last_word = vec![0_u64; keys.len() + 1];
     let mut last_id: Option<u32> = None;
@@ -7405,6 +7483,34 @@ mod tests {
     use std::hash::BuildHasher;
 
     use super::*;
+
+    #[test]
+    fn a_dense_map_of_keys_gives_the_groups_of_a_hash_map_and_takes_a_key_out_of_its_span() {
+        let mut map = KeyMap::dense(-3, 10);
+        let mut next = 0;
+        let mut id = |map: &mut KeyMap, word: [u64; 2]| {
+            let hash = map.hash(&word);
+            let (id, new) = map.id(&word, hash, next);
+            if new {
+                next += 1;
+            }
+            (id, new)
+        };
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, true));
+        assert_eq!(id(&mut map, [7, 0]), (1, true));
+        assert_eq!(id(&mut map, [0, 1]), (2, true));
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, false));
+        assert_eq!(id(&mut map, [0, 1]), (2, false));
+        assert!(matches!(map, KeyMap::Dense { len: 2, .. }));
+        // 8 is out of the span from -3 to 7, so the map becomes a hash table with the same groups.
+        assert_eq!(id(&mut map, [8, 0]), (3, true));
+        assert!(matches!(map, KeyMap::One(..)));
+        assert_eq!(id(&mut map, [7, 0]), (1, false));
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, false));
+        assert_eq!(id(&mut map, [0, 1]), (2, false));
+        assert_eq!(id(&mut map, [(-4_i64) as u64, 0]), (4, true));
+        assert_eq!(id(&mut map, [8, 0]), (3, false));
+    }
 
     #[test]
     fn the_runs_of_equal_keys_start_at_each_change_of_the_words() {
