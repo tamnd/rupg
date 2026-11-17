@@ -31,6 +31,9 @@ const NONE: u32 = u32::MAX;
 /// The least number of rows of the table that [`run`] reads after the other tables when no table has a condition with a subquery.
 const DEFER_ROWS: usize = 1 << 16;
 
+/// The most integers of a subquery of `x IN (SELECT ...)` that [`run`] tests as a condition `x = ANY (array)` of the scan of the table of `x`, and not as a set on the rows that the scan gives.
+const SEMI_ANY: usize = 4096;
+
 /// The rows of a query with groups, or of a query with `ORDER BY` as [`sorted_rows`] tells, whose tables join through keys that are unique on one side, or `None` when the query does not have this form.
 ///
 /// # Errors
@@ -100,17 +103,29 @@ pub(crate) fn run(
                 .iter()
                 .copied()
                 .partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
-            own.extend(filters.iter());
-            own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
             let mut keys = plan.keys[index].clone();
             let mut sets = Vec::with_capacity(semi.len());
+            // A subquery of at most [`SEMI_ANY`] integers, as the 57 orders of TPC-H Q18 at SF1, is a condition `x = ANY (array)` of the scan, which the zones of `x` test before the scan reads the other columns.
+            let mut anys = Vec::new();
             for cond in semi {
-                let Some((column, set)) = semi_set(cond, index, params, session, cache)? else {
+                let Some((column, set, inner)) = semi_set(cond, index, params, session, cache)?
+                else {
                     return Ok(None);
                 };
+                if set.len() <= SEMI_ANY {
+                    let mut ints: Vec<i64> = set.iter().copied().collect();
+                    ints.sort_unstable();
+                    if let Some(any) = crate::lift::any_of(inner, ints) {
+                        anys.push(any);
+                        continue;
+                    }
+                }
                 sets.push((keys.len(), set));
                 keys.push(column);
             }
+            own.extend(anys.iter());
+            own.extend(filters.iter());
+            own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
             match super::selected(relation, &own, &keys, params, session, cache, true)? {
                 Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
                     if !sets.is_empty() {
@@ -560,7 +575,7 @@ fn left_join(
     Ok(Some((kept, selected, pos)))
 }
 
-/// The column `x` of the table `relation` and the integers of the subquery of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
+/// The column `x` of the table `relation`, the integers of the subquery and the expression of `x` of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
 ///
 /// # Errors
 ///
@@ -571,7 +586,7 @@ fn semi_set(
     params: &[Value],
     session: &dyn Session,
     cache: &Cache,
-) -> Result<Option<(usize, FxSet<i64>)>> {
+) -> Result<Option<(usize, FxSet<i64>, Expr)>> {
     const INTEGERS: [u32; 3] = [oid::INT2, oid::INT4, oid::INT8];
     let ExprKind::SubLink(sub) = &cond.kind else { return Ok(None) };
     let Some(ExprKind::Func(f)) = sub.test.as_ref().map(|t| &t.kind) else { return Ok(None) };
@@ -579,11 +594,11 @@ fn semi_set(
         ExprKind::Var(var)
             if var.levels_up == 0 && var.relation == relation && INTEGERS.contains(&arg.ty) =>
         {
-            usize::try_from(var.attnum - 1).ok()
+            usize::try_from(var.attnum - 1).ok().map(|column| (column, arg))
         }
         _ => None,
     });
-    let Some(column) = column else { return Ok(None) };
+    let Some((column, arg)) = column else { return Ok(None) };
     match sub.query.targets.iter().find(|t| !t.junk) {
         Some(target) if INTEGERS.contains(&target.expr.ty) => {}
         _ => return Ok(None),
@@ -600,7 +615,7 @@ fn semi_set(
             _ => return Ok(None),
         };
     }
-    Ok(Some((column, set)))
+    Ok(Some((column, set, arg.clone())))
 }
 
 /// Keeps the items of `items` whose place in `keep` is true.
@@ -690,7 +705,7 @@ impl KeySet {
     }
 }
 
-/// The conditions `column = ANY (array)` of the table `index`, which is read after the other tables of `tables`: for each `=` of the table with a table that keeps fewer rows than the relation has, the keys of the rows that it keeps, which a row of the table must have to join. The conditions with the fewest keys come first. An `=` with more than 65536 keys gives no condition, as the test of a key then costs more than it saves, except when the keys make a bitmap of [`rupg_summary::zone::Test::Span`], whose test of a key reads one bit.
+/// The conditions `column = ANY (array)` of the table `index`, which is read after the other tables of `tables`: for each `=` of the table with a table that keeps fewer rows than the relation has, the keys of the rows that it keeps, which a row of the table must have to join. The conditions with the fewest keys come first. An `=` with more than 65536 keys gives no condition, as the test of a key then costs more than it saves, except when the keys make a bitmap of [`rupg_summary::zone::Test::Span`], whose test of a key reads one bit, and the table keeps at most a quarter of the rows of its relation, so that the test removes most rows.
 fn key_filters(
     index: usize,
     plan: &reduce::Plan<'_>,
@@ -717,10 +732,11 @@ fn key_filters(
         keys.sort_unstable();
         keys.dedup();
         if keys.len() > MOST
-            && !keys
-                .first()
-                .zip(keys.last())
-                .is_some_and(|(&least, &most)| spans(least, most, keys.len()))
+            && (source.places.len().saturating_mul(4) > source.rows
+                || !keys
+                    .first()
+                    .zip(keys.last())
+                    .is_some_and(|(&least, &most)| spans(least, most, keys.len())))
         {
             continue;
         }
