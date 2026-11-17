@@ -153,6 +153,13 @@ enum KeyMap {
     Three(WordTable<4>),
     Wide(WordTable<8>),
     Large(FxMap<Box<[u64]>, u32>),
+    /// A key of one integer column whose values span few integers, as the summaries of its segments tell: the group of each value is at the place of the value minus `min`, so a row reads one slot of an array in the order of the keys and computes no hash, as the `l_orderkey` of `lineitem` in TPC-H Q18. A key out of the span makes the map [`KeyMap::One`].
+    Dense {
+        min: i64,
+        ids: Vec<u32>,
+        null: Option<u32>,
+        len: usize,
+    },
 }
 
 /// The words of a key of 4 to 7 words and its mask, with words of 0 after them.
@@ -175,6 +182,16 @@ impl KeyMap {
         }
     }
 
+    /// A map for a key of one integer column whose values are from `min` to `min + span`.
+    fn dense(min: i64, span: usize) -> KeyMap {
+        KeyMap::Dense {
+            min,
+            ids: rupg_platform::alloc::large_vec(span + 1, NO_GROUP),
+            null: None,
+            len: 0,
+        }
+    }
+
     /// The hash of the key `word` for [`KeyMap::id`], or 0 for a map that finds its own.
     #[inline]
     fn hash(&self, word: &[u64]) -> u64 {
@@ -184,6 +201,7 @@ impl KeyMap {
             KeyMap::Three(_) => WordTable::<4>::hash(&[word[0], word[1], word[2], word[3]]),
             KeyMap::Wide(_) => WordTable::<8>::hash(&wide(word)),
             KeyMap::Large(_) => 0,
+            KeyMap::Dense { .. } => 0,
         }
     }
 
@@ -195,7 +213,7 @@ impl KeyMap {
             KeyMap::Two(table) => table.prefetch(hash),
             KeyMap::Three(table) => table.prefetch(hash),
             KeyMap::Wide(table) => table.prefetch(hash),
-            KeyMap::Large(_) => {}
+            KeyMap::Large(_) | KeyMap::Dense { .. } => {}
         }
     }
 
@@ -203,6 +221,33 @@ impl KeyMap {
     #[inline]
     fn id(&mut self, word: &[u64], hash: u64, next: u32) -> (u32, bool) {
         match self {
+            KeyMap::Dense { null, .. } if word.get(1).is_some_and(|&mask| mask != 0) => {
+                match null {
+                    Some(id) => (*id, false),
+                    None => (*null.insert(next), true),
+                }
+            }
+            KeyMap::Dense { min, ids, null, len } => {
+                let at = usize::try_from((word[0] as i64).wrapping_sub(*min) as u64)
+                    .unwrap_or(usize::MAX);
+                if let Some(slot) = ids.get_mut(at) {
+                    return if *slot == NO_GROUP {
+                        *slot = next;
+                        *len += 1;
+                        (next, true)
+                    } else {
+                        (*slot, false)
+                    };
+                }
+                let mut table = WordTable::<1>::new(*len);
+                for (at, &id) in ids.iter().enumerate().filter(|(_, id)| **id != NO_GROUP) {
+                    let key = [min.wrapping_add(at as i64) as u64];
+                    table.id(&key, WordTable::<1>::hash(&key), id);
+                }
+                *self = KeyMap::One(table, *null);
+                let hash = self.hash(word);
+                self.id(word, hash, next)
+            }
             KeyMap::One(_, null) if word.get(1).is_some_and(|&mask| mask != 0) => match null {
                 Some(id) => (*id, false),
                 None => (*null.insert(next), true),
@@ -229,6 +274,7 @@ impl KeyMap {
             KeyMap::Three(table) => table.room(),
             KeyMap::Wide(table) => table.room(),
             KeyMap::Large(map) => map.capacity() - map.len(),
+            KeyMap::Dense { ids, len, .. } => (*len).max(1 << 10).min(ids.len() - *len),
         }
     }
 
@@ -240,8 +286,33 @@ impl KeyMap {
             KeyMap::Three(table) => table.reserve(more),
             KeyMap::Wide(table) => table.reserve(more),
             KeyMap::Large(map) => map.reserve(more),
+            KeyMap::Dense { .. } => {}
         }
     }
+}
+
+/// The least value and the span of the values of the integer column `key` in the segments of a table of `rows` rows, from the summaries of the segments, when the span is less than four times the rows and less than 2^24, or 2^22 when the scan has conditions (not `whole`), as the array then can be large for the few rows that pass, or `None`. The open rows after the last segment have no summary, and a value out of the span makes [`KeyMap::Dense`] a hash table.
+fn key_span(exec: &Exec<'_>, key: &Expr, rows: usize, whole: bool) -> Option<(i64, usize)> {
+    let place = place_of(exec, key)?;
+    let stored = exec.stored.get(place)?;
+    if !matches!(stored.kind, Kind::Int2 | Kind::Int4 | Kind::Int8) || stored.segments.is_empty() {
+        return None;
+    }
+    let (mut least, mut most) = (i64::MAX, i64::MIN);
+    for column in &stored.segments {
+        let summary = &column.summary;
+        match (&summary.min, &summary.max) {
+            (Some(Bound::Int(a)), Some(Bound::Int(b))) => {
+                least = least.min(i64::try_from(*a).ok()?);
+                most = most.max(i64::try_from(*b).ok()?);
+            }
+            (None, None) => {}
+            _ => return None,
+        }
+    }
+    let span = usize::try_from(most.checked_sub(least)?).ok()?;
+    let most_span = if whole { 1 << 24 } else { 1 << 22 };
+    (span < rows.saturating_mul(4) && span < most_span).then_some((least, span))
 }
 
 /// The physical type that a column of the type `ty` has in a segment.
@@ -581,6 +652,28 @@ impl Col {
             Data::Const(v) => int_of(v).map_or(0, |v| v as u64),
             Data::Values(_) => return None,
         })
+    }
+}
+
+/// The first row of each run of rows with the same words in `words`, which has `width` words for each row, into `starts`. A key of one column has two words, which the loop compares with no call of `memcmp`, as the compare of two slices makes one for each row.
+fn runs_of(words: &[u64], width: usize, starts: &mut Vec<usize>) {
+    if width == 2 {
+        let mut before = None;
+        for (i, &[a, b]) in words.as_chunks::<2>().0.iter().enumerate() {
+            let w = (a, b);
+            if before != Some(w) {
+                starts.push(i);
+            }
+            before = Some(w);
+        }
+        return;
+    }
+    let mut before: Option<&[u64]> = None;
+    for (i, w) in words.chunks_exact(width).enumerate() {
+        if before.is_none_or(|b| b.iter().zip(w).any(|(x, y)| x != y)) {
+            starts.push(i);
+        }
+        before = Some(w);
     }
 }
 
@@ -3441,6 +3534,63 @@ pub(crate) fn selected(
     cache: &Cache,
     small: bool,
 ) -> Result<Option<Selected>> {
+    let mut out: Option<Selected> = None;
+    let mut integers = true;
+    let scanned = scan_table(
+        relation,
+        conds,
+        keys,
+        params,
+        session,
+        cache,
+        small,
+        &mut |rows, exec, batch, sel| {
+            // The vectors have room for each row of the table, so that they do not grow and copy their values. The pages of the room that no row fills are not touched.
+            let out = out.get_or_insert_with(|| Selected {
+                rows,
+                places: Vec::with_capacity(rows),
+                keys: (0..keys.len()).map(|_| Vec::with_capacity(rows)).collect(),
+            });
+            let base = batch.segment * ROWS + batch.vector * VECTOR;
+            out.places.extend(sel.iter().map(|&i| base + i as usize));
+            for (values, &key) in out.keys.iter_mut().zip(keys) {
+                let col = exec.var(batch, key, exec.types[key], sel)?;
+                let Data::Int(ints) = &col.data else {
+                    integers = false;
+                    return Ok(false);
+                };
+                values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
+            }
+            Ok(true)
+        },
+    )?;
+    let Some(rows) = scanned.filter(|_| integers) else { return Ok(None) };
+    Ok(Some(out.unwrap_or_else(|| Selected {
+        rows,
+        places: Vec::new(),
+        keys: vec![Vec::new(); keys.len()],
+    })))
+}
+
+/// A call with the number of rows of the table and the rows of a vector that pass the conditions, which gives false to stop the scan.
+type TableEach<'a> = dyn FnMut(usize, &mut Exec<'_>, &mut Batch, &[u32]) -> Result<bool> + 'a;
+
+/// Calls `each` with the rows of each vector of the table of `relation` that pass the conditions `conds`, where the scan reads the columns `keys` and the columns of the conditions. The number of rows of the table, or `None` when the vectors cannot read the table or test the conditions.
+///
+/// # Errors
+///
+/// The error of a condition or of `each`.
+#[allow(clippy::too_many_arguments)]
+fn scan_table(
+    relation: &rupg_analyze::Relation,
+    conds: &[&Expr],
+    keys: &[usize],
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    small: bool,
+    each: &mut TableEach<'_>,
+) -> Result<Option<usize>> {
     let types: Vec<u32> = relation.columns.iter().map(|c| c.ty).collect();
     let mut used = vec![false; types.len()];
     for &key in keys {
@@ -3526,40 +3676,16 @@ pub(crate) fn selected(
     let segments = rows.div_ceil(ROWS);
     let mut scan =
         Scan { exec: &mut exec, conds, segments, rows, open: true, answered: Vec::new() };
-    // The vectors have room for each row of the table, so that they do not grow and copy their values. The pages of the room that no row fills are not touched.
-    let mut out = Selected {
-        rows,
-        places: Vec::with_capacity(rows),
-        keys: (0..keys.len()).map(|_| Vec::with_capacity(rows)).collect(),
-    };
-    let mut integers = true;
-    scan.each(&mut |exec, batch, sel| {
-        let base = batch.segment * ROWS + batch.vector * VECTOR;
-        out.places.extend(sel.iter().map(|&i| base + i as usize));
-        for (values, &key) in out.keys.iter_mut().zip(keys) {
-            let col = exec.var(batch, key, exec.types[key], sel)?;
-            let Data::Int(ints) = &col.data else {
-                integers = false;
-                return Ok(false);
-            };
-            values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
-        }
-        Ok(true)
-    })?;
-    Ok(integers.then_some(out))
+    scan.each(&mut |exec, batch, sel| each(rows, exec, batch, sel))?;
+    Ok(Some(rows))
 }
 
-/// For a query of one table whose targets are integer columns of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: for each target, the value of its column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
-///
-/// # Errors
-///
-/// An error of a condition of `WHERE` or of a read of the table.
-pub(crate) fn column_keys(
-    query: &Query,
+/// For a query of one table whose targets are integer columns of the table, with no groups, `DISTINCT`, `ORDER BY`, `LIMIT` or `OFFSET`: the table, the conditions of `WHERE`, and the column of each target. `None` when the vectors cannot run the query, and then the row engine runs it.
+fn table_query<'q>(
+    query: &'q Query,
     session: &dyn Session,
-    cache: &Cache,
-) -> Result<Option<Vec<Vec<Option<i64>>>>> {
-    let [relation] = query.relations.as_slice() else { return Ok(None) };
+) -> Option<(&'q rupg_analyze::Relation, Vec<&'q Expr>, Vec<usize>)> {
+    let [relation] = query.relations.as_slice() else { return None };
     if !matches!(query.from.as_slice(), [FromItem::Relation(0)])
         || relation.subquery.is_some()
         || relation.function.is_some()
@@ -3584,16 +3710,12 @@ pub(crate) fn column_keys(
         || !query.grouping_sets.is_empty()
         || query.has_target_srfs()
     {
-        return Ok(None);
+        return None;
     }
     let mut columns = Vec::with_capacity(query.targets.len());
     for target in &query.targets {
-        let ExprKind::Var(var) = &target.expr.kind else { return Ok(None) };
-        let Some(column) = usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0)
-        else {
-            return Ok(None);
-        };
-        columns.push(column);
+        let ExprKind::Var(var) = &target.expr.kind else { return None };
+        columns.push(usize::try_from(var.attnum - 1).ok().filter(|_| var.levels_up == 0)?);
     }
     let mut conds = Vec::new();
     if let Some(filter) = &query.filter {
@@ -3607,20 +3729,77 @@ pub(crate) fn column_keys(
             _ => None,
         });
         if other.is_some() {
-            return Ok(None);
+            return None;
         }
     }
-    let Some(catalog) = session.catalog() else { return Ok(None) };
-    let Some(table) = catalog.relation(relation.oid) else { return Ok(None) };
+    let catalog = session.catalog()?;
+    let table = catalog.relation(relation.oid)?;
     if table.kind != rupg_catalog::RelKind::Table
         || !catalog.all_inheritors(relation.oid).is_empty()
     {
-        return Ok(None);
+        return None;
     }
+    Some((relation, conds, columns))
+}
+
+/// For a query of [`table_query`]: for each target, the value of its column for each row that passes `WHERE`, or `None` for a null. The vectors test `WHERE` with [`selected`], so the rows do not get values. `None` when the scan cannot run so, and then the row engine runs the query.
+///
+/// # Errors
+///
+/// An error of a condition of `WHERE` or of a read of the table.
+pub(crate) fn column_keys(
+    query: &Query,
+    session: &dyn Session,
+    cache: &Cache,
+) -> Result<Option<Vec<Vec<Option<i64>>>>> {
+    let Some((relation, conds, columns)) = table_query(query, session) else { return Ok(None) };
     let Some(found) = selected(relation, &conds, &columns, &[], session, cache, false)? else {
         return Ok(None);
     };
     Ok(Some(found.keys))
+}
+
+/// A call with the number of rows of a table and the values of two columns for the rows of a vector, where `None` is a null.
+type PairEach<'a> = dyn FnMut(usize, &[Option<i64>], &[Option<i64>]) + 'a;
+
+/// For a query of [`table_query`] with two targets: calls `each` with the number of rows of the table and the values of the two targets for the rows of each vector that pass `WHERE`, where `None` is a null. The values of all the rows are not kept, so a fold of them reads each value once, while it is in the cache. False when the scan cannot run so, and then the caller drops what `each` got and the row engine runs the query.
+///
+/// # Errors
+///
+/// An error of a condition of `WHERE` or of a read of the table.
+pub(crate) fn column_pairs(
+    query: &Query,
+    session: &dyn Session,
+    cache: &Cache,
+    each: &mut PairEach<'_>,
+) -> Result<bool> {
+    let Some((relation, conds, columns)) = table_query(query, session) else { return Ok(false) };
+    let [first, second] = columns[..] else { return Ok(false) };
+    let mut pair = [Vec::with_capacity(VECTOR), Vec::with_capacity(VECTOR)];
+    let mut integers = true;
+    let scanned = scan_table(
+        relation,
+        &conds,
+        &columns,
+        &[],
+        session,
+        cache,
+        false,
+        &mut |rows, exec, batch, sel| {
+            for (values, key) in pair.iter_mut().zip([first, second]) {
+                let col = exec.var(batch, key, exec.types[key], sel)?;
+                let Data::Int(ints) = &col.data else {
+                    integers = false;
+                    return Ok(false);
+                };
+                values.clear();
+                values.extend(ints.iter().enumerate().map(|(i, &v)| (!col.null(i)).then_some(v)));
+            }
+            each(rows, &pair[0], &pair[1]);
+            Ok(true)
+        },
+    )?;
+    Ok(scanned.is_some() && integers)
 }
 
 /// For a query with no groups whose targets are columns of the table, with `ORDER BY` and `LIMIT` and no `DISTINCT`: the column of each target, and the bound of the sort, which must allow `bound * 2` in an `int` as `tuplesort_set_bound` does.
@@ -4256,7 +4435,20 @@ fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i
     results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
 }
 
-/// The integers of the groups by which `ORDER BY` with `LIMIT` sorts them: the count of [`top_key`] or the key of [`key_top`] of each group, true for a descending order, the kind of the integers, and the bound of the sort.
+/// The sums of the groups for the call `agg` of [`top_key`], as integers in the order of the results, for a call of `sum` of integers or of `numeric` values of one scale. `None` for another call, for a group with no rows, whose sum is null, or for a sum out of the range of `bigint`.
+fn top_sums(results: &Results<'_>, agg: *const Aggref) -> Option<Vec<i64>> {
+    let call = results.calls.iter().find(|c| std::ptr::eq(c.key, agg))?;
+    let States::Sum(states) = &call.states else { return None };
+    if !matches!(
+        call.method,
+        Method::SumInt | Method::Int128 { avg: false } | Method::Dec { avg: false, .. }
+    ) {
+        return None;
+    }
+    states.iter().map(|&(n, sum)| if n == 0 { None } else { i64::try_from(sum).ok() }).collect()
+}
+
+/// The integers of the groups by which `ORDER BY` with `LIMIT` sorts them:the count of [`top_key`] or the key of [`key_top`] of each group, true for a descending order, the kind of the integers, and the bound of the sort.
 type Ranked<'a> = (&'a [i64], bool, sort::Radix, usize);
 
 /// The groups of the rows of `ORDER BY` of one count or one key with `LIMIT`, after `OFFSET`, from [`Ranked`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. With `heap`, `order` has only the groups that can change the bounded heap of the sort of more than `2 * bound` groups, and the sort is that heap. The sort gives one order for each list of integers, so the rows of the groups are not read. `None` when the plan has a scan in the order of an index.
@@ -4802,7 +4994,14 @@ fn grouped(
     let keys: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
     // The map starts with room for the groups of a few batches at most. The estimate of the plan can be many times the real number of groups, and a map that is larger than the cache makes each row a miss. After each batch the map grows to the rate of new groups that the scan sees.
     let expected = session_groups(scan.exec.session, query).min(scan.rows).min(START_GROUPS);
-    let mut map = KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected });
+    // A key of one integer column whose values span at most four times the rows of the table gets an array in place of a hash table.
+    let mut map = match keys.as_slice() {
+        [key] => match key_span(scan.exec, key, scan.rows, scan.conds.is_empty()) {
+            Some((min, span)) => KeyMap::dense(min, span),
+            None => KeyMap::new(2, expected),
+        },
+        _ => KeyMap::new(keys.len() + 1, if keys.is_empty() { 0 } else { expected }),
+    };
     // The key of the last row and its group. Rows in the order of a key come in runs of one key, and a run needs one probe of the map.
     let mut last_word = vec![0_u64; keys.len() + 1];
     let mut last_id: Option<u32> = None;
@@ -5145,13 +5344,7 @@ fn grouped(
                     }
                     // A row with the same words as the row before it is in the same group, so only the first row of each run of equal words gets a hash and a probe of the map. The rows of a table in the order of its keys make long runs.
                     starts.clear();
-                    let mut before: Option<&[u64]> = None;
-                    for (i, w) in words.chunks_exact(width).enumerate() {
-                        if before != Some(w) {
-                            starts.push(i);
-                        }
-                        before = Some(w);
-                    }
+                    runs_of(&words, width, &mut starts);
                     row_hashes.clear();
                     row_hashes.extend(
                         starts.iter().map(|&i| map.hash(&words[i * width..(i + 1) * width])),
@@ -5572,10 +5765,19 @@ fn grouped(
         _ => GroupKeys::Values(&key_values),
     };
     let key_values = key_top.and_then(|(k, ..)| key_ints(&keys_of_groups, k));
-    let ranked: Option<Ranked<'_>> = match (top, key_top, &key_values) {
-        (Some((agg, descending, bound)), ..) => {
-            top_counts(&results, agg).map(|counts| (counts, descending, sort::Radix::Signed, bound))
+    // A sum of `numeric` does not sort with the radix sort of [`count_top`] for few groups, so the sums rank the groups only for more than `2 * bound` groups, where the sort is the bounded heap.
+    let sums = match top {
+        Some((agg, _, bound))
+            if groups > bound.saturating_mul(2) && top_counts(&results, agg).is_none() =>
+        {
+            top_sums(&results, agg)
         }
+        _ => None,
+    };
+    let ranked: Option<Ranked<'_>> = match (top, key_top, &key_values) {
+        (Some((agg, descending, bound)), ..) => top_counts(&results, agg)
+            .or(sums.as_deref())
+            .map(|counts| (counts, descending, sort::Radix::Signed, bound)),
         (None, Some((_, descending, radix, bound)), Some(values)) => {
             Some((values.as_slice(), descending, radix, bound))
         }
@@ -6944,6 +7146,57 @@ enum Place<'d> {
     Groups(Vec<u64>),
 }
 
+/// The order of the groups by the sort of their keys when the first key is a key of integers and the sort of a different key calls its function. A sort of the numbers of the first key gives the order, and only the groups with the same first key read the values of all their keys and compare them as [`sort::Keys::compare`] does. `None` when the first key is not a key of integers.
+fn lead_order(
+    session: &dyn Session,
+    words: &[u64],
+    shapes: &[Shape],
+    dicts: &[Dict],
+    (k, descending, nulls_first): (usize, bool, bool),
+    keys_of: &sort::Keys<'_>,
+) -> Result<Option<Vec<usize>>> {
+    if !matches!(shapes.get(k), Some(Shape::Int(_) | Shape::Dec(_))) {
+        return Ok(None);
+    }
+    let width = shapes.len() + 1;
+    let mut items: Vec<(u128, usize)> = words
+        .chunks_exact(width)
+        .enumerate()
+        .map(|(g, row)| {
+            let null = row[width - 1] >> k & 1 == 1;
+            (key_number(null, row[k] ^ (1 << 63), descending, nulls_first), g)
+        })
+        .collect();
+    items.sort_unstable();
+    let mut order = Vec::with_capacity(items.len());
+    let mut start = 0;
+    while start < items.len() {
+        crate::interrupt(session, order.len())?;
+        let lead = items[start].0;
+        let end =
+            items[start..].iter().position(|i| i.0 != lead).map_or(items.len(), |n| start + n);
+        if end - start == 1 {
+            order.push(items[start].1);
+        } else {
+            // The groups with the same first key, in the order of the groups, compared as the sort of all the groups compares them.
+            let run: Vec<usize> = items[start..end].iter().map(|i| i.1).collect();
+            let mut some = Vec::with_capacity(run.len() * width);
+            for &g in &run {
+                some.extend_from_slice(&words[g * width..(g + 1) * width]);
+            }
+            let values = values_of_words(&some, shapes, dicts);
+            let keys: Vec<&[Value]> = values.chunks(shapes.len()).collect();
+            let mut places: Vec<usize> = (0..run.len()).collect();
+            sort::qsort(&mut places, &mut |a, b| {
+                Ok(keys_of.compare(keys[*a], keys[*b])?.then(a.cmp(b)))
+            })?;
+            order.extend(places.iter().map(|&p| run[p]));
+        }
+        start = end;
+    }
+    Ok(Some(order))
+}
+
 /// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the places of the codes of the groups in the order of their bytes for a few groups. `None` for a key of codes with no text.
 fn word_order(
     tasks: Option<&dyn Tasks>,
@@ -7330,9 +7583,15 @@ fn group_order(
             .enumerate()
             .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
             .collect();
-        if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
+        let keys_of = sort::Keys::new(&list, &types, session)?;
+        if let Some(natives) = keys_of.natives()
             && let Some(order) =
                 word_order(session.tasks(), words, shapes, dicts, &natives, groups, want)
+        {
+            return Ok(order);
+        }
+        if let Some(lead) = keys_of.lead()
+            && let Some(order) = lead_order(session, words, shapes, dicts, lead, &keys_of)?
         {
             return Ok(order);
         }
@@ -7389,6 +7648,47 @@ mod tests {
     use std::hash::BuildHasher;
 
     use super::*;
+
+    #[test]
+    fn a_dense_map_of_keys_gives_the_groups_of_a_hash_map_and_takes_a_key_out_of_its_span() {
+        let mut map = KeyMap::dense(-3, 10);
+        let mut next = 0;
+        let mut id = |map: &mut KeyMap, word: [u64; 2]| {
+            let hash = map.hash(&word);
+            let (id, new) = map.id(&word, hash, next);
+            if new {
+                next += 1;
+            }
+            (id, new)
+        };
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, true));
+        assert_eq!(id(&mut map, [7, 0]), (1, true));
+        assert_eq!(id(&mut map, [0, 1]), (2, true));
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, false));
+        assert_eq!(id(&mut map, [0, 1]), (2, false));
+        assert!(matches!(map, KeyMap::Dense { len: 2, .. }));
+        // 8 is out of the span from -3 to 7, so the map becomes a hash table with the same groups.
+        assert_eq!(id(&mut map, [8, 0]), (3, true));
+        assert!(matches!(map, KeyMap::One(..)));
+        assert_eq!(id(&mut map, [7, 0]), (1, false));
+        assert_eq!(id(&mut map, [(-3_i64) as u64, 0]), (0, false));
+        assert_eq!(id(&mut map, [0, 1]), (2, false));
+        assert_eq!(id(&mut map, [(-4_i64) as u64, 0]), (4, true));
+        assert_eq!(id(&mut map, [8, 0]), (3, false));
+    }
+
+    #[test]
+    fn the_runs_of_equal_keys_start_at_each_change_of_the_words() {
+        let mut starts = Vec::new();
+        runs_of(&[4, 0, 4, 0, 5, 0, 5, 1, 5, 1, 4, 0], 2, &mut starts);
+        assert_eq!(starts, [0, 2, 3, 5]);
+        starts.clear();
+        runs_of(&[1, 2, 0, 1, 2, 0, 1, 3, 0, 7, 3, 0], 3, &mut starts);
+        assert_eq!(starts, [0, 2, 3]);
+        starts.clear();
+        runs_of(&[], 2, &mut starts);
+        assert!(starts.is_empty());
+    }
 
     #[test]
     fn a_numeric_key_of_a_group_gives_its_value_back_from_its_word() {

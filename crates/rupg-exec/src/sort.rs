@@ -409,6 +409,8 @@ impl<'a> Keys<'a> {
             if let Some(descending) = key.descending {
                 let order = match (x, y) {
                     (Value::Text(x), Value::Text(y)) => Some(x.as_bytes().cmp(y.as_bytes())),
+                    // `numeric_lt` and `numeric_gt` give the order of `cmp_numerics`.
+                    (Value::Numeric(x), Value::Numeric(y)) => Some(x.compare(y)),
                     _ => int(x).zip(int(y)).map(|(x, y)| x.cmp(&y)),
                 };
                 if let Some(order) = order {

@@ -16,6 +16,7 @@ use rupg_column::segment::Kind;
 use rupg_column::stored::{Stored, VECTOR};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
+use rupg_summary::zone::{in_span, spans};
 use rupg_types::{Value, oid};
 
 use super::{
@@ -26,6 +27,12 @@ use crate::{Cache, reduce, scan, sort};
 
 /// No row.
 const NONE: u32 = u32::MAX;
+
+/// The least number of rows of the table that [`run`] reads after the other tables when no table has a condition with a subquery.
+const DEFER_ROWS: usize = 1 << 16;
+
+/// The most integers of a subquery of `x IN (SELECT ...)` that [`run`] tests as a condition `x = ANY (array)` of the scan of the table of `x`, and not as a set on the rows that the scan gives.
+const SEMI_ANY: usize = 4096;
 
 /// The rows of a query with groups, or of a query with `ORDER BY` as [`sorted_rows`] tells, whose tables join through keys that are unique on one side, or `None` when the query does not have this form.
 ///
@@ -61,8 +68,22 @@ pub(crate) fn run(
     let Some(plan) = reduce::plan(query, &all, session) else { return Ok(None) };
     let width = query.relations.len();
     // A table with a condition with a subquery, as `lineitem l1` of TPC-H Q21, is read after the other tables. The other tables first lose the rows that join no row of a table next to them, as [`semi_reduce`] gives them, and then the keys of their rows select the rows of the table before its subqueries run, as [`key_filters`] gives them. So the subqueries run only on the rows that can join, as in a plan of PostgreSQL that joins the tables before it tests the subqueries.
-    let late: Vec<bool> =
+    let mut late: Vec<bool> =
         (0..width).map(|i| links.iter().any(|c| reduce::relations_of(c) == [i])).collect();
+    // When no table has a condition with a subquery, the table with the most rows, as `lineitem` of TPC-H Q5, is read after the other tables in the same way. So the keys of the rows that the other tables keep select its rows, and the scan makes the keys of fewer rows and the join looks up fewer rows. A table of fewer than [`DEFER_ROWS`] rows is read with the others.
+    if width > 1 && !late.contains(&true) {
+        let mut most = (0, 0);
+        for (index, relation) in query.relations.iter().enumerate() {
+            if let Some((rows, _)) = session.table_small_columns(relation.oid, &[])?
+                && rows > most.0
+            {
+                most = (rows, index);
+            }
+        }
+        if most.0 >= DEFER_ROWS {
+            late[most.1] = true;
+        }
+    }
     let mut tables: Vec<Option<Selected>> = (0..width).map(|_| None).collect();
     for pass in [false, true] {
         if pass {
@@ -82,17 +103,29 @@ pub(crate) fn run(
                 .iter()
                 .copied()
                 .partition(|c| matches!(c.kind, ExprKind::SubLink(_)));
-            own.extend(filters.iter());
-            own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
             let mut keys = plan.keys[index].clone();
             let mut sets = Vec::with_capacity(semi.len());
+            // A subquery of at most [`SEMI_ANY`] integers, as the 57 orders of TPC-H Q18 at SF1, is a condition `x = ANY (array)` of the scan, which the zones of `x` test before the scan reads the other columns.
+            let mut anys = Vec::new();
             for cond in semi {
-                let Some((column, set)) = semi_set(cond, index, params, session, cache)? else {
+                let Some((column, set, inner)) = semi_set(cond, index, params, session, cache)?
+                else {
                     return Ok(None);
                 };
+                if set.len() <= SEMI_ANY {
+                    let mut ints: Vec<i64> = set.iter().copied().collect();
+                    ints.sort_unstable();
+                    if let Some(any) = crate::lift::any_of(inner, ints) {
+                        anys.push(any);
+                        continue;
+                    }
+                }
                 sets.push((keys.len(), set));
                 keys.push(column);
             }
+            own.extend(anys.iter());
+            own.extend(filters.iter());
+            own.extend(links.iter().filter(|c| reduce::relations_of(c) == [index]));
             match super::selected(relation, &own, &keys, params, session, cache, true)? {
                 Some(mut found) if u32::try_from(found.places.len()).is_ok_and(|n| n < NONE) => {
                     if !sets.is_empty() {
@@ -542,7 +575,7 @@ fn left_join(
     Ok(Some((kept, selected, pos)))
 }
 
-/// The column `x` of the table `relation` and the integers of the subquery of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
+/// The column `x` of the table `relation`, the integers of the subquery and the expression of `x` of a condition `x IN (SELECT ...)` that [`reduce::semi_join`] tests on the rows of the table, or `None` when `x` is not an integer column of the table or the subquery does not give integers. A row passes when its `x` is one of the integers: a null `x`, or an `x` that is not in the subquery, makes the condition null or false, and `WHERE` then drops the row.
 ///
 /// # Errors
 ///
@@ -553,7 +586,7 @@ fn semi_set(
     params: &[Value],
     session: &dyn Session,
     cache: &Cache,
-) -> Result<Option<(usize, FxSet<i64>)>> {
+) -> Result<Option<(usize, FxSet<i64>, Expr)>> {
     const INTEGERS: [u32; 3] = [oid::INT2, oid::INT4, oid::INT8];
     let ExprKind::SubLink(sub) = &cond.kind else { return Ok(None) };
     let Some(ExprKind::Func(f)) = sub.test.as_ref().map(|t| &t.kind) else { return Ok(None) };
@@ -561,11 +594,11 @@ fn semi_set(
         ExprKind::Var(var)
             if var.levels_up == 0 && var.relation == relation && INTEGERS.contains(&arg.ty) =>
         {
-            usize::try_from(var.attnum - 1).ok()
+            usize::try_from(var.attnum - 1).ok().map(|column| (column, arg))
         }
         _ => None,
     });
-    let Some(column) = column else { return Ok(None) };
+    let Some((column, arg)) = column else { return Ok(None) };
     match sub.query.targets.iter().find(|t| !t.junk) {
         Some(target) if INTEGERS.contains(&target.expr.ty) => {}
         _ => return Ok(None),
@@ -582,7 +615,7 @@ fn semi_set(
             _ => return Ok(None),
         };
     }
-    Ok(Some((column, set)))
+    Ok(Some((column, set, arg.clone())))
 }
 
 /// Keeps the items of `items` whose place in `keep` is true.
@@ -595,28 +628,38 @@ fn retain<T>(items: &mut Vec<T>, keep: &[bool]) {
 }
 
 /// Removes from the rows of each table that is not `late` the rows whose key of an `=` of `edges` with another table that is not `late` is not the key of a row of that table, until no row goes. The joins are inner joins, so these rows are in no tuple.
+///
+/// An `=` removes rows of one table, the target, with the keys of the other table, the source. It runs again only when the source lost rows after its last run, as the same keys remove no more rows. A source that keeps all the rows of its table does not run, as its keys remove few rows in most joins, for example when the target has a foreign key to it, and the set of all its keys costs the most. This is correct, as the join tests each `=` on the tuples.
 fn semi_reduce(edges: &[[(usize, usize); 2]], late: &[bool], tables: &mut [Option<Selected>]) {
+    // Each `=` in each direction: the target, the place of its key, the source and the place of its key.
+    let mut arcs = Vec::new();
+    for &[(a, x), (b, y)] in edges {
+        if !late[a] && !late[b] {
+            arcs.push((a, x, b, y));
+            arcs.push((b, y, a, x));
+        }
+    }
+    // The rows of the source of each arc at its last run.
+    let mut ran = vec![usize::MAX; arcs.len()];
     loop {
         let mut removed = false;
-        for &[(a, x), (b, y)] in edges {
-            if late[a] || late[b] {
+        for (&(to, at, from, key), ran) in arcs.iter().zip(&mut ran) {
+            let (Some(source), Some(target)) = (&tables[from], &tables[to]) else { continue };
+            if source.places.len() >= source.rows || *ran == source.places.len() {
                 continue;
             }
-            for (to, at, from, key) in [(a, x, b, y), (b, y, a, x)] {
-                let (Some(source), Some(target)) = (&tables[from], &tables[to]) else { continue };
-                let set: FxSet<i64> = source.keys[key].iter().flatten().copied().collect();
-                let keep: Vec<bool> =
-                    target.keys[at].iter().map(|k| k.is_some_and(|k| set.contains(&k))).collect();
-                if keep.iter().all(|k| *k) {
-                    continue;
+            *ran = source.places.len();
+            let set = KeySet::of(&source.keys[key]);
+            let keep: Vec<bool> = target.keys[at].iter().map(|k| set.has(*k)).collect();
+            if keep.iter().all(|k| *k) {
+                continue;
+            }
+            if let Some(target) = &mut tables[to] {
+                retain(&mut target.places, &keep);
+                for keys in &mut target.keys {
+                    retain(keys, &keep);
                 }
-                if let Some(target) = &mut tables[to] {
-                    retain(&mut target.places, &keep);
-                    for keys in &mut target.keys {
-                        retain(keys, &keep);
-                    }
-                    removed = true;
-                }
+                removed = true;
             }
         }
         if !removed {
@@ -625,7 +668,44 @@ fn semi_reduce(edges: &[[(usize, usize); 2]], late: &[bool], tables: &mut [Optio
     }
 }
 
-/// The conditions `column = ANY (array)` of the table `index`, which is read after the other tables of `tables`: for each `=` of the table with a table that keeps fewer rows than the relation has, the keys of the rows that it keeps, which a row of the table must have to join. The conditions with the fewest keys come first. An `=` with more than 65536 keys gives no condition, as the test of a key then costs more than it saves.
+/// The integer keys of the rows of a table, with no null: a bitmap from the least key when the keys make one, as [`spans`] tells, or else a hash set.
+enum KeySet {
+    Span(i64, Vec<u64>),
+    Hash(FxSet<i64>),
+}
+
+impl KeySet {
+    /// The set of the keys `keys`.
+    fn of(keys: &[Option<i64>]) -> KeySet {
+        let (mut least, mut most, mut count) = (i64::MAX, i64::MIN, 0usize);
+        for &k in keys.iter().flatten() {
+            least = least.min(k);
+            most = most.max(k);
+            count += 1;
+        }
+        if count == 0 || !spans(least, most, count) {
+            return KeySet::Hash(keys.iter().flatten().copied().collect());
+        }
+        let mut bits = vec![0u64; (most.wrapping_sub(least).cast_unsigned() / 64 + 1) as usize];
+        for &k in keys.iter().flatten() {
+            let at = k.wrapping_sub(least).cast_unsigned();
+            bits[(at / 64) as usize] |= 1 << (at % 64);
+        }
+        KeySet::Span(least, bits)
+    }
+
+    /// True when the key `key` is in the set. A null is in no set.
+    #[inline]
+    fn has(&self, key: Option<i64>) -> bool {
+        match (self, key) {
+            (_, None) => false,
+            (KeySet::Span(least, bits), Some(k)) => in_span(*least, bits, k),
+            (KeySet::Hash(set), Some(k)) => set.contains(&k),
+        }
+    }
+}
+
+/// The conditions `column = ANY (array)` of the table `index`, which is read after the other tables of `tables`: for each `=` of the table with a table that keeps fewer rows than the relation has, the keys of the rows that it keeps, which a row of the table must have to join. The conditions with the fewest keys come first. An `=` with more than 65536 keys gives no condition, as the test of a key then costs more than it saves, except when the keys make a bitmap of [`rupg_summary::zone::Test::Span`], whose test of a key reads one bit, and the table keeps at most a quarter of the rows of its relation, so that the test removes most rows.
 fn key_filters(
     index: usize,
     plan: &reduce::Plan<'_>,
@@ -651,7 +731,13 @@ fn key_filters(
         let mut keys: Vec<i64> = source.keys[key].iter().flatten().copied().collect();
         keys.sort_unstable();
         keys.dedup();
-        if keys.len() > MOST {
+        if keys.len() > MOST
+            && (source.places.len().saturating_mul(4) > source.rows
+                || !keys
+                    .first()
+                    .zip(keys.last())
+                    .is_some_and(|(&least, &most)| spans(least, most, keys.len())))
+        {
             continue;
         }
         let n = keys.len();
@@ -1215,5 +1301,75 @@ mod tests {
         let index = Index::of(&[&a, &b]).unwrap();
         let found = index.find_all(&[&b, &a], &[3, 0, 499]);
         assert_eq!(found, vec![30, 0, NONE]);
+    }
+
+    #[test]
+    fn a_key_set_has_the_same_keys_as_a_bitmap_and_as_a_hash() {
+        let probe: Vec<Option<i64>> = [i64::MIN, -301, -300, -1, 0, 63, 64, 1 << 20, i64::MAX]
+            .into_iter()
+            .map(Some)
+            .chain([None])
+            .collect();
+        for keys in [
+            vec![Some(-300), None, Some(0), Some(64), Some(-300)],
+            vec![Some(-1), Some(1 << 20)],
+            vec![Some(i64::MIN), Some(i64::MAX), Some(63)],
+            vec![None],
+            vec![],
+        ] {
+            let set = KeySet::of(&keys);
+            let (least, most) = (keys.iter().flatten().min(), keys.iter().flatten().max());
+            let dense = least
+                .zip(most)
+                .and_then(|(least, most)| most.checked_sub(*least))
+                .is_some_and(|span| span < 1 << 18);
+            assert_eq!(matches!(set, KeySet::Span(..)), dense, "{keys:?}");
+            for &k in &probe {
+                assert_eq!(set.has(k), k.is_some() && keys.contains(&k), "{keys:?} {k:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_semi_reduction_keeps_the_rows_that_join_and_skips_a_full_source() {
+        let table = |rows: usize, places: Vec<usize>, keys: Vec<Vec<Option<i64>>>| {
+            Some(Selected { rows, places, keys })
+        };
+        // a(0) = b(0) and b(1) = c(0). a loses its row with a null key, so its keys then remove the row of b with the key 40. c keeps one row of two, so b keeps its rows with the key 7, and in the second round a keeps its rows with the keys of those rows of b.
+        let mut tables = vec![
+            table(4, vec![0, 1, 2, 3], vec![vec![Some(10), Some(20), None, Some(30)]]),
+            table(
+                5,
+                vec![0, 1, 2, 3],
+                vec![
+                    vec![Some(10), Some(20), Some(30), Some(40)],
+                    vec![Some(7), Some(8), Some(7), None],
+                ],
+            ),
+            table(2, vec![1], vec![vec![Some(7)]]),
+        ];
+        let edges = [[(0, 0), (1, 0)], [(1, 1), (2, 0)]];
+        semi_reduce(&edges, &[false; 3], &mut tables);
+        let [Some(a), Some(b), Some(c)] = &tables[..] else { panic!("a table is gone") };
+        assert_eq!(b.places, vec![0, 2]);
+        assert_eq!(b.keys, vec![vec![Some(10), Some(30)], vec![Some(7), Some(7)]]);
+        assert_eq!(a.places, vec![0, 3]);
+        assert_eq!(a.keys, vec![vec![Some(10), Some(30)]]);
+        assert_eq!(c.places, vec![1]);
+        // a keeps all its rows and loses none, so its keys do not run, and b keeps its row with the key 40, which joins no row of a.
+        let mut tables = vec![
+            table(2, vec![0, 1], vec![vec![Some(1), Some(5)]]),
+            table(9, vec![0, 1, 2], vec![vec![Some(1), Some(5), Some(40)]]),
+        ];
+        semi_reduce(&[[(0, 0), (1, 0)]], &[false; 2], &mut tables);
+        assert_eq!(tables[0].as_ref().unwrap().places, vec![0, 1]);
+        assert_eq!(tables[1].as_ref().unwrap().places, vec![0, 1, 2]);
+        // A `late` table takes no part.
+        let mut tables = vec![
+            table(3, vec![0, 1, 2], vec![vec![Some(1), Some(2), Some(3)]]),
+            table(9, vec![0], vec![vec![Some(2)]]),
+        ];
+        semi_reduce(&[[(0, 0), (1, 0)]], &[false, true], &mut tables);
+        assert_eq!(tables[0].as_ref().unwrap().places, vec![0, 1, 2]);
     }
 }
