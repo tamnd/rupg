@@ -4435,7 +4435,20 @@ fn top_counts<'r>(results: &'r Results<'_>, agg: *const Aggref) -> Option<&'r [i
     results.calls.iter().position(|c| std::ptr::eq(c.key, agg)).and_then(|c| results.counts(c))
 }
 
-/// The integers of the groups by which `ORDER BY` with `LIMIT` sorts them: the count of [`top_key`] or the key of [`key_top`] of each group, true for a descending order, the kind of the integers, and the bound of the sort.
+/// The sums of the groups for the call `agg` of [`top_key`], as integers in the order of the results, for a call of `sum` of integers or of `numeric` values of one scale. `None` for another call, for a group with no rows, whose sum is null, or for a sum out of the range of `bigint`.
+fn top_sums(results: &Results<'_>, agg: *const Aggref) -> Option<Vec<i64>> {
+    let call = results.calls.iter().find(|c| std::ptr::eq(c.key, agg))?;
+    let States::Sum(states) = &call.states else { return None };
+    if !matches!(
+        call.method,
+        Method::SumInt | Method::Int128 { avg: false } | Method::Dec { avg: false, .. }
+    ) {
+        return None;
+    }
+    states.iter().map(|&(n, sum)| if n == 0 { None } else { i64::try_from(sum).ok() }).collect()
+}
+
+/// The integers of the groups by which `ORDER BY` with `LIMIT` sorts them:the count of [`top_key`] or the key of [`key_top`] of each group, true for a descending order, the kind of the integers, and the bound of the sort.
 type Ranked<'a> = (&'a [i64], bool, sort::Radix, usize);
 
 /// The groups of the rows of `ORDER BY` of one count or one key with `LIMIT`, after `OFFSET`, from [`Ranked`]. The steps are the same as the steps of the sort of the rows in [`crate::order`], and the sort compares the integers: for more than `2 * bound` groups a bounded heap, else the sort of [`sort::memtuples`] of all the groups. With `heap`, `order` has only the groups that can change the bounded heap of the sort of more than `2 * bound` groups, and the sort is that heap. The sort gives one order for each list of integers, so the rows of the groups are not read. `None` when the plan has a scan in the order of an index.
@@ -5752,10 +5765,19 @@ fn grouped(
         _ => GroupKeys::Values(&key_values),
     };
     let key_values = key_top.and_then(|(k, ..)| key_ints(&keys_of_groups, k));
-    let ranked: Option<Ranked<'_>> = match (top, key_top, &key_values) {
-        (Some((agg, descending, bound)), ..) => {
-            top_counts(&results, agg).map(|counts| (counts, descending, sort::Radix::Signed, bound))
+    // A sum of `numeric` does not sort with the radix sort of [`count_top`] for few groups, so the sums rank the groups only for more than `2 * bound` groups, where the sort is the bounded heap.
+    let sums = match top {
+        Some((agg, _, bound))
+            if groups > bound.saturating_mul(2) && top_counts(&results, agg).is_none() =>
+        {
+            top_sums(&results, agg)
         }
+        _ => None,
+    };
+    let ranked: Option<Ranked<'_>> = match (top, key_top, &key_values) {
+        (Some((agg, descending, bound)), ..) => top_counts(&results, agg)
+            .or(sums.as_deref())
+            .map(|counts| (counts, descending, sort::Radix::Signed, bound)),
         (None, Some((_, descending, radix, bound)), Some(values)) => {
             Some((values.as_slice(), descending, radix, bound))
         }

@@ -380,8 +380,7 @@ impl CodeBuilder {
         self.nulls += nulls;
         // The repeated codes go when the codes double, so that the codes of a long column with few distinct values take little memory.
         if self.codes.len() >= (2 * self.sorted).max(4 * VECTOR) {
-            self.codes.sort_unstable();
-            self.codes.dedup();
+            sort_dedup(&mut self.codes);
             self.sorted = self.codes.len();
         }
     }
@@ -389,8 +388,7 @@ impl CodeBuilder {
     /// The summary. The code set is kept when its bytes are at most `limit`, which the writer sets to one eighth of the encoded code stream (spec/09 section 9.7.3). The bounds are ranks of the base, and they are absent when a code of the tail is present, because a tail code has no rank.
     #[must_use]
     pub fn finish(mut self, limit: usize) -> ColumnSummary {
-        self.codes.sort_unstable();
-        self.codes.dedup();
+        sort_dedup(&mut self.codes);
         let set = CodeSet::from_sorted(&self.codes);
         let bounded = !self.tail;
         ColumnSummary {
@@ -404,6 +402,32 @@ impl CodeBuilder {
             code_set: (set.encoded_len() <= limit).then_some(set),
             vectors: self.vectors,
         }
+    }
+}
+
+/// Sorts the codes and removes the repeated codes. When the codes are many for the span from the least code to the greatest code, one bit for each code of the span marks the codes, and a read of the bits gives them in order, with no sort.
+fn sort_dedup(codes: &mut Vec<u32>) {
+    let (Some(&low), Some(&high)) = (codes.iter().min(), codes.iter().max()) else { return };
+    let span = (high - low) as usize + 1;
+    if codes.len() < 64 || span > codes.len().saturating_mul(16) {
+        codes.sort_unstable();
+        codes.dedup();
+        return;
+    }
+    let mut bits = vec![0_u64; span.div_ceil(64)];
+    for &code in codes.iter() {
+        let at = (code - low) as usize;
+        bits[at / 64] |= 1 << (at % 64);
+    }
+    codes.clear();
+    let mut base = low;
+    for &word in &bits {
+        let mut word = word;
+        while word != 0 {
+            codes.push(base + word.trailing_zeros());
+            word &= word - 1;
+        }
+        base = base.wrapping_add(64);
     }
 }
 
@@ -633,6 +657,28 @@ impl ColumnSummary {
 mod tests {
     use super::*;
     use crate::zone::{Test, Verdict};
+
+    #[test]
+    fn the_bits_of_the_span_give_the_same_codes_as_a_sort() {
+        let mut seed = 7_u64;
+        for round in 0..200_u32 {
+            let len = [0_usize, 1, 63, 64, 65, 500, 4096][round as usize % 7];
+            let span = [1_u64, 3, 64, 1000, 70_000, 1 << 31][round as usize % 6];
+            let low = [0_u32, 1, 5000, u32::MAX - (1 << 31)][round as usize % 4];
+            let codes: Vec<u32> = (0..len)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    low + u32::try_from((seed >> 20) % span).unwrap()
+                })
+                .collect();
+            let mut want = codes.clone();
+            want.sort_unstable();
+            want.dedup();
+            let mut got = codes;
+            sort_dedup(&mut got);
+            assert_eq!(got, want, "round {round}");
+        }
+    }
 
     fn round_trip(summary: &ColumnSummary) {
         let mut bytes = Vec::new();

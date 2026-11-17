@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A top of a sum with LIMIT now ranks the groups by the sums and reads the rows of only the groups of the result, the sort compares numeric values with no call, and a column summary sorts its codes with a bitmap when the codes are dense. This cuts the instructions of TPC-H Q10 from 105M to 71M. (#1619)
 - A sorted group with an integer first key now sorts the groups by the numbers of that key, and reads the values of all the keys only for the groups with the same first key. This cuts the instructions of TPC-H Q10 from 120M to 105M. (#1618)
 - A lifted correlated `EXISTS` with a compare of two integer columns now folds the bounds of each key while the scan reads the rows, with no columns of all the rows of the table. This cuts the instructions of TPC-H Q21 from 187M to 179M. (#1617)
 - A grouped scan with a key of one integer column now keeps the group of each key in an array of the span of the key, when the zones of the column show a span of fewer than four slots for each row of the table. A key then finds its group with no hash and no probe of a hash table, and a key out of the span moves the groups to a hash table. On TPC-H SF 0.1 this cuts the instructions of Q18 from 120M to 116M. (#1616)
