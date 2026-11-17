@@ -92,8 +92,8 @@ pub fn has_code(bits: &[u64], code: u64) -> bool {
 }
 
 /// The most values that a bitmap of [`Test::Span`] holds for each key, the most values that it holds for any keys, and the most values that it holds.
-const SPAN_PER_KEY: u64 = 64;
-const SPAN_FLOOR: u64 = 1 << 12;
+const SPAN_PER_KEY: u64 = 256;
+const SPAN_FLOOR: u64 = 1 << 18;
 const SPAN_MOST: u64 = 1 << 24;
 
 /// True when the integer `value` is in the bitmap `bits` of the values from `least`. A value below `least` wraps to a large offset, which is out of the bitmap.
@@ -103,23 +103,27 @@ pub fn in_span(least: i64, bits: &[u64], value: i64) -> bool {
     has_code(bits, value.wrapping_sub(least) as u64)
 }
 
+/// True when `count` integers from `least` to `most` make a bitmap of [`Test::Span`]: they span fewer than 256 values for each integer, or fewer than 2^18 values, and fewer than 2^24 values. A bitmap of 2^18 values has 32 KiB, which stays in the cache of level 2.
+#[must_use]
+pub fn spans(least: i64, most: i64, count: usize) -> bool {
+    let room = (count as u64).saturating_mul(SPAN_PER_KEY).clamp(SPAN_FLOOR, SPAN_MOST);
+    most.checked_sub(least)
+        .and_then(|span| u64::try_from(span).ok())
+        .is_some_and(|span| span < room)
+}
+
 impl Test {
-    /// `x IN (c, ...)` of the keys `keys` of integers, in ascending order and with no key two times. When the keys span fewer than 64 values for each key, or fewer than 4096 values, the test is [`Test::Span`] with a bitmap, so that the test of a value reads one bit and does no binary search.
+    /// `x IN (c, ...)` of the keys `keys` of integers, in ascending order and with no key two times. When the keys make a bitmap, as [`spans`] tells, the test is [`Test::Span`] with a bitmap, so that the test of a value reads one bit and does no binary search.
     #[must_use]
     pub fn int_in(keys: Vec<u64>) -> Test {
         let (Some(&first), Some(&last)) = (keys.first(), keys.last()) else {
             return Test::In(keys);
         };
-        let least = key::int_of(first);
-        let Some(span) =
-            key::int_of(last).checked_sub(least).and_then(|span| u64::try_from(span).ok())
-        else {
-            return Test::In(keys);
-        };
-        let room = (keys.len() as u64).saturating_mul(SPAN_PER_KEY).clamp(SPAN_FLOOR, SPAN_MOST);
-        if span >= room {
+        let (least, most) = (key::int_of(first), key::int_of(last));
+        if !spans(least, most, keys.len()) {
             return Test::In(keys);
         }
+        let span = most.wrapping_sub(least) as u64;
         let mut bits = vec![0u64; (span / 64 + 1) as usize];
         for &k in &keys {
             let at = key::int_of(k).wrapping_sub(least) as u64;
@@ -342,7 +346,7 @@ mod tests {
     fn keys_near_each_other_make_a_bitmap() {
         let keys = |list: &[i64]| list.iter().map(|&x| key::int(x)).collect::<Vec<u64>>();
         let Test::Span(_, least, bits) = Test::int_in(keys(&[-70, 3, 4000])) else {
-            panic!("keys in 4096 values make a bitmap");
+            panic!("keys in 2^18 values make a bitmap");
         };
         assert_eq!(least, -70);
         for v in -200..5000 {
@@ -350,12 +354,12 @@ mod tests {
         }
         assert!(!in_span(least, &bits, i64::MIN));
         assert!(!in_span(least, &bits, i64::MAX));
-        assert!(matches!(Test::int_in(keys(&[0, 5000])), Test::In(_)));
+        assert!(matches!(Test::int_in(keys(&[0, 300_000])), Test::In(_)));
         assert!(matches!(Test::int_in(keys(&[i64::MIN, i64::MAX])), Test::In(_)));
         assert!(matches!(Test::int_in(Vec::new()), Test::In(_)));
-        let many: Vec<i64> = (0..1000).map(|i| i * 60).collect();
+        let many: Vec<i64> = (0..10_000).map(|i| i * 250).collect();
         assert!(matches!(Test::int_in(keys(&many)), Test::Span(..)));
-        let sparse: Vec<i64> = (0..1000).map(|i| i * 70).collect();
+        let sparse: Vec<i64> = (0..10_000).map(|i| i * 300).collect();
         assert!(matches!(Test::int_in(keys(&sparse)), Test::In(_)));
     }
 

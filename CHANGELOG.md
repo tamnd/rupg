@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A join of tables in `FROM` with no condition with a subquery now reads its largest table, as `lineitem` of TPC-H Q5 and Q9, after the other tables when it has at least 65536 rows. The other tables first lose the rows that join no row, and the keys of the rows that they keep select the rows of the large table in its scan. The removal of these rows runs an `=` again only when its source lost rows and tests dense keys with a bitmap, and an integer `IN` list or key filter now makes a bitmap when its keys span fewer than 256 values for each key or fewer than 2^18 values. (#1614)
 - With `constraint_exclusion` at `partition`, the planner leaves out a member of a table with children of `INHERITS` or of a partitioned table whose check constraints the conditions refute, by the proofs of `predicate_refuted_by`, as in PostgreSQL 19 (#1613)
 - A condition `IS NULL` or `IS NOT NULL` on a column of a table with children of `INHERITS` is tested on each member: the members whose column is `NOT NULL` drop `IS NOT NULL` and are excluded by `IS NULL`, and the one member left keeps its `Result`, as in PostgreSQL 19 (#1612)
 - An integer `IN` list and a key filter of a join whose keys span few values, as the keys of `part` that `ps_partkey` of TPC-H Q16 must have, are a `Test::Span`: the sorted keys, which the zones read, and a bitmap of the values from the least key. The scan then tests each row with one bit and does no binary search. (#1611)
