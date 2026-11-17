@@ -7124,6 +7124,57 @@ enum Place<'d> {
     Groups(Vec<u64>),
 }
 
+/// The order of the groups by the sort of their keys when the first key is a key of integers and the sort of a different key calls its function. A sort of the numbers of the first key gives the order, and only the groups with the same first key read the values of all their keys and compare them as [`sort::Keys::compare`] does. `None` when the first key is not a key of integers.
+fn lead_order(
+    session: &dyn Session,
+    words: &[u64],
+    shapes: &[Shape],
+    dicts: &[Dict],
+    (k, descending, nulls_first): (usize, bool, bool),
+    keys_of: &sort::Keys<'_>,
+) -> Result<Option<Vec<usize>>> {
+    if !matches!(shapes.get(k), Some(Shape::Int(_) | Shape::Dec(_))) {
+        return Ok(None);
+    }
+    let width = shapes.len() + 1;
+    let mut items: Vec<(u128, usize)> = words
+        .chunks_exact(width)
+        .enumerate()
+        .map(|(g, row)| {
+            let null = row[width - 1] >> k & 1 == 1;
+            (key_number(null, row[k] ^ (1 << 63), descending, nulls_first), g)
+        })
+        .collect();
+    items.sort_unstable();
+    let mut order = Vec::with_capacity(items.len());
+    let mut start = 0;
+    while start < items.len() {
+        crate::interrupt(session, order.len())?;
+        let lead = items[start].0;
+        let end =
+            items[start..].iter().position(|i| i.0 != lead).map_or(items.len(), |n| start + n);
+        if end - start == 1 {
+            order.push(items[start].1);
+        } else {
+            // The groups with the same first key, in the order of the groups, compared as the sort of all the groups compares them.
+            let run: Vec<usize> = items[start..end].iter().map(|i| i.1).collect();
+            let mut some = Vec::with_capacity(run.len() * width);
+            for &g in &run {
+                some.extend_from_slice(&words[g * width..(g + 1) * width]);
+            }
+            let values = values_of_words(&some, shapes, dicts);
+            let keys: Vec<&[Value]> = values.chunks(shapes.len()).collect();
+            let mut places: Vec<usize> = (0..run.len()).collect();
+            sort::qsort(&mut places, &mut |a, b| {
+                Ok(keys_of.compare(keys[*a], keys[*b])?.then(a.cmp(b)))
+            })?;
+            order.extend(places.iter().map(|&p| run[p]));
+        }
+        start = end;
+    }
+    Ok(Some(order))
+}
+
 /// The order of the groups by the sort of their keys, from the words of the keys, for keys whose sort compares integers or bytes. The keys of two groups are never all equal, so each sort gives the order of the sort of the row engine. A key of text compares the places of its codes in the order of the dictionary, which the dictionary keeps for the next queries, or the places of the codes of the groups in the order of their bytes for a few groups. `None` for a key of codes with no text.
 fn word_order(
     tasks: Option<&dyn Tasks>,
@@ -7510,9 +7561,15 @@ fn group_order(
             .enumerate()
             .map(|(i, g)| rupg_analyze::SortGroup { target: i, ..g.clone() })
             .collect();
-        if let Some(natives) = sort::Keys::new(&list, &types, session)?.natives()
+        let keys_of = sort::Keys::new(&list, &types, session)?;
+        if let Some(natives) = keys_of.natives()
             && let Some(order) =
                 word_order(session.tasks(), words, shapes, dicts, &natives, groups, want)
+        {
+            return Ok(order);
+        }
+        if let Some(lead) = keys_of.lead()
+            && let Some(order) = lead_order(session, words, shapes, dicts, lead, &keys_of)?
         {
             return Ok(order);
         }

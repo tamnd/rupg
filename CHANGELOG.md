@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A sorted group with an integer first key now sorts the groups by the numbers of that key, and reads the values of all the keys only for the groups with the same first key. This cuts the instructions of TPC-H Q10 from 120M to 105M. (#1618)
 - A lifted correlated `EXISTS` with a compare of two integer columns now folds the bounds of each key while the scan reads the rows, with no columns of all the rows of the table. This cuts the instructions of TPC-H Q21 from 187M to 179M. (#1617)
 - A grouped scan with a key of one integer column now keeps the group of each key in an array of the span of the key, when the zones of the column show a span of fewer than four slots for each row of the table. A key then finds its group with no hash and no probe of a hash table, and a key out of the span moves the groups to a hash table. On TPC-H SF 0.1 this cuts the instructions of Q18 from 120M to 116M. (#1616)
 - A grouped scan with a key of one column now finds the runs of equal keys with no call of `memcmp` for each row, and a join tests a subquery `x IN (SELECT ...)` of at most 4096 integers as a condition `x = ANY (array)` in the scan of the table of `x`. A key filter of a join with more than 65536 keys is now used only when its table keeps at most a quarter of its rows. On TPC-H SF 0.1 this cuts the instructions of Q18 by 25 percent. (#1615)
