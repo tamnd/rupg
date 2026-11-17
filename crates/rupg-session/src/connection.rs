@@ -6832,6 +6832,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/check_exclusion.test")));
     }
 
+    /// `ATPrepAlterColumnType` changes the type of a column of a child only when each parent that gives the column changes it too: a column of a child of two parents of which one changes stays inherited from the other. A child of two tables of the same tree changes. `connection/inherited_type.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn inherited_type() {
+        big_stack(|| script(include_str!("connection/inherited_type.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
