@@ -584,6 +584,28 @@ impl Col {
     }
 }
 
+/// The first row of each run of rows with the same words in `words`, which has `width` words for each row, into `starts`. A key of one column has two words, which the loop compares with no call of `memcmp`, as the compare of two slices makes one for each row.
+fn runs_of(words: &[u64], width: usize, starts: &mut Vec<usize>) {
+    if width == 2 {
+        let mut before = None;
+        for (i, &[a, b]) in words.as_chunks::<2>().0.iter().enumerate() {
+            let w = (a, b);
+            if before != Some(w) {
+                starts.push(i);
+            }
+            before = Some(w);
+        }
+        return;
+    }
+    let mut before: Option<&[u64]> = None;
+    for (i, w) in words.chunks_exact(width).enumerate() {
+        if before.is_none_or(|b| b.iter().zip(w).any(|(x, y)| x != y)) {
+            starts.push(i);
+        }
+        before = Some(w);
+    }
+}
+
 /// Puts the words of the key `k` of each row of the column `col` into `words`, which has `width` words for each row. A null gives the word 0 and sets the bit of the key in the last word of the row. It gives `false` when a row that is not null has a value with no word, as [`Col::word`] does.
 fn put_key_words(col: &Col, k: usize, width: usize, words: &mut [u64]) -> bool {
     fn fill(words: &mut [u64], k: usize, width: usize, f: impl Fn(usize) -> u64) {
@@ -5145,13 +5167,7 @@ fn grouped(
                     }
                     // A row with the same words as the row before it is in the same group, so only the first row of each run of equal words gets a hash and a probe of the map. The rows of a table in the order of its keys make long runs.
                     starts.clear();
-                    let mut before: Option<&[u64]> = None;
-                    for (i, w) in words.chunks_exact(width).enumerate() {
-                        if before != Some(w) {
-                            starts.push(i);
-                        }
-                        before = Some(w);
-                    }
+                    runs_of(&words, width, &mut starts);
                     row_hashes.clear();
                     row_hashes.extend(
                         starts.iter().map(|&i| map.hash(&words[i * width..(i + 1) * width])),
@@ -7389,6 +7405,19 @@ mod tests {
     use std::hash::BuildHasher;
 
     use super::*;
+
+    #[test]
+    fn the_runs_of_equal_keys_start_at_each_change_of_the_words() {
+        let mut starts = Vec::new();
+        runs_of(&[4, 0, 4, 0, 5, 0, 5, 1, 5, 1, 4, 0], 2, &mut starts);
+        assert_eq!(starts, [0, 2, 3, 5]);
+        starts.clear();
+        runs_of(&[1, 2, 0, 1, 2, 0, 1, 3, 0, 7, 3, 0], 3, &mut starts);
+        assert_eq!(starts, [0, 2, 3]);
+        starts.clear();
+        runs_of(&[], 2, &mut starts);
+        assert!(starts.is_empty());
+    }
 
     #[test]
     fn a_numeric_key_of_a_group_gives_its_value_back_from_its_word() {
