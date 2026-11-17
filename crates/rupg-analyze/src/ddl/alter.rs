@@ -358,8 +358,13 @@ impl Definer<'_, '_> {
                 let typed = self.typed_tables(&queue[0].0, cmd.behavior)?;
                 reached.extend(typed.into_iter().map(|t| (t, true)));
             }
+            let tree: Vec<u32> =
+                std::iter::once(queue[0].0.oid).chain(reached.iter().map(|(t, _)| t.oid)).collect();
             for (child, typed) in reached {
                 self.check_not_in_use_locked(child.oid, "ALTER TABLE", Some(mode))?;
+                if cmd.subtype == AlterTableType::AT_AlterColumnType && !typed {
+                    self.check_inherited_type(&child, cmd, &tree)?;
+                }
                 let at = match queue.iter().position(|(t, _)| t.oid == child.oid) {
                     Some(at) => at,
                     None => {
@@ -377,6 +382,36 @@ impl Definer<'_, '_> {
             self.run_passes(&target, passes)?;
         }
         self.collect(None, table);
+        Ok(())
+    }
+
+    /// `ATPrepAlterColumnType` for a child that the change of a column type reaches: the column of the child may come from no parent outside the tables `tree` that the change reaches, as the column of a child of two parents of which one changes would then differ from the column of the other parent.
+    fn check_inherited_type(
+        &self,
+        child: &Target,
+        cmd: &AlterTableCmd,
+        tree: &[u32],
+    ) -> Result<()> {
+        let column = cmd.name.as_deref().unwrap_or_default();
+        let Some(rel) = self.catalog.relation(child.oid) else { return Ok(()) };
+        let parents = rel
+            .inherits
+            .iter()
+            .copied()
+            .chain(rel.partition_of.as_ref().map(|p| p.parent))
+            .filter(|p| tree.contains(p))
+            .count();
+        let inherited =
+            rel.column_number(column).and_then(|n| rel.column(n)).map_or(0, |c| c.inhcount);
+        if usize::try_from(inherited).unwrap_or(0) > parents {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!(
+                    "cannot alter inherited column \"{column}\" of relation \"{}\"",
+                    child.name
+                ),
+            ));
+        }
         Ok(())
     }
 

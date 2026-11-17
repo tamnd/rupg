@@ -1,0 +1,24 @@
+> CREATE TABLE parent1 (f1 int, f2 int)
+CREATE TABLE
+> CREATE TABLE parent2 (f1 int, f3 bigint)
+CREATE TABLE
+> CREATE TABLE childtab (f4 int) INHERITS (parent1, parent2)
+NOTICE 00000 merging multiple inherited definitions of column "f1"
+CREATE TABLE
+> ALTER TABLE parent1 ALTER COLUMN f1 TYPE bigint
+ERROR 42P16 cannot alter inherited column "f1" of relation "childtab"
+> ALTER TABLE parent1 ALTER COLUMN f2 TYPE bigint
+ALTER TABLE
+> CREATE TABLE top (a int)
+CREATE TABLE
+> CREATE TABLE mid1 () INHERITS (top)
+CREATE TABLE
+> CREATE TABLE mid2 () INHERITS (top)
+CREATE TABLE
+> CREATE TABLE bottom () INHERITS (mid1, mid2)
+NOTICE 00000 merging multiple inherited definitions of column "a"
+CREATE TABLE
+> ALTER TABLE top ALTER COLUMN a TYPE bigint
+ALTER TABLE
+> ALTER TABLE mid1 ALTER COLUMN a TYPE int
+ERROR 42P16 cannot alter inherited column "a" at 31
