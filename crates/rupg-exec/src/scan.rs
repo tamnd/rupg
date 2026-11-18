@@ -2,14 +2,14 @@
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
-use std::cell::RefCell;
+use std::cell::{LazyCell, RefCell};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{
-    Expr, ExprKind, FromFunction, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var,
+    BoolOp, Expr, ExprKind, FromFunction, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
@@ -512,6 +512,8 @@ fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
 
 /// The tables that a scan of the relation `index` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them: the leaf partitions of a partitioned table that the conditions `conds` of the scan do not prune, or a table with children of `INHERITS` and its children. `None` for a relation that is one table.
 ///
+/// `relation_excluded_by_constraints` leaves out the members that the conditions exclude, and with `constraint_exclusion` at `on` the relation itself: a table, also one with no children or under `ONLY`, then has no member. Conditions that refute one another exclude all the members, and with `on` a table of its own too.
+///
 /// # Errors
 ///
 /// The errors of the comparisons of the bounds of the partitions.
@@ -533,45 +535,112 @@ pub fn members(
     let Some(relation) = session.catalog().and_then(|c| c.relation(from.oid)) else {
         return Ok(None);
     };
-    if relation.kind == rupg_catalog::RelKind::Partitioned {
+    let setting = session.setting("constraint_exclusion");
+    let (off, on) = (setting.as_deref() == Some("off"), setting.as_deref() == Some("on"));
+    // The conditions that refute one another exclude each member, and with `on` a relation of its own.
+    let contradictory = LazyCell::new(|| !off && contradictory(conds));
+    let partitioned = relation.kind == rupg_catalog::RelKind::Partitioned;
+    // With `on`, the relation as a base relation: with its constraints `NO INHERIT` when it is scanned alone, and its not-null constraints then or when it is partitioned.
+    let excluded = |inh: bool| {
+        let scope = Scope { no_inherit: !inh, not_null: !inh || partitioned };
+        on && (*contradictory
+            || excluded_by_constraints(index, relation, from.oid, conds, scope, session))
+    };
+    let member = Scope { no_inherit: true, not_null: true };
+    let kept = |oid: &u32| !excluded_by_constraints(index, relation, *oid, conds, member, session);
+    if partitioned {
         if from.only {
             return Ok(Some(Vec::new()));
         }
         let leaves = crate::partition::pruned_leaves(from.oid, index, conds, false, session)?;
-        return Ok(Some(
-            leaves
-                .into_iter()
-                .filter(|&oid| !excluded_by_constraints(index, relation, oid, conds, session))
-                .collect(),
-        ));
+        if *contradictory || excluded(true) {
+            return Ok(Some(Vec::new()));
+        }
+        return Ok(Some(leaves.into_iter().filter(|oid| off || kept(oid)).collect()));
     }
-    if from.only || relation.kind != rupg_catalog::RelKind::Table {
+    if relation.kind != rupg_catalog::RelKind::Table {
         return Ok(None);
+    }
+    if from.only {
+        return Ok(excluded(false).then(Vec::new));
     }
     let children = session.catalog().map(|c| c.all_inheritors(from.oid)).unwrap_or_default();
     // `expand_inherited_rtentry` reads `relhassubclass`, which stays true after the last child is gone until the next `ANALYZE`: the table is then the one member of its tree.
     if children.is_empty() && !session.catalog().is_some_and(|c| c.has_subclass(from.oid)) {
-        return Ok(None);
+        return Ok(excluded(false).then(Vec::new));
+    }
+    if *contradictory || excluded(true) {
+        return Ok(Some(Vec::new()));
     }
     let own = session.temp_number();
     let other = |&child: &u32| session.catalog().is_some_and(|c| c.is_other_temp(child, own));
     Ok(Some(
         std::iter::once(from.oid)
             .chain(children.into_iter().filter(|c| !other(c)))
-            .filter(|&oid| !excluded_by_constraints(index, relation, oid, conds, session))
+            .filter(|oid| off || kept(oid))
             .collect(),
     ))
 }
 
-/// `relation_excluded_by_constraints` for the member `member` of the relation `index` of the query, whose table is `parent`: true when the conditions `conds` of the relation make false the check constraints of the member and the not-null constraints of its columns, as `get_relation_constraints` gives them for a member, with the constraints `NO INHERIT`. `constraint_exclusion` at `partition` tests the members, and `off` none. A constraint that is not valid or not enforced, or that calls a function that is not immutable, proves nothing. The conditions name the columns of the parent, so a column of the member is the column of the parent with its name.
+/// The constraints that `get_relation_constraints` gives for a relation: `include_noinherit`, the check constraints `NO INHERIT`, and `include_notnull`, `col IS NOT NULL` for the not-null columns.
+#[derive(Clone, Copy)]
+struct Scope {
+    no_inherit: bool,
+    not_null: bool,
+}
+
+/// The test of `relation_excluded_by_constraints` for restrictions that refute one another: the conditions `conds` that call no function that is not immutable, weakly refuted by themselves.
+fn contradictory(conds: &[&Expr]) -> bool {
+    let safe: Vec<Expr> =
+        conds.iter().filter(|c| !crate::fold::mutable(c)).map(|&c| c.clone()).collect();
+    !safe.is_empty()
+        && rupg_opt::predicate_refuted(&safe, &safe, true, |left, a, right, b| {
+            rupg_func::compare(left, a, right, b).ok()
+        })
+}
+
+/// The constant `true` or `false`.
+fn bool_const(value: bool) -> Expr {
+    Expr::new(ExprKind::Const(Value::Bool(value)), oid::BOOL)
+}
+
+/// The constant arms of `AND`, `OR` and `NOT` folded, as `eval_const_expressions` folds a check constraint once its `IS NULL` tests of the not-null columns are constants. Only `true` and `false` fold: a null arm of a check constraint is not false.
+fn fold_bools(expr: Expr) -> Expr {
+    let ExprKind::Bool(op, args) = expr.kind else { return expr };
+    let args: Vec<Expr> = args.into_iter().map(fold_bools).collect();
+    let value = |e: &Expr| match e.kind {
+        ExprKind::Const(Value::Bool(b)) => Some(b),
+        _ => None,
+    };
+    if op == BoolOp::Not {
+        return match args.first().and_then(value) {
+            Some(b) => bool_const(!b),
+            None => Expr { kind: ExprKind::Bool(op, args), ..expr },
+        };
+    }
+    // `true` ends an `OR` and `false` an `AND`; the other constant is left out.
+    let absorbing = op == BoolOp::Or;
+    if args.iter().any(|a| value(a) == Some(absorbing)) {
+        return bool_const(absorbing);
+    }
+    let mut kept: Vec<Expr> = args.into_iter().filter(|a| value(a).is_none()).collect();
+    match kept.len() {
+        0 => bool_const(!absorbing),
+        1 => kept.remove(0),
+        _ => Expr { kind: ExprKind::Bool(op, kept), ..expr },
+    }
+}
+
+/// `relation_excluded_by_constraints` for the table `member` that a scan of the relation `index` of the query, whose table is `parent`, reads: true when the conditions `conds` of the relation make false the check constraints of the table and the not-null constraints of its columns, as `get_relation_constraints` gives them with `scope`. A constraint that is not valid or not enforced, or that calls a function that is not immutable, proves nothing. The conditions name the columns of the parent, so a column of the member is the column of the parent with its name. As `eval_const_expressions` folds a constraint, a test `IS NULL` or `IS NOT NULL` of a not-null column of the table is a constant.
 fn excluded_by_constraints(
     index: usize,
     parent: &rupg_catalog::Relation,
     member: u32,
     conds: &[&Expr],
+    scope: Scope,
     session: &dyn Session,
 ) -> bool {
-    if conds.is_empty() || session.setting("constraint_exclusion").as_deref() == Some("off") {
+    if conds.is_empty() {
         return false;
     }
     let Some(catalog) = session.catalog() else { return false };
@@ -589,12 +658,32 @@ fn excluded_by_constraints(
         }
     };
     let mut predicate = Vec::new();
-    let checks = catalog
-        .constraints_of(member)
-        .filter(|c| c.kind == rupg_catalog::ConKind::Check && c.validated && c.enforced);
+    let checks = catalog.constraints_of(member).filter(|c| {
+        c.kind == rupg_catalog::ConKind::Check
+            && c.validated
+            && c.enforced
+            && (scope.no_inherit || !c.no_inherit)
+    });
+    // `var_is_nonnullable`: a column with a valid not-null constraint.
+    let not_null = |attnum: i16| {
+        usize::try_from(attnum)
+            .ok()
+            .and_then(|at| table.columns.get(at.checked_sub(1)?))
+            .is_some_and(|c| !c.dropped && c.not_null && !c.not_null_invalid)
+    };
     for text in checks.filter_map(|c| c.expr.as_deref()) {
         let Ok(mut expr) = rupg_analyze::node::read(text) else { continue };
         expr.each_mut(0, &mut |e, depth| {
+            if let ExprKind::NullTest(arg, is_null) = &e.kind
+                && let ExprKind::Var(var) = arg.kind
+                && var.levels_up == depth
+                && scope.not_null
+                && !rupg_func::is_row_type(arg.ty)
+                && not_null(var.attnum)
+            {
+                *e = bool_const(!is_null);
+                return true;
+            }
             let ExprKind::Var(var) = e.kind else { return false };
             if var.levels_up != depth {
                 return false;
@@ -606,12 +695,13 @@ fn excluded_by_constraints(
             }
             true
         });
-        if !crate::fold::mutable(&expr) {
+        let expr = fold_bools(expr);
+        if !crate::fold::mutable(&expr) && expr.kind != ExprKind::Const(Value::Bool(true)) {
             predicate.push(expr);
         }
     }
     for (at, c) in (1..).zip(&table.columns) {
-        if c.dropped || !c.not_null || c.not_null_invalid {
+        if !scope.not_null || c.dropped || !c.not_null || c.not_null_invalid {
             continue;
         }
         let mut var = Expr::new(ExprKind::Var(column(at, 0)), c.ty);
@@ -1763,7 +1853,7 @@ fn outer_expr(expr: &Expr, bound: &[usize]) -> bool {
 /// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
 pub(crate) fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
     match &expr.kind {
-        ExprKind::Bool(rupg_analyze::BoolOp::And, args) => {
+        ExprKind::Bool(BoolOp::And, args) => {
             for arg in args {
                 conjuncts(arg, out);
             }
@@ -2034,7 +2124,7 @@ fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result
 /// The relation of a condition that [`tuples`] tests after the joins: an `EXISTS` or `NOT EXISTS` with a correlated subquery that reads one table of the query and calls no volatile function.
 fn late_relation(expr: &Expr, query: &Query) -> Option<usize> {
     let link = match &expr.kind {
-        ExprKind::Bool(rupg_analyze::BoolOp::Not, args) => match args.as_slice() {
+        ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
             [arg] => arg,
             _ => return None,
         },
@@ -2753,7 +2843,7 @@ fn join<'a>(
     let arms: Vec<(Side<'a>, Side<'a>)> = if hash.is_none() {
         on.iter()
             .find_map(|expr| match &expr.kind {
-                ExprKind::Bool(rupg_analyze::BoolOp::Or, args) => {
+                ExprKind::Bool(BoolOp::Or, args) => {
                     args.iter().map(pair).collect::<Option<Vec<_>>>()
                 }
                 _ => None,

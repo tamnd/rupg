@@ -6838,6 +6838,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherited_type.test")));
     }
 
+    /// `relation_excluded_by_constraints` with `constraint_exclusion` at `on`: a table whose check constraints the conditions refute is dummy, also with no children or under `ONLY`, and so is a join of it. The conditions that refute one another exclude a table, and at `partition` the members of a tree. A test `IS NULL` of a not-null column in a check constraint is false. `connection/exclusion_on.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn exclusion_on() {
+        big_stack(|| script(include_str!("connection/exclusion_on.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
