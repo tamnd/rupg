@@ -1,0 +1,118 @@
+> CREATE TYPE dist_row_t AS (a int, b int)
+CREATE TYPE
+> CREATE TABLE dist_tab (id int, val_nn int NOT NULL, val_null int, row_nn dist_row_t NOT NULL, t_nn text NOT NULL, v_nn varchar(5) NOT NULL)
+CREATE TABLE
+> INSERT INTO dist_tab VALUES (1, 10, 10, ROW(1, 1), 'a', 'a'), (2, 20, NULL, ROW(2, 2), 'b', 'b'), (3, 30, 30, ROW(1, NULL), 'c', 'c')
+INSERT 0 3
+> CREATE INDEX dist_tab_nn_idx ON dist_tab (val_nn)
+CREATE INDEX
+> ANALYZE dist_tab
+ANALYZE
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS DISTINCT FROM NULL::INT
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS NOT DISTINCT FROM NULL::INT
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on dist_tab
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS DISTINCT FROM 10
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_nn <> 10)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS NOT DISTINCT FROM 10
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_nn = 10)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_null IS DISTINCT FROM 20
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_null IS DISTINCT FROM 20)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE row_nn IS DISTINCT FROM ROW(1, 5)::dist_row_t
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (row_nn <> '(1,5)'::dist_row_t)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_null IS DISTINCT FROM NULL::INT
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_null IS NOT NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_null IS NOT DISTINCT FROM NULL::INT
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_null IS NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE t_nn IS DISTINCT FROM 'a'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (t_nn <> 'a'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE v_nn IS NOT DISTINCT FROM 'a'
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: ((v_nn)::text = 'a'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS DISTINCT FROM val_null
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_nn IS DISTINCT FROM val_null)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn IS DISTINCT FROM id + 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_nn IS DISTINCT FROM (id + 1))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE coalesce(val_null, 0) IS DISTINCT FROM 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (COALESCE(val_null, 0) <> 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE val_nn::bigint IS DISTINCT FROM 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: ((val_nn)::bigint IS DISTINCT FROM 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT id FROM dist_tab WHERE NOT (val_nn IS DISTINCT FROM 10)
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+row   Filter: (val_nn = 10)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT t1.id FROM dist_tab t1 LEFT JOIN dist_tab t2 ON t1.id = t2.id WHERE t2.val_nn IS DISTINCT FROM 10
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (t1.id = t2.id)
+row   Filter: (t2.val_nn IS DISTINCT FROM 10)
+row   ->  Seq Scan on dist_tab t1
+row   ->  Hash
+row         ->  Seq Scan on dist_tab t2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT t1.id FROM dist_tab t1 LEFT JOIN dist_tab t2 ON t1.id = t2.id AND t2.val_nn IS DISTINCT FROM NULL::int
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (t1.id = t2.id)
+row   ->  Seq Scan on dist_tab t1
+row   ->  Hash
+row         ->  Seq Scan on dist_tab t2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT val_nn IS DISTINCT FROM 10 AS d, val_null IS NOT DISTINCT FROM NULL::int AS n FROM dist_tab
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on dist_tab
+EXPLAIN
+> SET enable_nestloop TO off
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM dist_tab t1 JOIN dist_tab t2 ON t1.val_nn IS NOT DISTINCT FROM t2.val_nn
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (t1.val_nn = t2.val_nn)
+row   ->  Seq Scan on dist_tab t1
+row   ->  Hash
+row         ->  Seq Scan on dist_tab t2
+EXPLAIN
+> RESET enable_nestloop
+RESET
