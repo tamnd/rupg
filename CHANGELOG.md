@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The planner reduces `IS [NOT] DISTINCT FROM` with an input that is not a constant, as `eval_const_expressions` does in PostgreSQL 19: inputs that cannot be null make it `<>` or `=`, which index scans and hash joins can use, a null constant against them makes it a constant, and a null constant against an input that can be null makes it `IS [NOT] NULL` (#1623)
 - With `constraint_exclusion` at `on`, a table whose check constraints the conditions refute, or whose conditions refute one another, is a dummy relation, as is a join of it; at `partition`, conditions that refute one another exclude the members of a tree, and a check constraint's `IS NULL` test of a not-null column is false, as in PostgreSQL 19 (#1622)
 - A `LIKE` of a pattern `%literal%` on a text column in a join now finds the codes that match in one search of the bytes of the dictionary of the column, with no call for each text. This cuts the instructions of TPC-H Q9 from 132M to 116M. (#1621)
 - `ALTER TABLE … ALTER COLUMN … TYPE` fails with `cannot alter inherited column` on a child whose column is also inherited from a parent outside the altered tree, as in PostgreSQL 19 (#1620)

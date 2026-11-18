@@ -6844,6 +6844,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/exclusion_on.test")));
     }
 
+    /// `eval_const_expressions` of `IS DISTINCT FROM` with an input that is not a constant: with inputs that cannot be null it is `<>`, or `=` for `IS NOT DISTINCT FROM`, which a hash join can use, and a null constant makes it a constant; with an input that can be null and a null constant it is a test for null. A column that an outer join makes null can be null. `connection/distinct_reduce.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn distinct_reduce() {
+        big_stack(|| script(include_str!("connection/distinct_reduce.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

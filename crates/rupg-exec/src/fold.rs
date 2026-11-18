@@ -1455,7 +1455,11 @@ impl<'a> Fold<'a> {
                 let values: Option<Vec<&Value>> = args.iter().map(value).collect();
                 let folded =
                     |args| with(expr, ExprKind::Distinct { equal: *equal, not: *not, args });
-                let Some(values) = values else { return Ok(folded(args)) };
+                let Some(values) = values else {
+                    return Ok(self
+                        .distinct(expr, *equal, *not, &args)
+                        .unwrap_or_else(|| folded(args)));
+                };
                 let nulls = values.iter().filter(|v| v.is_null()).count();
                 if nulls > 0 {
                     let distinct = nulls < values.len();
@@ -1857,6 +1861,47 @@ impl<'a> Fold<'a> {
             1 => kept.pop().unwrap_or_else(|| expr.clone()),
             _ => with(expr, ExprKind::Coalesce(kept)),
         })
+    }
+
+    /// `eval_const_expressions` of a `DistinctExpr` with an input that is not a constant, `None` when it stays. With no input that can be null, a null constant makes it a constant, and else it is the `=` operator, negated for `IS DISTINCT FROM`, as `<>`. With an input that can be null and a null constant, it is `IS NOT NULL` of the input, or `IS NULL` for `IS NOT DISTINCT FROM`. A row keeps the test, which `NullTest` of a row would change.
+    fn distinct(&self, expr: &Expr, equal: u32, not: bool, args: &[Expr]) -> Option<Expr> {
+        let null = args.iter().any(|a| value(a).is_some_and(Value::is_null));
+        let nullable = args.iter().any(|a| value(a).is_none() && !self.nonnullable(a));
+        if !nullable {
+            if null {
+                return Some(with(expr, ExprKind::Const(Value::Bool(!not))));
+            }
+            let [left, right] = args else { return None };
+            let mut ops = builtin::operators().iter().filter(|o| o.code == equal);
+            let op = ops
+                .clone()
+                .find(|o| o.left == left.ty && o.right == right.ty)
+                .or_else(|| ops.next())?;
+            let func = Func {
+                oid: equal,
+                args: args.to_vec(),
+                form: FuncForm::Operator(op.oid),
+                variadic: false,
+                retset: false,
+                collation: 0,
+            };
+            let equal = with(expr, ExprKind::Func(func));
+            if not {
+                return Some(equal);
+            }
+            return Some(negate(
+                &with(expr, ExprKind::Bool(BoolOp::Not, vec![equal.clone()])),
+                &equal,
+            ));
+        }
+        if !null {
+            return None;
+        }
+        let arg = args.iter().find(|a| value(a).is_none())?;
+        if rupg_func::is_row_type(arg.ty) {
+            return None;
+        }
+        Some(with(expr, ExprKind::NullTest(Box::new(arg.clone()), not)))
     }
 
     /// `expr_is_nonnullable`: true when the expression cannot be null.
