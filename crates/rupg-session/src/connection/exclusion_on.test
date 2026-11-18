@@ -1,0 +1,165 @@
+> CREATE TABLE pred_tab1 (a int NOT NULL, b int, CONSTRAINT check_tab1 CHECK (a IS NULL OR b > 2))
+CREATE TABLE
+> CREATE TABLE pred_tab2 (a int, b int, CONSTRAINT check_a CHECK (a IS NOT NULL))
+CREATE TABLE
+> CREATE TABLE ce (a int, b int CHECK (b > 0))
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab1, pred_tab2 WHERE pred_tab2.a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on pred_tab1
+row   ->  Materialize
+row         ->  Seq Scan on pred_tab2
+row               Filter: (a IS NULL)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab2, pred_tab1 WHERE pred_tab1.a IS NULL OR pred_tab1.b < 2
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on pred_tab2
+row   ->  Materialize
+row         ->  Seq Scan on pred_tab1
+row               Filter: (b < 2)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ce
+row   Filter: (b < 0)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE a > 5 AND a < 3
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ce
+row   Filter: ((a > 5) AND (a < 3))
+EXPLAIN
+> SET constraint_exclusion TO ON
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab1, pred_tab2 WHERE pred_tab2.a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Join on pred_tab1, pred_tab2
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab2, pred_tab1 WHERE pred_tab1.a IS NULL OR pred_tab1.b < 2
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Join on pred_tab2, pred_tab1
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ce
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE b = 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ce
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE b > 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ce
+row   Filter: (b > 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE b < 0 OR a = 1
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on ce
+row   Filter: ((b < 0) OR (a = 1))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE a > 5 AND a < 3
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ce
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE a = 1 AND a = 2
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ce
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce WHERE a > random()::int AND b < 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on ce
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce c1 LEFT JOIN ce c2 ON c1.a = c2.a WHERE c2.b < 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Join on c1, c2
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ce c1 LEFT JOIN ce c2 ON c1.a = c2.a AND c2.b < 0
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (c1.a = c2.a)
+row   ->  Seq Scan on ce c1
+row   ->  Hash
+row         ->  Result
+row               Replaces: Scan on c2
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM ce WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Result
+row         Replaces: Scan on ce
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE ce SET a = 1 WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Update on ce
+row   ->  Result
+row         Replaces: Scan on ce
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) DELETE FROM ce WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Delete on ce
+row   ->  Result
+row         Replaces: Scan on ce
+row         One-Time Filter: false
+EXPLAIN
+> CREATE TABLE cep (a int, b int CHECK (b > 0))
+CREATE TABLE
+> CREATE TABLE cec (c int) INHERITS (cep)
+CREATE TABLE
+> ALTER TABLE cep ADD CONSTRAINT cep_ni CHECK (a > 0) NO INHERIT
+ALTER TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM cep WHERE a < 0
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on cec cep
+row   Filter: (a < 0)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY cep WHERE a < 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on cep
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM cep WHERE b < 0
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on cep
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM cep WHERE a > 5 AND a < 3
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on cep
+row   One-Time Filter: false
+EXPLAIN
+> SET constraint_exclusion TO partition
+SET
+> EXPLAIN (COSTS OFF) SELECT * FROM cep WHERE a > 5 AND a < 3
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on cep
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY cep WHERE a > 5 AND a < 3
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on cep
+row   Filter: ((a > 5) AND (a < 3))
+EXPLAIN
