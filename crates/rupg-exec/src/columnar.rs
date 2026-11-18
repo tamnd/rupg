@@ -811,8 +811,8 @@ struct Exec<'q> {
     dict_of: Vec<usize>,
     dicts: Vec<Dict>,
     generic: FxMap<*const Expr, Generic>,
-    /// For each `LIKE` of a column of codes and a constant pattern, the result for each code: 0 for a code that it has not seen, 1 for false and 2 for true.
-    likes: FxMap<*const Expr, Vec<u8>>,
+    /// For each `LIKE` of a column of codes and a constant pattern, the number of rows so far, or `usize::MAX` when the results of all the codes are known, and the result for each code: 0 for a code that it has not seen, 1 for false and 2 for true.
+    likes: FxMap<*const Expr, (usize, Vec<u8>)>,
     /// For each dictionary, the number of characters of each code plus one, or 0 for a code that `length` has not seen.
     lengths: FxMap<usize, Vec<u32>>,
     /// For each `x IN (c, ...)` of integers, the set of the elements, or `None` for no element, and true when an element is null.
@@ -2389,7 +2389,22 @@ impl<'q> Exec<'q> {
         let col = self.eval(a, batch, sel)?;
         let Data::Code(codes, d) = &col.data else { return Ok(None) };
         let key = std::ptr::from_ref(expr);
-        let mut memo = self.likes.remove(&key).unwrap_or_default();
+        let (mut rows, mut memo) = self.likes.remove(&key).unwrap_or_default();
+        // For a pattern `%literal%` on the text of a stored dictionary, one search of the bytes of all the texts finds the codes that match, with a vector search and no call for each text. The search starts when the rows so far are at least 1/64 of the texts, so that a few rows of a large dictionary do not read all of it.
+        if rows != usize::MAX {
+            rows = rows.saturating_add(codes.len());
+            if let Dict::Stored(stored) = &self.dicts[*d]
+                && stored.kind == Kind::Text
+                && let Some(dict) = stored.dict.as_ref()
+                && rows.saturating_mul(64) >= dict.len()
+                && let Ok(last) = u32::try_from(dict.len())
+                && let Some(infix) = rupg_func::Infix::new(pattern.as_bytes(), fold)
+            {
+                memo = vec![1; dict.len() + 1];
+                infix.each(dict.strings(), 1, last, |code| memo[code as usize] = 2);
+                rows = usize::MAX;
+            }
+        }
         let mut folded = Vec::new();
         let mut out = Vec::with_capacity(sel.len());
         let mut failed = false;
@@ -2423,7 +2438,7 @@ impl<'q> Exec<'q> {
             }
             out.push(Some((memo[at] == 2) != negate));
         }
-        self.likes.insert(key, memo);
+        self.likes.insert(key, (rows, memo));
         Ok((!failed).then(|| Col::bools(&out)))
     }
 
