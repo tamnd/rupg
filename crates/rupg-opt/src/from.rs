@@ -234,6 +234,11 @@ impl Stats {
         self.groups_estimated(exprs, input_rows).0
     }
 
+    /// The statistics of the expression `expr` of the relation `r` from the indexes of the relation that have no predicate.
+    pub(super) fn expr_statistic(&self, r: usize, expr: &Expr) -> Option<&Statistic> {
+        expr_statistic(self.exprs.get(&r)?, expr)
+    }
+
     /// [`Stats::groups`], and true when the number of distinct values of a column is the default, as `SELFLAG_USED_DEFAULT`.
     pub(crate) fn groups_estimated(&self, exprs: &[&Expr], input_rows: f64) -> (f64, bool) {
         let input_rows = cost::clamp_rows(input_rows);

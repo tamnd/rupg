@@ -1,0 +1,47 @@
+> CREATE TABLE pred_tab (a int, b int NOT NULL, c int NOT NULL)
+CREATE TABLE
+> INSERT INTO pred_tab SELECT i, i, i FROM generate_series(1, 1000) i
+INSERT 0 1000
+> CREATE INDEX pred_tab_exprs_idx ON pred_tab ((a < 5 AND b IS NOT NULL AND c IS NOT NULL))
+CREATE INDEX
+> CREATE INDEX pred_tab_pred_idx ON pred_tab (a) WHERE b IS NOT NULL AND c IS NOT NULL
+CREATE INDEX
+> ANALYZE pred_tab
+ANALYZE
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE (a < 5 AND b IS NOT NULL AND c IS NOT NULL) IS TRUE
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pred_tab_exprs_idx on pred_tab
+row   Index Cond: ((a < 5) = true)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE a < 3 AND b IS NOT NULL AND c IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pred_tab_pred_idx on pred_tab
+row   Index Cond: (a < 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE a < 3
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pred_tab_pred_idx on pred_tab
+row   Index Cond: (a < 3)
+EXPLAIN
+> DROP INDEX pred_tab_exprs_idx
+DROP INDEX
+> CREATE INDEX pred_tab_null_idx ON pred_tab (a) WHERE b IS NULL
+CREATE INDEX
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE a < 3 AND b IS NULL
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on pred_tab
+row   One-Time Filter: false
+EXPLAIN
+> CREATE INDEX pred_tab_anull_idx ON pred_tab (c) WHERE a IS NOT NULL
+CREATE INDEX
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE c < 3 AND a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Index Scan using pred_tab_anull_idx on pred_tab
+row   Index Cond: (c < 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab WHERE c < 3
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on pred_tab
+row   Filter: (c < 3)
+EXPLAIN

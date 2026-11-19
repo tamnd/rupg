@@ -6850,6 +6850,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/distinct_reduce.test")));
     }
 
+    /// `get_relation_info` folds the expressions and the predicate of an index with the not-null columns of the table: a test `IS NOT NULL` of such a column is true, so a condition matches the expression without it, and a predicate of only such tests leaves the index not partial. `connection/index_null_reduce.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn index_null_reduce() {
+        big_stack(|| script(include_str!("connection/index_null_reduce.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {
