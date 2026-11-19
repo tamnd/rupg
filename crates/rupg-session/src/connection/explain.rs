@@ -315,6 +315,13 @@ impl rupg_opt::Members for Members<'_, '_> {
         }
         let Some(catalog) = self.reader.catalog() else { return Vec::new() };
         let columns = catalog.relation(table).map(|t| t.columns.as_slice()).unwrap_or_default();
+        // `notnullattnums`: a column with a valid not-null constraint.
+        let not_null = |attnum: i16| {
+            usize::try_from(attnum)
+                .ok()
+                .and_then(|at| columns.get(at.checked_sub(1)?))
+                .is_some_and(|c| !c.dropped && c.not_null && !c.not_null_invalid)
+        };
         let mut out: Vec<Index> = catalog
             .relations()
             .filter_map(|rel| {
@@ -325,8 +332,22 @@ impl rupg_opt::Members for Members<'_, '_> {
                     Some(c) => Some((c.family, c.default)),
                     None => catalog.opclass(*oid).map(|c| (c.family, c.default)),
                 };
-                // `RelationGetIndexExpressions` and `RelationGetIndexPredicate` fold the constant parts, as `eval_const_expressions` does, so that a condition can match them.
-                let fold = |e: Expr| rupg_exec::fold_qual(&Query::default(), e, self.reader);
+                // `RelationGetIndexExpressions` and `RelationGetIndexPredicate` fold the constant parts, as `eval_const_expressions` does, so that a condition can match them. `get_relation_info` folds them again with the planner, which knows the not-null columns of the table: a test `IS NULL` or `IS NOT NULL` of such a column is a constant.
+                let fold = |mut e: Expr| {
+                    e.each_mut(0, &mut |e, depth| {
+                        if let ExprKind::NullTest(arg, is_null) = &e.kind
+                            && let ExprKind::Var(var) = arg.kind
+                            && var.levels_up == depth
+                            && !rupg_func::is_row_type(arg.ty)
+                            && not_null(var.attnum)
+                        {
+                            e.kind = ExprKind::Const(Value::Bool(!is_null));
+                            return true;
+                        }
+                        false
+                    });
+                    rupg_exec::fold_qual(&Query::default(), e, self.reader)
+                };
                 let exprs = info.exprs.as_deref().map_or_else(Vec::new, |text| {
                     let exprs = rupg_analyze::node::read_list(text).unwrap_or_default();
                     exprs.into_iter().map(fold).collect()
@@ -335,6 +356,8 @@ impl rupg_opt::Members for Members<'_, '_> {
                 let predicate = info.predicate.as_deref().map(rupg_analyze::node::read);
                 let predicate = match predicate.map(|p| p.map(fold)) {
                     Some(Ok(Expr { kind: ExprKind::Bool(BoolOp::And, parts), .. })) => parts,
+                    // A predicate that folds to `true` is no predicate: the index is not partial.
+                    Some(Ok(Expr { kind: ExprKind::Const(Value::Bool(true)), .. })) => Vec::new(),
                     Some(Ok(expr)) => vec![expr],
                     Some(Err(_)) | None => Vec::new(),
                 };
@@ -356,7 +379,7 @@ impl rupg_opt::Members for Members<'_, '_> {
                     unique: info.unique,
                     nulls_not_distinct: info.nulls_not_distinct,
                     immediate: info.immediate,
-                    partial: info.predicate.is_some(),
+                    partial: !predicate.is_empty(),
                     method: core_method(catalog, info.method),
                     columns: info.keys.clone(),
                     families: info.classes.iter().map(|c| class(c).map_or(0, |c| c.0)).collect(),

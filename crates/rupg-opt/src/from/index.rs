@@ -1709,7 +1709,7 @@ fn index_scan_cost<'q>(
     (startup, startup + run, filter)
 }
 
-/// `btcost_correlation`: the correlation of the order of the first key column of the index with the order of the rows of the table, from the statistics of the column when the index has the default operator class of the column. A `DESC` column turns it around, and an index with more key columns has 0.75 of it.
+/// `btcost_correlation`: the correlation of the order of the first key column of the index with the order of the rows of the table, from the statistics of the column, or of the expression of the index without a predicate, when the index has the default operator class of the column. A `DESC` column turns it around, and an index with more key columns has 0.75 of it.
 fn correlation(r: usize, index: &Index, stats: &Stats) -> f64 {
     // `genericcostestimate` gives the other access methods no correlation.
     if index.method != BTREE_AM {
@@ -1719,7 +1719,12 @@ fn correlation(r: usize, index: &Index, stats: &Stats) -> f64 {
     else {
         return 0.0;
     };
-    let statistic = stats.columns.get(&r).and_then(|columns| columns.get(&attnum));
+    // `examine_indexcol_variable`: an expression column has the statistics of the index.
+    let statistic = if attnum == 0 {
+        key_expr(index, r, 0).and_then(|expr| stats.expr_statistic(r, &expr))
+    } else {
+        stats.columns.get(&r).and_then(|columns| columns.get(&attnum))
+    };
     let slot =
         statistic.and_then(|s| s.slots.iter().find(|s| s.kind == STATISTIC_KIND_CORRELATION));
     let Some(&number) = slot.and_then(|s| s.numbers.as_deref()).and_then(<[f32]>::first) else {
