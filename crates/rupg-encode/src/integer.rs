@@ -666,6 +666,23 @@ pub fn pointed(bytes: &[u8]) -> bool {
     }
 }
 
+/// Whether [`decode_selected`] reads a row of this chunk with no decode of a part of the chunk: a constant, packed units, or strides over a constant or packed units. A dictionary chunk decodes all its dictionary and a run length chunk all its runs for each read, so a caller that reads few rows of the same chunk more than one time does better with one decode of the chunk.
+#[must_use]
+pub fn direct(bytes: &[u8]) -> bool {
+    let simple = |bytes: &[u8]| {
+        bytes
+            .first()
+            .and_then(|&tag| Kind::from_tag(tag).ok())
+            .is_some_and(|kind| matches!(kind, Kind::Constant | Kind::Packed))
+    };
+    match bytes.first().and_then(|&tag| Kind::from_tag(tag).ok()) {
+        Some(Kind::Constant | Kind::Packed) => true,
+        // The tag, the count, the base and the stride come before the steps.
+        Some(Kind::Strided) => bytes.get(1 + 4 + 8 + 8..).is_some_and(simple),
+        _ => false,
+    }
+}
+
 /// Whether this is a run length chunk, which [`decode_selected`] reads without expanding its runs.
 ///
 /// It still decodes every run length, and the run values when they are deltas, so it is not
@@ -2553,6 +2570,9 @@ mod tests {
             let simple = kind == Kind::Rle || (!shape.contains("RLE") && !shape.contains("DELTA"));
             assert_eq!(pointed(&bytes), simple, "{shape}");
             assert_eq!(run_length(&bytes), kind == Kind::Rle, "{shape}");
+            // Only packed units, or strides over them, read a row with no decode of a part of the chunk.
+            let direct_kind = matches!(kind, Kind::Packed | Kind::Strided) && simple;
+            assert_eq!(direct(&bytes), direct_kind, "{shape}");
         }
     }
 

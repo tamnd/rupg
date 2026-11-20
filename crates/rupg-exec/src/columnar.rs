@@ -39,6 +39,9 @@ const PREFETCH_ROWS: usize = 16;
 /// The least number of rows of a table that a query of one table reads through the vectors. A smaller table costs less to read by rows than to make columns of.
 const SCAN_ROWS: usize = 1000;
 
+/// A selection of at most one row in this many of a vector reads its rows from the encoded vector, as [`Exec::var_at`] does, and a larger selection decodes the vector. The decode of a packed vector is about 3 instructions a row, and the read of one row of it is about 25 instructions.
+const SPARSE_READ: usize = 8;
+
 /// The most groups that the map of `GROUP BY` has room for before the scan sees the rate of new groups: four vectors.
 const START_GROUPS: usize = 4 * VECTOR;
 
@@ -772,6 +775,8 @@ struct Batch {
     rows: usize,
     /// The decoded vector of each column that the scan read, by its place in [`Exec::stored`].
     decoded: Vec<Option<Decoded>>,
+    /// A bit for each place of the first 64 places in [`Exec::stored`] that [`Exec::var_at`] read. A second read of the column in the vector, as in each arm of an `OR` of TPC-H Q19, decodes the vector one time for the next reads.
+    read_at: u64,
 }
 
 /// A memo of the values of an expression of one column, by the value of the column.
@@ -1435,10 +1440,64 @@ fn decode(stored: &Stored, segment: usize, vector: usize) -> Result<Decoded> {
     Ok(Decoded { data, nulls })
 }
 
+/// The values of the rows `rows` of the vector `vector` of the segment `segment` of a column, in the order of `rows`, read from the encoded vector with no decode of the other rows, with the code 0 for a null code as in [`decode`]. `None` when the rows are more than one in [`SPARSE_READ`] of the vector, are not sorted and unique, or are all null, or when the encoding reads a row only with a decode of the rows before it, as a vector of differences does.
+///
+/// # Errors
+///
+/// `XX001` when the bytes are not a vector or a row is not in the vector.
+fn decode_at(
+    stored: &Stored,
+    segment: usize,
+    vector: usize,
+    rows: &[usize],
+) -> Result<Option<Decoded>> {
+    let column = &stored.segments[segment];
+    let at = vector;
+    let vector = &column.vectors[at];
+    if rows.len().saturating_mul(SPARSE_READ) > vector.rows as usize
+        || vector.nulls == Nulls::All
+        || !rows.windows(2).all(|w| w[0] < w[1])
+    {
+        return Ok(None);
+    }
+    let nulls: Option<Vec<bool>> = match &vector.nulls {
+        Nulls::None => None,
+        some => Some(rows.iter().map(|&i| some.is_null(i)).collect()),
+    };
+    let data = match column.kind.store() {
+        Store::Float => DecodedData::Float(column.floats_at(at, rows)?),
+        Store::Int => match column.ints_at(at, rows)? {
+            Some(values) => DecodedData::Int(values),
+            None => return Ok(None),
+        },
+        Store::Code => {
+            let Some(values) = column.ints_at(at, rows)? else { return Ok(None) };
+            let null = |i: usize| nulls.as_ref().is_some_and(|n| n[i]);
+            let codes = values
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| if null(i) { Ok(0) } else { u32::try_from(v) })
+                .collect::<std::result::Result<Vec<u32>, _>>()
+                .map_err(|_| Error::corrupted("a code of a vector is not a 32-bit number"))?;
+            DecodedData::Code(codes)
+        }
+    };
+    Ok(Some(Decoded { data, nulls }))
+}
+
 impl<'q> Exec<'q> {
     /// The vector of the column `column` for the selection `sel`.
     fn var(&mut self, batch: &mut Batch, column: usize, ty: u32, sel: &[u32]) -> Result<Col> {
         let place = self.places[column];
+        let bit = u32::try_from(place).ok().and_then(|p| 1u64.checked_shl(p)).unwrap_or(0);
+        if batch.decoded[place].is_none()
+            && bit != 0
+            && batch.read_at & bit == 0
+            && let Some(col) = self.var_at(batch, place, ty, sel)?
+        {
+            batch.read_at |= bit;
+            return Ok(col);
+        }
         self.decode(batch, place)?;
         let Some(decoded) = &batch.decoded[place] else {
             return Err(Error::internal("a vector is not decoded"));
@@ -1456,6 +1515,23 @@ impl<'q> Exec<'q> {
             (data, _) => data,
         };
         Ok(Col { data, nulls, ty })
+    }
+
+    /// The vector of the column at the place `place` for a selection `sel` of at most one row in [`SPARSE_READ`] of the vector, read from the encoded vector as [`decode_at`] reads it. The scan of `lineitem` in TPC-H Q9 keeps about one row in 20 after the test of `l_partkey`, and a decode of all the rows of the other keys was most of the cost of the scan. `None` when [`decode_at`] gives `None`, and then the caller decodes the vector.
+    fn var_at(&self, batch: &Batch, place: usize, ty: u32, sel: &[u32]) -> Result<Option<Col>> {
+        let stored = &self.stored[place];
+        let rows: Vec<usize> = sel.iter().map(|&i| i as usize).collect();
+        let Some(Decoded { data, nulls }) = decode_at(stored, batch.segment, batch.vector, &rows)?
+        else {
+            return Ok(None);
+        };
+        let data = match (data, stored.kind) {
+            (DecodedData::Int(v), Kind::Numeric(scale)) => Data::Dec(v, scale),
+            (DecodedData::Int(v), _) => Data::Int(v),
+            (DecodedData::Float(v), _) => Data::Float(v),
+            (DecodedData::Code(v), _) => Data::Code(v, self.dict_of[place]),
+        };
+        Ok(Some(Col { data, nulls, ty }))
     }
 
     /// A comparison of two integer columns of the scan, as `l_commitdate < l_receiptdate` in TPC-H Q4, Q12 and Q21, keeps the rows of `sel` that pass. It reads the decoded values of the two columns, so it makes no copy of the values of the rows and no vector of booleans, and the loop of each operator has no call and no branch for each row. A row with a null on a side does not pass, as the comparison is null. False for another condition, and then the caller evaluates it.
@@ -4642,6 +4718,7 @@ impl Scan<'_, '_> {
                     vector,
                     rows,
                     decoded: (0..self.exec.stored.len()).map(|_| None).collect(),
+                    read_at: 0,
                 };
                 sel.clear();
                 sel.extend(0..batch.rows as u32);
@@ -6837,6 +6914,7 @@ fn read_spots(
             vector,
             rows: (segment_rows - vector * VECTOR).min(VECTOR),
             decoded: (0..exec.stored.len()).map(|_| None).collect(),
+            read_at: 0,
         };
         let sel: Vec<u32> = wanted[at..end].iter().map(|&g| spots[g][2]).collect();
         for &column in kept_columns {

@@ -223,14 +223,13 @@ impl Column {
             .sum()
     }
 
-    /// Decodes the vector `at` of an integer or code column into `out`, which it clears first.
+    /// Decodes the vector `at` of an integer or code column into `out`, in place of the values in `out`. The decoded values move into `out` with no copy.
     ///
     /// # Errors
     ///
     /// `XX001` when the bytes are not a vector.
     pub fn decode_ints(&self, at: usize, out: &mut Vec<i64>) -> Result<()> {
-        out.clear();
-        out.extend(integer::decode(&self.vectors[at].data)?);
+        *out = integer::decode(&self.vectors[at].data)?;
         Ok(())
     }
 
@@ -254,26 +253,57 @@ impl Column {
         integer::keep(&vector.data, test, sel, every, per_row)
     }
 
-    /// Decodes the vector `at` of a code column into `out`, which it clears first.
+    /// Decodes the vector `at` of a code column into `out`, in place of the values in `out`. The decoded values move into `out` with no copy.
     ///
     /// # Errors
     ///
     /// `XX001` when the bytes are not a vector.
     pub fn decode_codes(&self, at: usize, out: &mut Vec<u32>) -> Result<()> {
-        out.clear();
-        out.extend(integer::decode_as::<u32>(&self.vectors[at].data)?);
+        *out = integer::decode_as::<u32>(&self.vectors[at].data)?;
         Ok(())
     }
 
-    /// Decodes the vector `at` of a float column into `out`, which it clears first.
+    /// Decodes the vector `at` of a float column into `out`, in place of the values in `out`. The decoded values move into `out` with no copy.
     ///
     /// # Errors
     ///
     /// `XX001` when the bytes are not a vector.
     pub fn decode_floats(&self, at: usize, out: &mut Vec<f64>) -> Result<()> {
-        out.clear();
-        out.extend(self.vectors[at].floats()?);
+        *out = self.vectors[at].floats()?;
         Ok(())
+    }
+
+    /// The values of the rows `rows` of the vector `at` of an integer or code column, in the order of `rows`, when the encoding of the vector reads a row with no decode of all the rows, as [`integer::direct`] tells. A vector of runs or of a dictionary is not read in this way, as the read of a row decodes all the runs or all the dictionary. `None` for a float column or another encoding. The rows are sorted and unique.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not a vector or a row is not in the vector.
+    pub fn ints_at(&self, at: usize, rows: &[usize]) -> Result<Option<Vec<i64>>> {
+        let data = &self.vectors[at].data;
+        if self.kind.store() == Store::Float || !integer::direct(data) {
+            return Ok(None);
+        }
+        Ok(Some(integer::decode_selected(data, rows)?))
+    }
+
+    /// The values of the rows `rows` of the vector `at` of a float column, in the order of `rows`. A float vector keeps each value in 8 bytes, so a row is read with no decode of the other rows.
+    ///
+    /// # Errors
+    ///
+    /// `XX001` when the bytes are not a float vector or a row is not in the vector.
+    pub fn floats_at(&self, at: usize, rows: &[usize]) -> Result<Vec<f64>> {
+        let (words, rest) = self.vectors[at].data.as_chunks::<8>();
+        if self.kind.store() != Store::Float || !rest.is_empty() {
+            return Err(Error::corrupted("a float vector has a partial value"));
+        }
+        rows.iter()
+            .map(|&row| {
+                words
+                    .get(row)
+                    .map(|w| f64::from_bits(u64::from_le_bytes(*w)))
+                    .ok_or_else(|| Error::corrupted("a row is not in its vector"))
+            })
+            .collect()
     }
 
     /// Appends to `out` the values of the rows `rows` of the vector `at`, in the order of `rows`, and makes no value for the other rows. `dict` is the dictionary of a code column.
