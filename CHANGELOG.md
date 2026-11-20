@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- A scan and the gather of a join read the few selected rows of a packed vector from its bytes, with no decode of all the rows of the vector. This cuts the instructions of TPC-H Q9 from 116M to 106M and of Q5 from 59M to 52M. (#1626)
 - The planner commutes two left joins by outer join identity 3, as `make_outerjoininfo` and `join_is_legal` do: `(A LEFT JOIN B ON Pab) LEFT JOIN C ON Pbc` can join `B` and `C` first when `Pbc` is strict for `B` and reads nothing of `A`, so the plan can be `A LEFT JOIN (B LEFT JOIN C)` (#1625)
 - The planner folds the expressions and the predicate of an index with the not-null columns of the table, as `get_relation_info` does, so `(a < 5 AND b IS NOT NULL) IS TRUE` matches an index on that expression and an index `WHERE b IS NOT NULL` is not partial; the cost of a `btree` index on an expression reads the correlation of the expression from the statistics of the index (#1624)
 - The planner reduces `IS [NOT] DISTINCT FROM` with an input that is not a constant, as `eval_const_expressions` does in PostgreSQL 19: inputs that cannot be null make it `<>` or `=`, which index scans and hash joins can use, a null constant against them makes it a constant, and a null constant against an input that can be null makes it `IS [NOT] NULL` (#1623)

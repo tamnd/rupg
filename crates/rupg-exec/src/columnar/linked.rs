@@ -20,8 +20,8 @@ use rupg_summary::zone::{in_span, spans};
 use rupg_types::{Value, oid};
 
 use super::{
-    Decoded, DecodedData, FxSet, Link as Ran, Selected, Source, decode, having_once, kind_of,
-    numeric_kind, once, plain, unsupported,
+    Decoded, DecodedData, FxSet, Link as Ran, Selected, Source, decode, decode_at, having_once,
+    kind_of, numeric_kind, once, plain, unsupported,
 };
 use crate::{Cache, reduce, scan, sort};
 
@@ -1205,7 +1205,7 @@ fn ordered(mut links: Vec<Link>, selected: &[Selected]) -> Vec<Link> {
     out
 }
 
-/// The values of the column `stored` at the rows `at`, with the null flag of each row when a row is null.
+/// The values of the column `stored` at the rows `at`, with the null flag of each row when a row is null. When the rows are in their order, the few rows of a vector, as the rows of `lineitem` that join the parts of TPC-H Q9, are read from the encoded vector, as [`decode_at`] reads them, with no decode of the other rows.
 fn gather(stored: &Stored, at: &[usize]) -> Result<(Values, Option<Vec<bool>>)> {
     let ascending = at.windows(2).all(|w| w[0] <= w[1]);
     let mut decoded: Vec<Option<Decoded>> = Vec::new();
@@ -1218,7 +1218,10 @@ fn gather(stored: &Stored, at: &[usize]) -> Result<(Values, Option<Vec<bool>>)> 
     };
     let mut nulls = Vec::with_capacity(at.len());
     let mut any = false;
-    for &row in at {
+    let mut rows = Vec::new();
+    let mut next = 0;
+    while let Some(&row) = at.get(next) {
+        next += 1;
         // The row of nulls of an outer join.
         if row == usize::MAX {
             nulls.push(true);
@@ -1235,12 +1238,39 @@ fn gather(stored: &Stored, at: &[usize]) -> Result<(Values, Option<Vec<bool>>)> 
             return Err(Error::internal("a row of a join is not in its table"));
         };
         if slot.is_none() {
-            // Rows in their order read each vector one time, so only the last vector stays.
-            if ascending && let Some(old) = decoded.get_mut(last) {
-                *old = None;
-            }
             let segment = row / rupg_column::segment::ROWS;
             let in_segment = (row % rupg_column::segment::ROWS) / VECTOR;
+            if ascending {
+                // The rows of the vector come one after another, and a null row comes after all of them.
+                let end = next + at[next..].partition_point(|&r| r / VECTOR == vector);
+                rows.clear();
+                rows.extend(at[next - 1..end].iter().map(|&r| r % VECTOR));
+                if let Some(d) = decode_at(stored, segment, in_segment, &rows)? {
+                    match (&mut out, d.data) {
+                        (Values::Ints(o), DecodedData::Int(v)) => o.extend(v),
+                        (Values::Floats(o), DecodedData::Float(v)) => o.extend(v),
+                        (Values::Codes(o), DecodedData::Code(v)) => o.extend(v),
+                        _ => {
+                            return Err(Error::internal(
+                                "a vector has another store than its column",
+                            ));
+                        }
+                    }
+                    match d.nulls {
+                        Some(flags) => {
+                            any |= flags.contains(&true);
+                            nulls.extend(flags);
+                        }
+                        None => nulls.resize(nulls.len() + rows.len(), false),
+                    }
+                    next = end;
+                    continue;
+                }
+                // Rows in their order read each vector one time, so only the last vector stays.
+                if let Some(old) = decoded.get_mut(last) {
+                    *old = None;
+                }
+            }
             decoded[vector] = Some(decode(stored, segment, in_segment)?);
             last = vector;
         }
@@ -1371,5 +1401,63 @@ mod tests {
         ];
         semi_reduce(&[[(0, 0), (1, 0)]], &[false, true], &mut tables);
         assert_eq!(tables[0].as_ref().unwrap().places, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn a_gather_of_few_rows_gives_the_values_of_a_decode() {
+        let rows = 3000;
+        let ints: Vec<i64> = (0..rows as i64).map(|i| (i * 7) % 1000 - 300).collect();
+        let floats: Vec<f64> = (0..rows).map(|i| i as f64 / 4.0).collect();
+        let flags: Vec<bool> = (0..rows).map(|i| i % 11 == 3).collect();
+        let columns = [
+            (
+                builder::gathered(Kind::Int8, &Values::Ints(ints.clone()), None, None).unwrap(),
+                false,
+            ),
+            (
+                builder::gathered(Kind::Int8, &Values::Ints(ints.clone()), Some(&flags), None)
+                    .unwrap(),
+                true,
+            ),
+            (
+                builder::gathered(
+                    Kind::Float8,
+                    &Values::Floats(floats.clone()),
+                    Some(&flags),
+                    None,
+                )
+                .unwrap(),
+                true,
+            ),
+        ];
+        let sparse: Vec<usize> = (0..rows).step_by(37).collect();
+        let mut outer = sparse.clone();
+        outer.extend([usize::MAX, usize::MAX]);
+        let dense: Vec<usize> = (0..rows).step_by(2).collect();
+        let reversed: Vec<usize> = sparse.iter().rev().copied().collect();
+        let twice: Vec<usize> = sparse.iter().flat_map(|&r| [r, r]).collect();
+        for (stored, has_nulls) in &columns {
+            for at in [&sparse, &outer, &dense, &reversed, &twice] {
+                let (values, nulls) = gather(stored, at).unwrap();
+                let null = |r: usize| r == usize::MAX || (*has_nulls && flags[r]);
+                let expected: Vec<bool> = at.iter().map(|&r| null(r)).collect();
+                assert_eq!(nulls.unwrap_or_else(|| vec![false; at.len()]), expected);
+                match values {
+                    Values::Ints(v) => {
+                        let want: Vec<i64> =
+                            at.iter().map(|&r| if r == usize::MAX { 0 } else { ints[r] }).collect();
+                        assert_eq!(v, want);
+                    }
+                    Values::Floats(v) => {
+                        let want: Vec<f64> = at
+                            .iter()
+                            .map(|&r| if r == usize::MAX { 0.0 } else { floats[r] })
+                            .collect();
+                        assert_eq!(v, want);
+                    }
+                    Values::Codes(_) => panic!("a column of numbers gave codes"),
+                }
+            }
+        }
     }
 }
