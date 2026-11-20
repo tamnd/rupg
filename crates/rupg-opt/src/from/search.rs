@@ -548,10 +548,11 @@ impl<'q> Problem<'_, 'q> {
             .any(|&i| self.disjoint(s, i) && self.clause(s, i) && self.legal(s, i).is_some())
     }
 
-    /// `join_is_legal`: `None` when the order of the special joins does not let the two sets join, or else the special join that the join does. A special join is not relevant when the join does not have a part of its inner side, when the join is a part of its inner side or when a set has it whole. Neither is a semi join whose inner side a set has with other relations, as that set has the unique rows of the inner side. The join does the special join when one set has its outer relations and the other set has its inner side, or for a semi join when one set is its inner side, which a join can make unique. The join is not legal when it does two special joins, or when it has a part of the inner side of a special join that it does not do, unless each set has a part of it.
+    /// `join_is_legal`: `None` when the order of the special joins does not let the two sets join, or else the special join that the join does. A special join is not relevant when the join does not have a part of its inner side, when the join is a part of its inner side or when a set has it whole. Neither is a semi join whose inner side a set has with other relations, as that set has the unique rows of the inner side. The join does the special join when one set has its outer relations and the other set has its inner side, or for a semi join when one set is its inner side, which a join can make unique. The join is not legal when it does two special joins, or when it has a part of the inner side of a special join that it does not do, unless each set has a part of it, or unless the special join is a left join, the join has none of its outer relations and the join does a left join whose condition is strict for its outer side, which outer join identity 3 lets go into the inner side.
     fn legal(&self, a: usize, b: usize) -> Option<Option<Match>> {
         let (r1, r2) = (&self.sets[a].rels, &self.sets[b].rels);
-        let mut found = None;
+        let mut found: Option<Match> = None;
+        let mut must_be_left = false;
         for (special, sp) in self.specials.iter().enumerate() {
             let joined = |r: &BTreeSet<usize>| !sp.right.is_disjoint(r);
             if !joined(r1) && !joined(r2) {
@@ -580,6 +581,13 @@ impl<'q> Problem<'_, 'q> {
                 Match { special, reversed: true, unique: true }
             } else if joined(r1) && joined(r2) {
                 continue;
+            } else if sp.kind == JoinKind::Left
+                && sp.left.is_disjoint(r1)
+                && sp.left.is_disjoint(r2)
+            {
+                // The join can go into the inner side of the left join only when it is a left join whose condition is strict for its outer side, as outer join identity 3.
+                must_be_left = true;
+                continue;
             } else {
                 return None;
             };
@@ -587,6 +595,14 @@ impl<'q> Problem<'_, 'q> {
                 return None;
             }
             found = Some(m);
+        }
+        if must_be_left
+            && found.as_ref().is_none_or(|m| {
+                let sp = &self.specials[m.special];
+                sp.kind != JoinKind::Left || !sp.lhs_strict
+            })
+        {
+            return None;
         }
         Some(found)
     }

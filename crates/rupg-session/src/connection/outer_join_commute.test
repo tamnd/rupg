@@ -1,0 +1,120 @@
+> CREATE TABLE pred_tab (a int, b int)
+CREATE TABLE
+> CREATE TABLE pred_tab_notnull (a int, b int NOT NULL)
+CREATE TABLE
+> INSERT INTO pred_tab VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO pred_tab VALUES (2, 2)
+INSERT 0 1
+> INSERT INTO pred_tab_notnull VALUES (2, 2)
+INSERT 0 1
+> INSERT INTO pred_tab_notnull VALUES (3, 3)
+INSERT 0 1
+> ANALYZE pred_tab
+ANALYZE
+> ANALYZE pred_tab_notnull
+ANALYZE
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab t1 LEFT JOIN pred_tab t2 ON TRUE LEFT JOIN pred_tab_notnull t3 ON t2.a = t3.a LEFT JOIN pred_tab t4 ON t3.b IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   ->  Seq Scan on pred_tab t1
+row   ->  Materialize
+row         ->  Nested Loop Left Join
+row               Join Filter: (t3.b IS NOT NULL)
+row               ->  Nested Loop Left Join
+row                     Join Filter: (t2.a = t3.a)
+row                     ->  Seq Scan on pred_tab t2
+row                     ->  Materialize
+row                           ->  Seq Scan on pred_tab_notnull t3
+row               ->  Materialize
+row                     ->  Seq Scan on pred_tab t4
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM pred_tab t1 LEFT JOIN pred_tab t2 ON TRUE LEFT JOIN pred_tab_notnull t3 ON t2.a = t3.a LEFT JOIN pred_tab t4 ON t3.b IS NULL AND t3.a IS NOT NULL
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   ->  Seq Scan on pred_tab t1
+row   ->  Materialize
+row         ->  Nested Loop Left Join
+row               Join Filter: ((t3.b IS NULL) AND (t3.a IS NOT NULL))
+row               ->  Nested Loop Left Join
+row                     Join Filter: (t2.a = t3.a)
+row                     ->  Seq Scan on pred_tab t2
+row                     ->  Materialize
+row                           ->  Seq Scan on pred_tab_notnull t3
+row               ->  Materialize
+row                     ->  Seq Scan on pred_tab t4
+EXPLAIN
+> CREATE TABLE big (a int, b int)
+CREATE TABLE
+> INSERT INTO big SELECT i, i FROM generate_series(1, 10000) i
+INSERT 0 10000
+> CREATE TABLE small (a int, b int)
+CREATE TABLE
+> INSERT INTO small SELECT i, i FROM generate_series(1, 10) i
+INSERT 0 10
+> ANALYZE big
+ANALYZE
+> ANALYZE small
+ANALYZE
+> EXPLAIN (COSTS OFF) SELECT * FROM big b1 LEFT JOIN small s1 ON b1.a = s1.a LEFT JOIN small s2 ON s1.b = s2.b
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (b1.a = s1.a)
+row   ->  Seq Scan on big b1
+row   ->  Hash
+row         ->  Hash Left Join
+row               Hash Cond: (s1.b = s2.b)
+row               ->  Seq Scan on small s1
+row               ->  Hash
+row                     ->  Seq Scan on small s2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM small s1 LEFT JOIN big b1 ON s1.a = b1.a LEFT JOIN big b2 ON b1.b = b2.b WHERE s1.b < 3
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join
+row   Hash Cond: (b2.b = b1.b)
+row   ->  Seq Scan on big b2
+row   ->  Hash
+row         ->  Hash Right Join
+row               Hash Cond: (b1.a = s1.a)
+row               ->  Seq Scan on big b1
+row               ->  Hash
+row                     ->  Seq Scan on small s1
+row                           Filter: (b < 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM small s1 LEFT JOIN big b1 ON s1.a = b1.a LEFT JOIN small s2 ON b1.b = s2.b WHERE s2.a IS NULL
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (b1.b = s2.b)
+row   Filter: (s2.a IS NULL)
+row   ->  Hash Right Join
+row         Hash Cond: (b1.a = s1.a)
+row         ->  Seq Scan on big b1
+row         ->  Hash
+row               ->  Seq Scan on small s1
+row   ->  Materialize
+row         ->  Seq Scan on small s2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM small s1 LEFT JOIN big b1 ON s1.a = b1.a LEFT JOIN small s2 ON coalesce(b1.b, 0) = s2.b
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: (COALESCE(b1.b, 0) = s2.b)
+row   ->  Hash Right Join
+row         Hash Cond: (b1.a = s1.a)
+row         ->  Seq Scan on big b1
+row         ->  Hash
+row               ->  Seq Scan on small s1
+row   ->  Materialize
+row         ->  Seq Scan on small s2
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM small s1 LEFT JOIN big b1 ON s1.a = b1.a LEFT JOIN small s2 ON b1.b = s2.b AND s1.a = s2.a
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Join Filter: ((b1.b = s2.b) AND (s1.a = s2.a))
+row   ->  Hash Right Join
+row         Hash Cond: (b1.a = s1.a)
+row         ->  Seq Scan on big b1
+row         ->  Hash
+row               ->  Seq Scan on small s1
+row   ->  Materialize
+row         ->  Seq Scan on small s2
+EXPLAIN
