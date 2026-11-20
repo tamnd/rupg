@@ -6856,6 +6856,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/index_null_reduce.test")));
     }
 
+    /// Outer join identity 3: `(A LEFT JOIN B ON Pab) LEFT JOIN C ON Pbc` can join `B` and `C` first when `Pbc` is strict for `B` and does not read `A`, so the plan can be `A LEFT JOIN (B LEFT JOIN C)`. A condition that is not strict, or that reads `A`, keeps the order. `connection/outer_join_commute.test` is the output of PostgreSQL 19 for the same script.
+    #[test]
+    fn outer_join_commute() {
+        big_stack(|| script(include_str!("connection/outer_join_commute.test")));
+    }
+
     /// `pg_get_catalog_foreign_keys`: the 226 foreign keys of the system catalogs that `genbki.pl` writes to `system_fk_info.h`, with the arrays of column names, and the five constructors in the `pg_range` row of a range type that `CREATE TYPE` makes, which the foreign keys of `pg_range` check. `connection/catalog_foreign_keys.test` is the output of PostgreSQL 19 for the same script.
     #[test]
     fn catalog_foreign_keys() {

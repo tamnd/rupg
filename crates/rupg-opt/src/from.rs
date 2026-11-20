@@ -655,6 +655,8 @@ struct Special<'q> {
     right: BTreeSet<usize>,
     /// `syn_lefthand` and `syn_righthand`: the relations of the two sides of the join in the query.
     syn: BTreeSet<usize>,
+    /// `lhs_strict`: true when the condition is strict for a relation of the outer side in the query, so that a join can go into the inner side of a left join above it, as outer join identity 3.
+    lhs_strict: bool,
     /// The conditions of `ON` of a left join or an anti join, which only the join tests. The conditions of a semi join are conditions of the domain.
     quals: Vec<Qual<'q>>,
     filter: Vec<Qual<'q>>,
@@ -3655,7 +3657,11 @@ fn flatten<'q>(
             let lower = specials.len();
             flatten(left, items, pool, specials);
             items.push(right);
-            let min_left = min_lefthand(&clause, &outer, &specials[lower..]);
+            // `find_nonnullable_rels` of the condition of `ON`.
+            let strict: BTreeSet<usize> =
+                quals.iter().flat_map(|q| nonnullable_rels(&q.expr, true)).collect();
+            let min_left = min_lefthand(kind, &clause, &strict, &outer, &specials[lower..]);
+            let lhs_strict = !strict.is_disjoint(&outer);
             let (quals, filter) = match kind {
                 JoinKind::Semi => {
                     add(quals, pool);
@@ -3668,7 +3674,16 @@ fn flatten<'q>(
                 _ => (quals, filter),
             };
             let (left, right) = (min_left, right_rels);
-            specials.push(Special { kind, left, right, syn: rels, quals, filter, semi });
+            specials.push(Special {
+                kind,
+                left,
+                right,
+                syn: rels,
+                lhs_strict,
+                quals,
+                filter,
+                semi,
+            });
         }
         _ => items.push(Tree::Join(Box::new(JoinTree {
             kind,
@@ -3684,15 +3699,24 @@ fn flatten<'q>(
     }
 }
 
-/// `make_outerjoininfo`: the relations of the outer side of a special join that the order of the joins must join before it. These are the relations of the outer side that the condition reads, or each relation of the outer side when it reads none. When the condition reads the inner side of a lower special join of the outer side, they also have each relation of that join, so that the two joins keep their order. PostgreSQL can let two left joins change their order when the condition is strict, as identity 3 of `optimizer/README`, which the planner does not do yet.
+/// `make_outerjoininfo`: the relations of the outer side of a special join of the kind `kind` that the order of the joins must join before it. These are the relations of the outer side that the condition reads, or each relation of the outer side when it reads none. When the condition reads the inner side of a lower special join of the outer side, they also have each relation of that join, so that the two joins keep their order, unless outer join identity 3 of `optimizer/README` lets the two joins change their order: both are left joins, the condition is strict for a relation of the inner side of the lower join, as `strict` has the relations of `find_nonnullable_rels`, and it reads no relation of the outer side of the lower join.
 fn min_lefthand(
+    kind: JoinKind,
     clause: &BTreeSet<usize>,
+    strict: &BTreeSet<usize>,
     outer: &BTreeSet<usize>,
     lower: &[Special<'_>],
 ) -> BTreeSet<usize> {
     let mut min: BTreeSet<usize> = clause.intersection(outer).copied().collect();
     for sp in lower {
-        if !sp.right.is_disjoint(clause) {
+        if sp.right.is_disjoint(clause) {
+            continue;
+        }
+        let commutes = kind == JoinKind::Left
+            && sp.kind == JoinKind::Left
+            && !sp.right.is_disjoint(strict)
+            && clause.iter().all(|r| sp.right.contains(r) || !sp.syn.contains(r));
+        if !commutes {
             min.extend(sp.syn.iter().copied());
         }
     }
